@@ -10,6 +10,53 @@ Indikator tersedia:
   Volatility: atr, atr_pct, bbands, keltner, squeeze
   Strength : adx, obv, mfi
   Utility  : compute_all  ← satu panggilan isi semua kolom standar
+
+CHANGELOG (audit & upgrade)
+────────────────────────────────────────────────────────────────────────────
+v2 — Bug fix & optimisasi (hasil audit menyeluruh + cross-reference repo):
+
+  [BUG-FIX KRITIS] rsi(): kasus avg_loss == 0 (tidak ada candle merah sama
+    sekali di seluruh data yang dihitung — pure uptrend) sebelumnya
+    di-fillna(50) (netral), padahal secara matematis RSI harus → 100
+    (overbought ekstrem). Kolom RSI_14 dari fungsi ini dipakai langsung
+    sebagai entry gate (main.py "Gate3": skip entry jika RSI di luar
+    rsi_min/rsi_max) dan exit gate (strategy.py QUICK_PROFIT: exit jika
+    RSI > rsi_max). Bug lama membuat overbought ekstrem terbaca netral →
+    risiko entry telat di puncak rally DAN gagal exit tepat waktu,
+    persis di kondisi paling berisiko. Lihat juga indicators/momentum.py
+    yang sudah benar menangani edge-case ini (rujukan fix).
+  [BUG-FIX] mfi(): pola identik dengan bug RSI di atas (neg_sum == 0 → MFI
+    seharusnya 100, bukan 50 jika ada inflow). Diperbaiki preventif
+    walau saat ini compute_all()/mfi() belum terhubung ke decision path
+    produksi manapun.
+  [DRY/KONSISTENSI] adx() & supertrend(): sebelumnya masing-masing punya
+    re-implementasi Wilder's-smoothing & True-Range sendiri secara lokal
+    (mis. fungsi _ws() privat di dalam adx()) — duplikat dari
+    _wilder_smooth()/_true_range() yang sudah ada di level modul. Ini
+    persis kelas risiko yang menyebabkan bug RSI di atas (dua rumus
+    matematika yang sama, bisa diam-diam berbeda kalau salah satu diubah
+    tanpa mengubah yang lain). Sekarang keduanya memusat ke helper yang
+    sama — sekaligus menghapus beberapa for-loop Python yang redundan.
+  [PERFORMA] wma(): rolling().apply(lambda) (lambat, overhead callback
+    Python per-window) diganti sliding_window_view + matmul (vectorized,
+    pakai BLAS).
+  [PERFORMA] adx(): directional-movement (+DM/-DM) & true range divektor-
+    isasi (sebelumnya for-loop Python per-bar).
+  [KONSISTENSI] Helper baru _fmt_param() & _ensure_datetime_index()
+    menggantikan logic format-angka-untuk-nama-kolom dan konversi
+    DatetimeIndex yang sebelumnya diduplikasi di keltner()/squeeze() dan
+    vwap()/vwap_bands().
+  [OBSERVASI ARSITEKTUR — tidak diubah, sekadar dicatat] compute_all() dan
+    sebagian besar indikator di file ini (macd, stochrsi, bbands, keltner,
+    squeeze, adx, obv, mfi, supertrend, wma, vwap_bands) TIDAK dipanggil
+    di production code manapun (main.py/strategy.py/telegram_bot.py/
+    api_server.py hanya memakai ema/rsi/atr/vwap dasar). Decision pipeline
+    sesungguhnya (intelligence/observer.py → indicators/*.py) punya
+    implementasi paralel sendiri untuk MACD/Stoch/ADX/dll. File ini hanya
+    "satu-satunya sumber kebenaran" untuk RSI/EMA/ATR/VWAP dasar yang
+    dipakai Gate3 (entry) dan QUICK_PROFIT/RTW (exit) — itulah sebabnya
+    bug RSI di atas berdampak nyata ke keputusan trading, bukan sekadar
+    tampilan dashboard.
 """
 from __future__ import annotations
 
@@ -66,6 +113,39 @@ def _true_range(df: pd.DataFrame) -> pd.Series:
     return tr
 
 
+def _fmt_param(x: float) -> str:
+    """
+    Format angka untuk nama kolom ala pandas_ta: '2' bukan '2.0' jika bulat,
+    selain itu apa adanya. Dipusatkan di sini supaya keltner() dan squeeze()
+    selalu menghasilkan string identik untuk parameter yang sama (sebelumnya
+    logic ini diduplikasi terpisah di kedua method).
+    """
+    return f"{int(x)}" if x == int(x) else f"{x}"
+
+
+def _ensure_datetime_index(df: pd.DataFrame, ctx: str = "") -> bool:
+    """
+    Pastikan df.index berupa DatetimeIndex (dibutuhkan vwap/vwap_bands untuk
+    reset per-anchor). Konversi inplace bila perlu dan mungkin.
+
+    Returns
+    -------
+    True  jika index sudah/berhasil jadi DatetimeIndex.
+    False jika gagal dikonversi — caller harus fallback ke mode kumulatif.
+    """
+    if isinstance(df.index, pd.DatetimeIndex):
+        return True
+    try:
+        df.index = pd.to_datetime(df.index, utc=True)
+        return True
+    except Exception as exc:
+        log.debug(
+            "%s: index bukan/tidak bisa dikonversi ke DatetimeIndex — %s",
+            ctx, exc,
+        )
+        return False
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Accessor utama
 # ─────────────────────────────────────────────────────────────────────────────
@@ -102,16 +182,26 @@ class _TAAccessor:
         """
         Weighted Moving Average (linearly weighted).
         Output kolom: WMA_{length}
+
+        Diimplementasikan dengan numpy sliding_window_view + matmul (BLAS),
+        bukan rolling().apply(lambda) — jauh lebih cepat karena menghindari
+        overhead pemanggilan fungsi Python per-window (signifikan pada data
+        ribuan bar, mis. saat backtest/training jangka panjang).
         """
         if not _require(self._df, "close", ctx="wma"):
             return pd.Series(dtype=float)
         col    = f"WMA_{length}"
+        close  = self._df["close"].to_numpy(dtype=float)
+        n      = len(close)
         w      = np.arange(1, length + 1, dtype=float)
-        result = (
-            self._df["close"]
-            .rolling(length)
-            .apply(lambda x: np.dot(x, w) / w.sum(), raw=True)
-        )
+        w_sum  = w.sum()
+
+        out = np.full(n, np.nan)
+        if n >= length:
+            windows  = np.lib.stride_tricks.sliding_window_view(close, length)
+            out[length - 1:] = windows @ w / w_sum  # oldest..newest cocok urutan w
+
+        result = pd.Series(out, index=self._df.index)
         if append:
             self._df[col] = result
         return result
@@ -139,12 +229,7 @@ class _TAAccessor:
         if not _require(df, "high", "low", "close", "volume", ctx="vwap"):
             return pd.Series(dtype=float)
 
-        # Pastikan index DatetimeIndex
-        if not isinstance(df.index, pd.DatetimeIndex):
-            try:
-                df.index = pd.to_datetime(df.index, utc=True)
-            except Exception as exc:
-                log.debug("vwap: gagal konversi index ke datetime — %s", exc)
+        _ensure_datetime_index(df, ctx="vwap")
 
         typical = (df["high"] + df["low"] + df["close"]) / 3.0
         tpv     = typical * df["volume"]
@@ -205,11 +290,7 @@ class _TAAccessor:
             empty = pd.Series(dtype=float)
             return empty, empty, empty, empty
 
-        if not isinstance(df.index, pd.DatetimeIndex):
-            try:
-                df.index = pd.to_datetime(df.index, utc=True)
-            except Exception:
-                pass
+        _ensure_datetime_index(df, ctx="vwap_bands")
 
         vwap    = df[vwap_col]
         volume  = df["volume"]
@@ -260,6 +341,15 @@ class _TAAccessor:
         Output kolom:
           SUPERT_7_3.0   — nilai garis SuperTrend
           SUPERTd_7_3.0  — arah: 1 = bullish, -1 = bearish
+
+        Catatan implementasi: TR/ATR dihitung lewat `_true_range()` +
+        `_wilder_smooth()` (helper modul, sama dipakai atr()/rsi()/adx()) —
+        bukan loop lokal terpisah. Hanya band/direction yang tetap berupa
+        loop Python: nilainya rekursif-kondisional (final_ub[i] bergantung
+        pada keputusan final_ub[i-1] DAN close[i-1] sekaligus), sehingga
+        secara matematis tidak bisa divektorisasi murni dengan numpy/pandas
+        tanpa pustaka tambahan (mis. numba) — yang justru bertentangan
+        dengan tujuan modul ini (drop-in tanpa numba untuk Termux).
         """
         df  = self._df
         col_val = f"SUPERT_{length}_{multiplier}"
@@ -275,27 +365,57 @@ class _TAAccessor:
             empty = pd.Series(dtype=float)
             return empty, empty
 
-        high  = df["high"].values.astype(float)
-        low   = df["low"].values.astype(float)
-        close = df["close"].values.astype(float)
+        high  = df["high"].to_numpy(dtype=float)
+        low   = df["low"].to_numpy(dtype=float)
+        close = df["close"].to_numpy(dtype=float)
         n     = len(close)
 
-        # ATR via Wilder's smoothing
-        tr_arr = np.empty(n)
-        tr_arr[0] = high[0] - low[0]
-        for i in range(1, n):
-            tr_arr[i] = max(
-                high[i] - low[i],
-                abs(high[i] - close[i - 1]),
-                abs(low[i]  - close[i - 1]),
-            )
-        atr_arr = np.empty(n)
-        atr_arr[0] = tr_arr[0]
-        alpha = 1.0 / length
-        for i in range(1, n):
-            atr_arr[i] = atr_arr[i - 1] * (1 - alpha) + tr_arr[i] * alpha
+        atr_arr = _wilder_smooth(_true_range(df), length).to_numpy(dtype=float)
 
         # Basic upper/lower bands
+        hl2       = (high + low) / 2.0
+        raw_ub    = hl2 + multiplier * atr_arr
+        raw_lb    = hl2 - multiplier * atr_arr
+
+        final_ub  = np.empty(n)
+        final_lb  = np.empty(n)
+        direction = np.zeros(n, dtype=int)
+        st_line   = np.empty(n)
+
+        final_ub[0] = raw_ub[0]
+        final_lb[0] = raw_lb[0]
+        direction[0] = 1
+        st_line[0]   = final_lb[0]
+
+        for i in range(1, n):
+            # Final upper band
+            final_ub[i] = (
+                raw_ub[i]
+                if raw_ub[i] < final_ub[i - 1] or close[i - 1] > final_ub[i - 1]
+                else final_ub[i - 1]
+            )
+            # Final lower band
+            final_lb[i] = (
+                raw_lb[i]
+                if raw_lb[i] > final_lb[i - 1] or close[i - 1] < final_lb[i - 1]
+                else final_lb[i - 1]
+            )
+            # Direction
+            if direction[i - 1] == -1:
+                direction[i] = 1 if close[i] > final_ub[i] else -1
+            else:
+                direction[i] = -1 if close[i] < final_lb[i] else 1
+
+            st_line[i] = final_lb[i] if direction[i] == 1 else final_ub[i]
+
+        st_series  = pd.Series(st_line,  index=df.index)
+        dir_series = pd.Series(direction.astype(float), index=df.index)
+
+        if append:
+            df[col_val] = st_series
+            df[col_dir] = dir_series
+
+        return st_series, dir_series
         hl2       = (high + low) / 2.0
         raw_ub    = hl2 + multiplier * atr_arr
         raw_lb    = hl2 - multiplier * atr_arr
@@ -346,11 +466,25 @@ class _TAAccessor:
         """
         Relative Strength Index (Wilder's smoothing, sesuai standar industri).
         Output kolom: RSI_{length}  (e.g. RSI_14)
-        NaN diisi 50 (neutral) agar tidak mengganggu sinyal awal.
+
+        Penanganan edge-case avg_loss == 0 (PENTING — lihat CHANGELOG modul):
+          - avg_loss == 0 dan avg_gain >  0  → RSI = 100  (tidak ada satu pun
+            candle turun di seluruh data yang dihitung — overbought ekstrem,
+            BUKAN netral). Sebelumnya kasus ini salah diisi 50 (lihat fix v2).
+          - avg_loss == 0 dan avg_gain == 0  → RSI = 50   (harga benar-benar
+            flat / tidak ada gerakan sama sekali — netral sejati).
+          - Sisa NaN (mis. warm-up data sangat pendek) → fallback 50.
         """
         if not _require(self._df, "close", ctx="rsi"):
             return pd.Series(dtype=float)
-        col   = f"RSI_{length}"
+        col = f"RSI_{length}"
+        n   = len(self._df)
+        if n < length + 1:
+            log.warning(
+                "rsi: data hanya %d bar, butuh minimal %d — hasil awal kurang andal",
+                n, length + 1,
+            )
+
         delta = self._df["close"].diff()
         gain  = delta.clip(lower=0)
         loss  = (-delta).clip(lower=0)
@@ -359,7 +493,14 @@ class _TAAccessor:
         avg_loss = _wilder_smooth(loss, length)
 
         rs     = avg_gain / avg_loss.replace(0, np.nan)
-        result = (100 - (100 / (1 + rs))).fillna(50.0)
+        result = 100 - (100 / (1 + rs))
+
+        no_loss         = avg_loss == 0
+        no_loss_pure_up = no_loss & (avg_gain > 0)
+        no_loss_flat    = no_loss & (avg_gain == 0)
+        result = result.mask(no_loss_pure_up, 100.0)
+        result = result.mask(no_loss_flat, 50.0)
+        result = result.fillna(50.0)
 
         if append:
             self._df[col] = result
@@ -384,6 +525,11 @@ class _TAAccessor:
         if not _require(self._df, "close", ctx="macd"):
             empty = pd.Series(dtype=float)
             return empty, empty, empty
+
+        n = len(self._df)
+        min_bars = slow + signal
+        if n < min_bars:
+            log.warning("macd: data hanya %d bar, idealnya %d+ untuk hasil stabil", n, min_bars)
 
         col_m = f"MACD_{fast}_{slow}_{signal}"
         col_s = f"MACDs_{fast}_{slow}_{signal}"
@@ -422,6 +568,11 @@ class _TAAccessor:
         if not _require(self._df, "close", ctx="stochrsi"):
             empty = pd.Series(dtype=float)
             return empty, empty
+
+        n = len(self._df)
+        min_bars = rsi_length + length
+        if n < min_bars:
+            log.warning("stochrsi: data hanya %d bar, idealnya %d+ untuk hasil stabil", n, min_bars)
 
         col_k = f"STOCHRSIk_{length}_{rsi_length}_{k}_{d}"
         col_d = f"STOCHRSId_{length}_{rsi_length}_{k}_{d}"
@@ -506,6 +657,10 @@ class _TAAccessor:
             empty = pd.Series(dtype=float)
             return empty, empty, empty, empty, empty
 
+        n = len(self._df)
+        if n < length:
+            log.warning("bbands: data hanya %d bar, butuh minimal %d", n, length)
+
         std_str  = f"{std:.1f}"
         col_u    = f"BBU_{length}_{std_str}"
         col_m    = f"BBM_{length}_{std_str}"
@@ -551,7 +706,11 @@ class _TAAccessor:
             empty = pd.Series(dtype=float)
             return empty, empty, empty
 
-        scalar_str = f"{int(scalar)}" if scalar == int(scalar) else f"{scalar}"
+        n = len(self._df)
+        if n < length:
+            log.warning("keltner: data hanya %d bar, butuh minimal %d", n, length)
+
+        scalar_str = _fmt_param(scalar)
         col_u = f"KCUe_{length}_{scalar_str}"
         col_b = f"KCBe_{length}_{scalar_str}"
         col_l = f"KCLe_{length}_{scalar_str}"
@@ -593,7 +752,7 @@ class _TAAccessor:
 
         # Pastikan BB dan KC tersedia
         bb_std_str = f"{bb_mult:.1f}"
-        kc_scalar  = f"{int(kc_mult)}" if kc_mult == int(kc_mult) else f"{kc_mult}"
+        kc_scalar  = _fmt_param(kc_mult)
         col_bbu    = f"BBU_{bb_length}_{bb_std_str}"
         col_bbl    = f"BBL_{bb_length}_{bb_std_str}"
         col_kcu    = f"KCUe_{kc_length}_{kc_scalar}"
@@ -632,6 +791,11 @@ class _TAAccessor:
           DMP_{length}  — +DI (bullish directional movement)
           DMN_{length}  — -DI (bearish directional movement)
         Default: ADX_14, DMP_14, DMN_14
+
+        Catatan implementasi: Wilder's smoothing dipusatkan lewat
+        `_wilder_smooth()` (helper modul yang sama dipakai rsi()/atr()),
+        bukan reimplementasi loop lokal — menghindari risiko dua rumus
+        matematika yang sama tapi diam-diam berbeda (lihat CHANGELOG modul).
         """
         if not _require(self._df, "high", "low", "close", ctx="adx"):
             empty = pd.Series(dtype=float)
@@ -641,71 +805,47 @@ class _TAAccessor:
         col_dmp = f"DMP_{length}"
         col_dmn = f"DMN_{length}"
 
-        high  = self._df["high"].values.astype(float)
-        low   = self._df["low"].values.astype(float)
-        close = self._df["close"].values.astype(float)
-        n     = len(close)
+        df  = self._df
+        idx = df.index
+        n   = len(df)
 
         if n < length + 1:
             log.warning("adx: data hanya %d bar, butuh %d+", n, length)
             empty = pd.Series(dtype=float)
             return empty, empty, empty
 
-        # Directional movement
-        plus_dm  = np.zeros(n)
-        minus_dm = np.zeros(n)
-        for i in range(1, n):
-            up   = high[i]  - high[i - 1]
-            down = low[i - 1] - low[i]
-            if up > down and up > 0:
-                plus_dm[i]  = up
-            if down > up and down > 0:
-                minus_dm[i] = down
+        high = df["high"].to_numpy(dtype=float)
+        low  = df["low"].to_numpy(dtype=float)
 
-        # True range
-        tr_arr = np.empty(n)
-        tr_arr[0] = high[0] - low[0]
-        for i in range(1, n):
-            tr_arr[i] = max(
-                high[i] - low[i],
-                abs(high[i] - close[i - 1]),
-                abs(low[i]  - close[i - 1]),
-            )
+        # Directional movement — divektorisasi (sebelumnya for-loop Python).
+        up_move   = np.diff(high, prepend=high[0])
+        down_move = -np.diff(low, prepend=low[0])
+        plus_dm   = np.where((up_move > down_move) & (up_move > 0), up_move, 0.0)
+        minus_dm  = np.where((down_move > up_move) & (down_move > 0), down_move, 0.0)
 
-        # Wilder's smoothing via numpy (com=length-1 equivalent)
-        def _ws(arr: np.ndarray) -> np.ndarray:
-            out = np.empty_like(arr)
-            out[0] = arr[0]
-            alpha = 1.0 / length
-            for i in range(1, len(arr)):
-                out[i] = out[i - 1] * (1 - alpha) + arr[i] * alpha
-            return out
+        tr_series       = _true_range(df)
+        plus_dm_series  = pd.Series(plus_dm, index=idx)
+        minus_dm_series = pd.Series(minus_dm, index=idx)
 
-        sm_tr    = _ws(tr_arr)
-        sm_plus  = _ws(plus_dm)
-        sm_minus = _ws(minus_dm)
+        sm_tr    = _wilder_smooth(tr_series, length)
+        sm_plus  = _wilder_smooth(plus_dm_series, length)
+        sm_minus = _wilder_smooth(minus_dm_series, length)
 
-        sm_tr_safe = np.where(sm_tr == 0, np.nan, sm_tr)
-        di_plus  = 100.0 * sm_plus  / sm_tr_safe
-        di_minus = 100.0 * sm_minus / sm_tr_safe
+        sm_tr_safe = sm_tr.replace(0, np.nan)
+        di_plus    = (100.0 * sm_plus  / sm_tr_safe).fillna(0.0)
+        di_minus   = (100.0 * sm_minus / sm_tr_safe).fillna(0.0)
 
-        # DX
-        di_sum  = di_plus + di_minus
-        di_sum  = np.where(di_sum == 0, np.nan, di_sum)
-        dx      = 100.0 * np.abs(di_plus - di_minus) / di_sum
-        dx      = np.nan_to_num(dx, nan=0.0)
+        di_sum = (di_plus + di_minus).replace(0, np.nan)
+        dx     = (100.0 * (di_plus - di_minus).abs() / di_sum).fillna(0.0)
 
-        adx_arr = _ws(dx)
-
-        idx     = self._df.index
-        s_adx   = pd.Series(adx_arr,  index=idx)
-        s_dmp   = pd.Series(di_plus,  index=idx)
-        s_dmn   = pd.Series(di_minus, index=idx)
+        s_adx = _wilder_smooth(dx, length)
+        s_dmp = di_plus
+        s_dmn = di_minus
 
         if append:
-            self._df[col_adx] = s_adx
-            self._df[col_dmp] = s_dmp
-            self._df[col_dmn] = s_dmn
+            df[col_adx] = s_adx
+            df[col_dmp] = s_dmp
+            df[col_dmn] = s_dmn
 
         return s_adx, s_dmp, s_dmn
 
@@ -730,11 +870,20 @@ class _TAAccessor:
         """
         Money Flow Index — RSI berbasis volume (0-100).
         Output kolom: MFI_{length}  (e.g. MFI_14)
-        NaN diisi 50 (neutral).
+
+        Penanganan edge-case neg_sum == 0 (sama prinsipnya dengan rsi(), lihat
+        CHANGELOG modul): tidak ada outflow sama sekali → MFI = 100 (bukan 50),
+        kecuali pos_sum juga 0 (tidak ada flow sama sekali) → MFI = 50.
         """
         if not _require(self._df, "high", "low", "close", "volume", ctx="mfi"):
             return pd.Series(dtype=float)
         col = f"MFI_{length}"
+        n   = len(self._df)
+        if n < length + 1:
+            log.warning(
+                "mfi: data hanya %d bar, butuh minimal %d — hasil awal kurang andal",
+                n, length + 1,
+            )
 
         df           = self._df
         typical      = (df["high"] + df["low"] + df["close"]) / 3.0
@@ -748,7 +897,14 @@ class _TAAccessor:
         neg_sum = neg_mf.rolling(length, min_periods=length).sum()
 
         mfr    = pos_sum / neg_sum.replace(0, np.nan)
-        result = (100.0 - (100.0 / (1.0 + mfr))).fillna(50.0)
+        result = 100.0 - (100.0 / (1.0 + mfr))
+
+        no_outflow             = neg_sum == 0
+        no_outflow_has_inflow  = no_outflow & (pos_sum > 0)
+        no_outflow_no_flow     = no_outflow & (pos_sum == 0)
+        result = result.mask(no_outflow_has_inflow, 100.0)
+        result = result.mask(no_outflow_no_flow, 50.0)
+        result = result.fillna(50.0)
 
         if append:
             self._df[col] = result
@@ -1051,6 +1207,76 @@ if __name__ == "__main__":
         passed += 1
     except Exception as e:
         fail("MFI_14", str(e)); errors += 1
+
+    # ── Regression: edge-case yang sebelumnya BUG (v2 fix) ───────────────────
+    section("REGRESSION — edge-case fix v2")
+
+    try:
+        n_up = 20
+        close_up = np.linspace(100.0, 130.0, n_up)  # naik monoton, 0 candle merah
+        df_up = pd.DataFrame({
+            "open": close_up - 0.1, "high": close_up + 0.2,
+            "low": close_up - 0.2, "close": close_up,
+            "volume": np.full(n_up, 1000.0),
+        })
+        df_up.ta.rsi(length=14, append=True)
+        v = df_up["RSI_14"].iloc[-1]
+        assert v >= 99.0, f"RSI pure-uptrend harus ~100, didapat {v}"
+        ok(f"RSI pure-uptrend (0 candle merah) = {v:.2f} (harus ≈100, BUKAN 50)")
+        passed += 1
+    except Exception as e:
+        fail("RSI pure-uptrend edge-case", str(e)); errors += 1
+
+    try:
+        n_flat = 20
+        close_flat = np.full(n_flat, 100.0)  # harga benar-benar flat
+        df_flat = pd.DataFrame({
+            "open": close_flat, "high": close_flat,
+            "low": close_flat, "close": close_flat,
+            "volume": np.full(n_flat, 1000.0),
+        })
+        df_flat.ta.rsi(length=14, append=True)
+        v = df_flat["RSI_14"].iloc[-1]
+        assert abs(v - 50.0) < 1e-6, f"RSI flat harus tepat 50, didapat {v}"
+        ok(f"RSI flat (tidak ada gerakan harga) = {v:.2f} (harus tepat 50)")
+        passed += 1
+    except Exception as e:
+        fail("RSI flat edge-case", str(e)); errors += 1
+
+    try:
+        n_up = 20
+        close_up = np.linspace(100.0, 130.0, n_up)
+        df_up_mfi = pd.DataFrame({
+            "open": close_up - 0.1, "high": close_up + 0.2,
+            "low": close_up - 0.2, "close": close_up,
+            "volume": np.full(n_up, 1000.0),
+        })
+        df_up_mfi.ta.mfi(length=14, append=True)
+        v = df_up_mfi["MFI_14"].iloc[-1]
+        assert v >= 99.0, f"MFI tanpa outflow harus ~100, didapat {v}"
+        ok(f"MFI tanpa outflow sama sekali = {v:.2f} (harus ≈100, BUKAN 50)")
+        passed += 1
+    except Exception as e:
+        fail("MFI tanpa-outflow edge-case", str(e)); errors += 1
+
+    try:
+        # WMA vectorized (sliding_window_view) harus identik dengan definisi
+        # naif (dot product manual per window) — cross-check hasil optimisasi.
+        length_w = 14
+        w = np.arange(1, length_w + 1, dtype=float)
+        close_vals = df["close"].to_numpy(dtype=float)
+        naive = np.full(len(close_vals), np.nan)
+        for i in range(length_w - 1, len(close_vals)):
+            window = close_vals[i - length_w + 1: i + 1]
+            naive[i] = np.dot(window, w) / w.sum()
+        df.ta.wma(length=length_w, append=True)
+        vectorized = df[f"WMA_{length_w}"].to_numpy(dtype=float)
+        valid = ~np.isnan(naive)
+        assert np.allclose(naive[valid], vectorized[valid], rtol=1e-9), "WMA vectorized ≠ naive"
+        ok(f"WMA_{length_w} vectorized cocok 100% dengan definisi naif ({valid.sum()} titik dicek)")
+        passed += 1
+    except Exception as e:
+        fail("WMA vectorized vs naive", str(e)); errors += 1
 
     # ── compute_all ───────────────────────────────────────────────────────
     section("COMPUTE_ALL")
