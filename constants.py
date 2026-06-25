@@ -47,6 +47,52 @@ COL_VOL_MA       = "_vol_ma"
 COL_QVOL_MA      = "_qvol_ma"
 COL_OBV_MA       = "_obv_ma"
 COL_ATR_PCTILE   = "_atr_percentile"
+COL_ATR_PCTILE_100 = "_atr_percentile_100"
+
+# ── Kolom v4/v5 — indikator tambahan enrich_production ────────────────────────
+# Williams %R
+COL_WILLR       = "WILLR_14"
+
+# Rate of Change
+COL_ROC         = "ROC_9"
+COL_ROC_SLOPE   = "ROC_SLOPE_9_5"
+
+# RSI slope & divergence
+COL_RSI_SLOPE   = "RSI_14_slope"
+COL_RSI_DIV     = "RSI_DIV_14"
+
+# EMA crossover signal (+1 bullish, -1 bearish, 0 none)
+COL_EMAXS_9_21  = "EMAXS_9_21"
+COL_EMAXS_21_50 = "EMAXS_21_50"
+
+# CCI
+COL_CCI         = "CCI_20"
+
+# Donchian Channel
+COL_DCU         = "DCU_20"
+COL_DCM         = "DCM_20"
+COL_DCL         = "DCL_20"
+
+# Chaikin Money Flow
+COL_CMF         = "CMF_20"
+
+# Parabolic SAR
+COL_PSAR        = "PSAR"
+COL_PSAR_DIR    = "PSAR_DIR"    # +1 = bullish trend, -1 = bearish trend
+COL_PSAR_REV    = "PSAR_REV"    # 1 = reversal terjadi di bar ini, 0 = tidak
+
+# Ichimoku
+COL_ICH_TENKAN  = "ICH_TENKAN"
+COL_ICH_KIJUN   = "ICH_KIJUN"
+COL_ICH_SPAN_A  = "ICH_SPAN_A"
+COL_ICH_SPAN_B  = "ICH_SPAN_B"
+COL_ICH_CHIKOU  = "ICH_CHIKOU"
+
+# VWMA
+COL_VWMA        = "VWMA_20"
+
+# EMA stack alignment score (0–100)
+COL_EMA_STACK_SCORE = "_ema_stack_score"
 
 REQUIRED_INDICATOR_COLS: Tuple[str, ...] = (
     COL_EMA9,
@@ -54,6 +100,34 @@ REQUIRED_INDICATOR_COLS: Tuple[str, ...] = (
     COL_EMA50,
     COL_RSI,
     COL_ATR,
+)
+
+# Semua kolom yang dihasilkan df.ta.enrich_production() — v5
+# Wajib ada sebelum Gate3 logic dan observer pipeline dijalankan.
+# Referensikan via konstanta ini, BUKAN hardcode string literal.
+PRODUCTION_INDICATOR_COLS: Tuple[str, ...] = (
+    # EMA stack
+    COL_EMA9, COL_EMA21, COL_EMA50, COL_EMA100, COL_EMA200,
+    COL_EMA_STACK_SCORE, COL_EMAXS_9_21, COL_EMAXS_21_50,
+    # Momentum
+    COL_RSI, COL_RSI_SLOPE, COL_RSI_DIV,
+    COL_MACD_LINE, COL_MACD_SIGNAL, COL_MACD_HIST,
+    COL_STOCH_K, COL_STOCH_D,
+    COL_CCI, COL_WILLR, COL_ROC, COL_ROC_SLOPE,
+    # Volatility
+    COL_ATR, COL_ATR_PCT, COL_ATR_PCTILE_100,
+    COL_BB_UPPER, COL_BB_MIDDLE, COL_BB_LOWER, COL_BB_WIDTH, COL_BB_POSITION,
+    COL_KC_UPPER, COL_KC_MIDDLE, COL_KC_LOWER,
+    COL_SQUEEZE, COL_ADX,
+    # Structure
+    COL_SUPERTREND, COL_SUPERTREND_DIR,
+    COL_DCU, COL_DCM, COL_DCL,
+    COL_PSAR, COL_PSAR_DIR, COL_PSAR_REV,
+    # Strength
+    COL_OBV, COL_MFI, COL_CMF,
+    # VWAP
+    COL_VWAP, COL_VWAP_UPPER_1, COL_VWAP_LOWER_1,
+    COL_VWAP_UPPER_2, COL_VWAP_LOWER_2,
 )
 
 TREND_REQUIRED_COLS: Tuple[str, ...] = (
