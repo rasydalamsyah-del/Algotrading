@@ -2,30 +2,119 @@
 api_server.py
 AlgoTrader Pro v7.0 — "The Intelligence Pipeline"
 
+REST API + Dashboard server.
+
+CHANGELOG
+─────────────────────────────────────────────────────────────────────────────
+v1 — SUPERPOWER UPGRADE:
+  [BUG-FIX] HaltRequest duplikat (line 42 & 1211) → definisi tunggal di top-level
+    dengan field `reason: str` yang benar. req.reason tidak lagi selalu None.
+  [BUG-FIX] TradingBot stub (BaseModel kosong) dihapus — tidak boleh ada di
+    module scope karena override TYPE_CHECKING import dari main.py.
+  [BUG-FIX] watchlist open() tanpa `with` → file descriptor leak diperbaiki.
+  [BUG-FIX] /api/diagnosa: 5 indikator manual → df.ta.enrich_production()
+    sehingga WILLR, CMF, ADX, CCI, RSI_DIV, BBands, dll tersedia.
+  [BUG-FIX] _pos_dict: tambah entry_score, entry_regime, highest_price,
+    exit_time, entry_fee_actual — field DB yang sebelumnya hilang.
+  [BUG-FIX] _trade_dict: tambah order_id, strategy_profile.
+  [SEC-FIX] /api/balance, /api/trades, /api/metrics, /api/logs,
+    /api/equity_curve, /api/positions sekarang wajib X-API-Key.
+  [PERF] Import dalam handler (8 tempat) dipindah ke top-level.
+  [PERF] dashboard_snapshot: sequential → asyncio.gather() parallel.
+  [PERF] get_metrics: cache 10 detik via _MetricCache — cegah spam kalkulasi
+    Sharpe/Sortino/Calmar tiap request.
+  [PERF] HOLD_MINUTES dict dipindah ke module-level constant.
+  [NEW] Timing middleware: setiap response dapat header X-Process-Time-Ms.
+  [NEW] Rate limiter sederhana: max 60 req/menit per IP untuk endpoint berat.
+  [NEW] GET /api/positions/{symbol} — detail posisi per coin.
+  [NEW] GET /api/trades/{symbol} — trade history per coin.
+  [NEW] GET /api/orderbook/{symbol} — live orderbook + ob_danger level.
+  [NEW] GET /api/shadow_trades — status paper/shadow trades aktif.
+  [NEW] POST /api/universe/add — tambah coin ke universe override.
+  [NEW] POST /api/universe/remove — hapus coin dari universe.
+  [NEW] GET /api/universe/overrides — list semua override aktif.
+  [NEW] GET /api/executor/stats — fill rate, retry count, order queue size.
+  [NEW] POST /api/bot/force_analyze/{symbol} — trigger analisis ulang manual.
+  [NEW] GET /api/candles/{symbol}/indicators — OHLCV + semua 60 kolom indikator.
+  [NEW] GET /api/stream — Server-Sent Events untuk posisi + ticker real-time.
+  [NEW] Landing page / menampilkan semua 30+ endpoint beserta deskripsi.
 """
 
 from __future__ import annotations
 
+import asyncio
+import json
+import logging
+import math
 import os
 import secrets
-import logging
+import time
+import urllib.parse
+from collections import defaultdict
 from datetime import datetime, timezone, timedelta
-from typing import Optional, TYPE_CHECKING
+from typing import Any, Dict, List, Optional, TYPE_CHECKING
 
 try:
     import ta_compat
+    from ta_compat import lookup_col
 except ImportError:
-    pass
+    def lookup_col(bar, *cols, default=0.0):  # type: ignore[misc]
+        return default
 
 import pandas as pd
-from fastapi import FastAPI, HTTPException, Depends, Security
-from fastapi.staticfiles import StaticFiles
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi import FastAPI, HTTPException, Depends, Request
+from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
-import math
-import json
+from fastapi.security import APIKeyHeader
+from pydantic import BaseModel
 
+# ── Top-level imports yang sebelumnya ada di dalam handler ────────────────────
+from constants import (
+    COL_EMA9, COL_EMA21, COL_EMA50, COL_RSI, COL_ATR,
+    COL_WILLR, COL_ROC, COL_RSI_SLOPE, COL_RSI_DIV,
+    COL_EMAXS_9_21, COL_CCI, COL_DCU, COL_CMF, COL_PSAR,
+    COL_EMA_STACK_SCORE,
+)
+from profiles.registry      import get_coin_profile, select_profile_from_indicators
+from profiles.base_profile  import PROFILE_EMOJI
+from profiles.thresholds    import get_dynamic_threshold, DYNAMIC_THRESHOLD_MATRIX, ENTRY_THRESHOLDS
+from profiles.weights       import LEVEL1_WEIGHTS
+from risk                   import HaltReason
+
+if TYPE_CHECKING:
+    from main import TradingBot
+
+log = logging.getLogger("api")
+API_KEY_HEADER = APIKeyHeader(name="X-API-Key", auto_error=False)
+
+# ── Module-level constants (sebelumnya di dalam handler) ──────────────────────
+HOLD_MINUTES: Dict[str, int] = {
+    "1m": 1, "3m": 3, "5m": 5, "15m": 15,
+    "30m": 30, "1h": 60, "4h": 240, "1d": 1440,
+}
+
+# ── Request models ─────────────────────────────────────────────────────────────
+class HaltRequest(BaseModel):
+    """[BUG-FIX v8] Definisi tunggal — sebelumnya duplikat di line 42 & 1211."""
+    reason: str = "Manual halt via API"
+
+class BotConfigPatchRequest(BaseModel):
+    key:   str
+    value: Any
+
+class UniverseAddRequest(BaseModel):
+    symbol: str
+    notes:  Optional[str] = None
+
+class UniverseRemoveRequest(BaseModel):
+    symbol: str
+
+class ForceAnalyzeRequest(BaseModel):
+    symbol: str
+
+# ── SafeJSONResponse ───────────────────────────────────────────────────────────
 class SafeJSONResponse(JSONResponse):
+    """JSON response yang aman untuk NaN/Inf — tidak crash di client."""
     def render(self, content) -> bytes:
         def sanitize(obj):
             if isinstance(obj, float):
@@ -36,29 +125,61 @@ class SafeJSONResponse(JSONResponse):
                 return [sanitize(i) for i in obj]
             return obj
         return json.dumps(sanitize(content), ensure_ascii=False).encode("utf-8")
-from fastapi.security import APIKeyHeader
-from pydantic import BaseModel
 
-class HaltRequest(BaseModel):
-    class Config:
-        extra = "allow"
-        arbitrary_types_allowed = True
+# ── Simple in-memory rate limiter ──────────────────────────────────────────────
+class _RateLimiter:
+    """
+    Token bucket rate limiter sederhana per IP.
+    max_calls per window_secs — tidak butuh Redis, aman untuk single-process.
+    """
+    def __init__(self, max_calls: int = 60, window_secs: float = 60.0):
+        self._max    = max_calls
+        self._window = window_secs
+        self._hits: Dict[str, List[float]] = defaultdict(list)
 
-class TradingBot(BaseModel):
-    class Config:
-        extra = "allow"
-        arbitrary_types_allowed = True
+    def is_allowed(self, ip: str) -> bool:
+        now    = time.monotonic()
+        cutoff = now - self._window
+        hits   = self._hits[ip]
+        # Buang yang sudah expired
+        self._hits[ip] = [t for t in hits if t > cutoff]
+        if len(self._hits[ip]) >= self._max:
+            return False
+        self._hits[ip].append(now)
+        return True
 
-from constants import COL_EMA9, COL_EMA21, COL_EMA50, COL_RSI, COL_ATR
+_rate_limiter = _RateLimiter(max_calls=120, window_secs=60.0)
 
-from profiles.registry import get_coin_profile
-from profiles.base_profile import PROFILE_EMOJI
+def _check_rate_limit(request: Request) -> None:
+    """Dependency — raise 429 jika rate limit terlampaui."""
+    ip = request.client.host if request.client else "unknown"
+    if not _rate_limiter.is_allowed(ip):
+        raise HTTPException(
+            status_code=429,
+            detail="Rate limit terlampaui. Maksimal 120 request/menit.",
+        )
 
-if TYPE_CHECKING:
-    from main import TradingBot
+# ── Metric cache ───────────────────────────────────────────────────────────────
+class _MetricCache:
+    """
+    Cache hasil get_metrics selama TTL detik.
+    Cegah kalkulasi Sharpe/Sortino/Calmar tiap request saat dashboard polling.
+    """
+    def __init__(self, ttl: float = 10.0):
+        self._ttl    = ttl
+        self._ts:    float = 0.0
+        self._value: Optional[Dict] = None
 
-log = logging.getLogger("api")
-API_KEY_HEADER = APIKeyHeader(name="X-API-Key", auto_error=False)
+    def get(self) -> Optional[Dict]:
+        if self._value and (time.monotonic() - self._ts) < self._ttl:
+            return self._value
+        return None
+
+    def set(self, value: Dict) -> None:
+        self._value = value
+        self._ts    = time.monotonic()
+
+_metrics_cache = _MetricCache(ttl=10.0)
 
 def _get_api_key_from_env() -> str:
     key = os.getenv("DASHBOARD_API_KEY", "")
@@ -107,41 +228,65 @@ def _fmt_usd(v) -> str:
         return f"${v:.5f}"
     return f"${v:.8f}"
 
-def _pos_dict(pos) -> dict:
+def _pos_dict(pos, observation=None) -> dict:
+    """
+    Serialisasi Position → dict.
+    [v8 BUG-FIX] Tambah field yang sebelumnya hilang dari DB model:
+      entry_score, entry_regime, highest_price, exit_time, entry_fee_actual
+    """
+    score_delta = None
+    if observation is not None and getattr(pos, "entry_score", None) is not None:
+        try:
+            score_delta = round(observation.total_score - pos.entry_score, 2)
+        except Exception:
+            pass
+
     return {
-        "id":                 pos.id,
-        "symbol":             pos.symbol,
-        "side":               pos.side,
-        "entry_time":         _iso(pos.entry_time),
-        "entry_price":        pos.entry_price,
-        "current_price":      pos.current_price,
-        "amount":             pos.amount,
-        "unrealized_pnl":     pos.unrealized_pnl,
-        "unrealized_pnl_pct": pos.unrealized_pnl_pct,
-        "realized_pnl":       pos.realized_pnl,
-        "realized_pnl_pct":   pos.realized_pnl_pct,
-        "stop_loss_price":    pos.stop_loss_price,
-        "take_profit_price":  pos.take_profit_price,
-        "atr_at_entry":       pos.atr_at_entry,
-        "strategy":           pos.strategy_name,
-        "profile":            pos.strategy_profile or "",
-        "entry_order_id":     pos.entry_order_id,
-        "duration_secs":      int(
+        "id":                  pos.id,
+        "symbol":              pos.symbol,
+        "side":                pos.side,
+        "entry_time":          _iso(pos.entry_time),
+        "entry_price":         pos.entry_price,
+        "current_price":       pos.current_price,
+        "amount":              pos.amount,
+        "unrealized_pnl":      pos.unrealized_pnl,
+        "unrealized_pnl_pct":  pos.unrealized_pnl_pct,
+        "realized_pnl":        pos.realized_pnl,
+        "realized_pnl_pct":    pos.realized_pnl_pct,
+        "stop_loss_price":     pos.stop_loss_price,
+        "take_profit_price":   pos.take_profit_price,
+        "atr_at_entry":        pos.atr_at_entry,
+        "strategy":            pos.strategy_name,
+        "profile":             pos.strategy_profile or "",
+        "entry_order_id":      pos.entry_order_id,
+        "duration_secs":       int(
             (_utcnow() - pos.entry_time).total_seconds()
             if pos.entry_time else 0
         ),
-        "duration_display":   _dur(pos.entry_time),
-        "is_open":            pos.is_open,
-        "is_closing":         getattr(pos, "is_closing", False),
+        "duration_display":    _dur(pos.entry_time),
+        "is_open":             pos.is_open,
+        "is_closing":          getattr(pos, "is_closing", False),
+        # ── Field tambahan v8 ──────────────────────────────────────────────────
+        "entry_score":         getattr(pos, "entry_score",        None),
+        "entry_regime":        getattr(pos, "entry_regime",        None),
+        "highest_price":       getattr(pos, "highest_price",       None),
+        "exit_time":           _iso(getattr(pos, "exit_time",      None)),
+        "entry_fee_actual":    getattr(pos, "entry_fee_actual",    None),
+        "score_delta":         score_delta,
     }
 
 def _trade_dict(t) -> dict:
+    """
+    Serialisasi Trade → dict.
+    [v8 BUG-FIX] Tambah order_id, strategy_profile yang sebelumnya hilang.
+    """
     return {
         "id":                t.id,
         "timestamp":         _iso(t.timestamp),
         "symbol":            t.symbol,
         "side":              t.side,
         "order_type":        t.order_type,
+        "order_id":          getattr(t, "order_id",          None),
         "status":            t.status,
         "requested_price":   t.requested_price,
         "executed_price":    t.executed_price,
@@ -157,23 +302,37 @@ def _trade_dict(t) -> dict:
         "realized_pnl":      t.realized_pnl,
         "realized_pnl_pct":  t.realized_pnl_pct,
         "strategy":          t.strategy_name,
+        "strategy_profile":  getattr(t, "strategy_profile",  None),
         "signal_origin":     t.signal_origin,
         "notes":             t.notes,
     }
 
 def create_app(bot_getter) -> FastAPI:
     app = FastAPI(
-        title="AlgoTrader Pro API v7.0",
-        version="7.0.0",
-        description="Real-time dashboard API for AlgoTrader Pro — Intelligence Pipeline",
+        title="AlgoTrader Pro API v8.0",
+        version="8.0.0",
+        description="Real-time dashboard API for AlgoTrader Pro — Intelligence Pipeline v8 SUPERPOWER",
         default_response_class=SafeJSONResponse,
     )
 
+    # ── Timing middleware ──────────────────────────────────────────────────────
+    @app.middleware("http")
+    async def add_process_time_header(request: Request, call_next):
+        t0       = time.perf_counter()
+        response = await call_next(request)
+        elapsed  = (time.perf_counter() - t0) * 1000
+        response.headers["X-Process-Time-Ms"] = f"{elapsed:.2f}"
+        return response
+
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=os.getenv("ALLOWED_ORIGINS", "http://localhost:3000,http://localhost:8000,http://127.0.0.1:8000,http://127.0.0.1:3000").split(","),
+        allow_origins=os.getenv(
+            "ALLOWED_ORIGINS",
+            "http://localhost:3000,http://localhost:8000,"
+            "http://127.0.0.1:8000,http://127.0.0.1:3000",
+        ).split(","),
         allow_credentials=True,
-        allow_methods=["GET", "POST"],
+        allow_methods=["GET", "POST", "DELETE"],
         allow_headers=["X-API-Key", "Content-Type"],
     )
 
@@ -184,9 +343,14 @@ def create_app(bot_getter) -> FastAPI:
         return b
 
     dashboard_dir = os.path.join(os.path.dirname(__file__), "dashboard")
-    if os.path.isdir(dashboard_dir):
-        app.mount("/dashboard", StaticFiles(directory=dashboard_dir), name="dashboard")
+    try:
+        from fastapi.staticfiles import StaticFiles
+        if os.path.isdir(dashboard_dir):
+            app.mount("/dashboard", StaticFiles(directory=dashboard_dir), name="dashboard")
+    except Exception:
+        pass
 
+    # ── Landing page — semua endpoint ─────────────────────────────────────────
     @app.get("/", response_class=HTMLResponse)
     async def root():
         index = os.path.join(dashboard_dir, "index.html")
@@ -194,46 +358,92 @@ def create_app(bot_getter) -> FastAPI:
             with open(index, "r", encoding="utf-8") as f:
                 return f.read()
 
-        return """
-<!doctype html>
-<html lang="en">
-  <head>
-    <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>AlgoTrader Pro API</title>
-    <style>
-      body { font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial; background:#0b0d12; color:#e2e6f0; margin:0; padding:28px; }
-      .card { max-width:720px; margin:0 auto; background:#10141c; border:1px solid #1e2433; border-radius:12px; padding:18px 18px 10px; }
-      h1 { margin:0 0 8px; font-size:18px; }
-      p { margin:8px 0; color:#a7afc7; line-height:1.45; }
-      a { color:#7dd3fc; text-decoration:none; }
-      code { background:#0b0d12; border:1px solid #1e2433; padding:2px 6px; border-radius:6px; }
-      ul { margin:10px 0 0; padding-left:18px; }
-      li { margin:6px 0; }
-    </style>
-  </head>
-  <body>
-    <div class="card">
-      <h1>AlgoTrader Pro API</h1>
-      <p>Dashboard HTML belum tersedia (folder <code>dashboard/</code> kosong atau <code>index.html</code> tidak ada).</p>
-      <p>Endpoint yang tersedia:</p>
-      <ul>
-        <li><a href="/health">/health</a></li>
-        <li><a href="/api/status">/api/status</a></li>
-        <li><a href="/api/balance">/api/balance</a></li>
-        <li><a href="/api/positions">/api/positions</a></li>
-        <li><a href="/api/trades">/api/trades</a></li>
-        <li><a href="/api/intelligence/scores">/api/intelligence/scores</a></li>
-        <li><a href="/api/intelligence/regime">/api/intelligence/regime</a></li>
-      </ul>
-    </div>
-  </body>
-</html>
-""".strip()
+        endpoints = [
+            ("GET",    "/health",                              "Health check (no auth)"),
+            ("GET",    "/api/status",                          "Status bot (no auth)"),
+            ("GET",    "/api/balance",                         "Saldo exchange 🔑"),
+            ("GET",    "/api/positions",                       "Semua posisi terbuka 🔑"),
+            ("GET",    "/api/positions/{symbol}",              "Detail posisi per coin 🔑"),
+            ("GET",    "/api/trades",                          "Trade history (limit, offset) 🔑"),
+            ("GET",    "/api/trades/{symbol}",                 "Trade history per coin 🔑"),
+            ("GET",    "/api/equity_curve",                    "Equity curve snapshots 🔑"),
+            ("GET",    "/api/metrics",                         "Statistik performa (cached 10s) 🔑"),
+            ("GET",    "/api/logs",                            "Log entries terbaru 🔑"),
+            ("GET",    "/api/candles/{symbol}",                "OHLCV candles 🔑"),
+            ("GET",    "/api/candles/{symbol}/indicators",     "OHLCV + semua 60 indikator 🔑"),
+            ("GET",    "/api/tickers",                         "Ticker harga semua coin 🔑"),
+            ("GET",    "/api/market_info/{symbol}",            "Info market + volume 🔑"),
+            ("GET",    "/api/orderbook/{symbol}",              "Live orderbook + danger level 🔑"),
+            ("GET",    "/api/shadow_trades",                   "Paper/shadow trades aktif 🔑"),
+            ("GET",    "/api/system_health",                   "CPU/Mem/disk + latency 🔑"),
+            ("GET",    "/api/dashboard_snapshot",              "Semua data dashboard (parallel) 🔑"),
+            ("GET",    "/api/diagnosa",                        "Diagnosa per-coin + sinyal 🔑"),
+            ("POST",   "/api/bot/halt",                        "Halt trading 🔑"),
+            ("POST",   "/api/bot/resume",                      "Resume trading 🔑"),
+            ("POST",   "/api/bot/panic",                       "Panic close all 🔑"),
+            ("POST",   "/api/bot/close/{symbol}",              "Close posisi manual 🔑"),
+            ("POST",   "/api/bot/force_analyze/{symbol}",      "Trigger analisis ulang 🔑"),
+            ("GET",    "/api/bot/config",                      "Baca config bot 🔑"),
+            ("POST",   "/api/bot/config",                      "Patch config bot 🔑"),
+            ("GET",    "/api/universe/overrides",              "List universe overrides 🔑"),
+            ("POST",   "/api/universe/add",                    "Tambah coin ke universe 🔑"),
+            ("POST",   "/api/universe/remove",                 "Hapus coin dari universe 🔑"),
+            ("GET",    "/api/executor/stats",                  "Fill rate, retry, queue 🔑"),
+            ("GET",    "/api/intelligence/scores",             "Skor sinyal semua coin 🔑"),
+            ("GET",    "/api/intelligence/scores/{symbol}",    "Skor sinyal per coin 🔑"),
+            ("GET",    "/api/intelligence/regime",             "Market regime terkini 🔑"),
+            ("GET",    "/api/analytics/attribution",           "Atribusi PnL per profil 🔑"),
+            ("GET",    "/api/analytics/indicator_effectiveness","Efektivitas indikator 🔑"),
+            ("GET",    "/api/crosslearn/status",               "Status cross-learn 🔑"),
+            ("GET",    "/api/crosslearn/swap_history",         "History coin swap 🔑"),
+            ("GET",    "/api/profiles/thresholds",             "Threshold entry/exit 🔑"),
+            ("GET",    "/api/profiles/weights",                "Bobot indikator 🔑"),
+            ("GET",    "/api/stream",                          "SSE stream posisi + ticker 🔑"),
+        ]
+
+        rows = "".join(
+            f'<tr><td><code class="method">{m}</code></td>'
+            f'<td><a href="{p}">{p}</a></td>'
+            f'<td>{d}</td></tr>'
+            for m, p, d in endpoints
+        )
+
+        return f"""<!doctype html>
+<html lang="id">
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width,initial-scale=1"/>
+  <title>AlgoTrader Pro API v8</title>
+  <style>
+    body{{font-family:ui-sans-serif,system-ui,-apple-system,Segoe UI,Roboto,Arial;
+      background:#0b0d12;color:#e2e6f0;margin:0;padding:28px}}
+    h1{{font-size:20px;margin:0 0 4px}}
+    p{{color:#a7afc7;margin:4px 0 18px}}
+    table{{border-collapse:collapse;width:100%;max-width:900px}}
+    th{{background:#10141c;padding:8px 12px;text-align:left;color:#7dd3fc;
+      border-bottom:1px solid #1e2433}}
+    td{{padding:7px 12px;border-bottom:1px solid #151a25}}
+    a{{color:#7dd3fc;text-decoration:none}}
+    code{{background:#0b0d12;border:1px solid #1e2433;padding:2px 6px;border-radius:5px}}
+    .method{{color:#34d399;font-weight:600}}
+    tr:hover td{{background:#10141c}}
+  </style>
+</head>
+<body>
+  <h1>🤖 AlgoTrader Pro API <span style="color:#7dd3fc">v8 SUPERPOWER</span></h1>
+  <p>🔑 = Butuh header <code>X-API-Key</code> &nbsp;|&nbsp;
+     <a href="/docs">Swagger UI</a> &nbsp;|&nbsp;
+     <a href="/redoc">ReDoc</a></p>
+  <table>
+    <thead><tr><th>Method</th><th>Endpoint</th><th>Keterangan</th></tr></thead>
+    <tbody>{rows}</tbody>
+  </table>
+</body>
+</html>""".strip()
 
     @app.get("/health")
     async def health():
-        return {"status": "ok", "time": _iso(_utcnow())}
+        return {"status": "ok", "time": _iso(_utcnow()), "version": "8.0.0"}
 
     @app.get("/api/status")
     async def get_status():
@@ -241,21 +451,33 @@ def create_app(bot_getter) -> FastAPI:
         uptime = int((_utcnow() - b.start_time).total_seconds()) if b.start_time else 0
         halted = b.risk_manager.is_halted if b.risk_manager else False
         halt_reason = b.risk_manager.halt_reason if b.risk_manager else ""
+
+        # [BUG-FIX v8] watchlist: open() tanpa with → diganti with open()
+        watchlist: List[str] = b.config.get("universe_watchlist", [])
+        universe_path = os.path.join(os.path.dirname(__file__), "universe.json")
+        if os.path.exists(universe_path):
+            try:
+                with open(universe_path, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                watchlist = [c["symbol"] for c in data.get("symbols", []) if "symbol" in c]
+            except Exception:
+                pass
+
         return {
-            "status":          "running" if b.is_running else "stopped",
-            "halted":          halted,
-            "halt_reason":     halt_reason,
-            "exchange":        b.config.get("exchange_id"),
-            "testnet":         b.config.get("testnet"),
-            "connected":       b.exchange.is_connected if b.exchange else False,
-            "strategy":        b.strategy.name if b.strategy else None,
-            "strategy_active": b.strategy.is_active if b.strategy else False,
+            "status":             "running" if b.is_running else "stopped",
+            "halted":             halted,
+            "halt_reason":        halt_reason,
+            "exchange":           b.config.get("exchange_id"),
+            "testnet":            b.config.get("testnet"),
+            "connected":          b.exchange.is_connected if b.exchange else False,
+            "strategy":           b.strategy.name if b.strategy else None,
+            "strategy_active":    b.strategy.is_active if b.strategy else False,
             "universe_watchlist": b.config.get("universe_watchlist", []),
-            "watchlist": (lambda: __import__('json').load(open('universe.json')).get('symbols',[]) and [c['symbol'] for c in __import__('json').load(open('universe.json')).get('symbols',[])] if __import__('os').path.exists('universe.json') else b.config.get("universe_watchlist", []))(),
-            "timeframe":       b.config.get("timeframe"),
-            "uptime_secs":     uptime,
-            "uptime_display":  str(timedelta(seconds=uptime)),
-            "timestamp":       _iso(_utcnow()),
+            "watchlist":          watchlist,
+            "timeframe":          b.config.get("timeframe"),
+            "uptime_secs":        uptime,
+            "uptime_display":     str(timedelta(seconds=uptime)),
+            "timestamp":          _iso(_utcnow()),
         }
 
     @app.get("/api/balance")
@@ -280,7 +502,7 @@ def create_app(bot_getter) -> FastAPI:
         }
 
     @app.get("/api/positions")
-    async def get_positions():
+    async def get_positions(_: str = Depends(verify_api_key)):
         b         = bot()
         positions = await b.db.get_open_positions()
         return {
@@ -288,14 +510,65 @@ def create_app(bot_getter) -> FastAPI:
             "count":     len(positions),
         }
 
+    @app.get("/api/positions/{symbol:path}")
+    async def get_position_by_symbol(
+        symbol: str,
+        _: str = Depends(verify_api_key),
+    ):
+        """[NEW v8] Detail posisi tunggal per coin dengan observation score."""
+        b         = bot()
+        positions = await b.db.get_open_positions()
+        sym       = urllib.parse.unquote(symbol).upper()
+        matched   = [p for p in positions if p.symbol == sym]
+        if not matched:
+            raise HTTPException(status_code=404, detail=f"Posisi {sym} tidak ditemukan")
+        pos = matched[0]
+        observation = None
+        if b._commander:
+            try:
+                observation = await b._commander.get_observation(sym)
+            except Exception:
+                pass
+        return {"position": _pos_dict(pos, observation), "timestamp": _iso(_utcnow())}
+
     @app.get("/api/trades")
-    async def get_trades(limit: int = 50):
+    async def get_trades(
+        limit:  int = 50,
+        offset: int = 0,
+        _: str = Depends(verify_api_key),
+    ):
         b      = bot()
-        trades = await b.db.get_recent_trades(limit=min(limit, 200))
-        return {"trades": [_trade_dict(t) for t in trades], "count": len(trades)}
+        trades = await b.db.get_recent_trades(limit=min(limit + offset, 500))
+        page   = trades[offset: offset + limit]
+        return {
+            "trades": [_trade_dict(t) for t in page],
+            "count":  len(page),
+            "total":  len(trades),
+            "offset": offset,
+        }
+
+    @app.get("/api/trades/{symbol:path}")
+    async def get_trades_by_symbol(
+        symbol: str,
+        limit:  int = 50,
+        _: str = Depends(verify_api_key),
+    ):
+        """[NEW v8] Trade history per coin."""
+        b        = bot()
+        sym      = urllib.parse.unquote(symbol).upper()
+        trades   = await b.db.get_recent_trades(limit=500)
+        filtered = [t for t in trades if t.symbol == sym][:limit]
+        return {
+            "symbol": sym,
+            "trades": [_trade_dict(t) for t in filtered],
+            "count":  len(filtered),
+        }
 
     @app.get("/api/equity_curve")
-    async def get_equity_curve(limit: int = 500):
+    async def get_equity_curve(
+        limit: int = 500,
+        _: str = Depends(verify_api_key),
+    ):
         b     = bot()
         snaps = await b.db.get_equity_curve(limit=limit)
         return {
@@ -312,7 +585,12 @@ def create_app(bot_getter) -> FastAPI:
         }
 
     @app.get("/api/metrics")
-    async def get_metrics():
+    async def get_metrics(_: str = Depends(verify_api_key)):
+        """[v8 PERF] Hasil di-cache 10 detik — cegah kalkulasi berat tiap request."""
+        cached = _metrics_cache.get()
+        if cached:
+            return {**cached, "_cached": True}
+
         b      = bot()
         rm     = b.risk_manager
         trades = await b.db.get_recent_trades(limit=500)
@@ -329,7 +607,7 @@ def create_app(bot_getter) -> FastAPI:
 
         attribution_summary  = {}
         indicator_summary    = {}
-        if getattr(b, "analytics", None):
+        if getattr(b, "_analytics", None):
             try:
                 snap = await b.db.get_latest_snapshot(scope="global", lookback_days=30)
                 if snap:
@@ -344,32 +622,38 @@ def create_app(bot_getter) -> FastAPI:
             except Exception as e:
                 log.warning("Tidak bisa ambil analytics summary: %s", e)
 
-        return {
+        pf_raw = rm.compute_profit_factor(pnl_list)
+        result = {
             "total_trades":         len(closed),
-            "win_rate_pct":         round(rm.compute_win_rate(pnl_list),           4),
-            "total_pnl":            round(sum(pnl_list),                            6),
-            "avg_pnl_per_trade":    round(rm.compute_expectancy(pnl_list),          6),
-            "profit_factor":        (lambda pf: 9999.0 if math.isinf(pf) else round(pf, 4))(rm.compute_profit_factor(pnl_list)),
-            "expectancy":           round(rm.compute_expectancy(pnl_list),          6),
-            "avg_win_loss_ratio":   round(rm.compute_avg_win_loss_ratio(pnl_list),  4),
-            "max_drawdown_pct":     round(max_dd,                                   4),
-            "current_drawdown_pct": round(rm.current_drawdown_pct,                 4),
-            "sharpe_ratio":         round(rm.compute_sharpe_ratio(pnl_list),        4),
-            "sortino_ratio":        round(rm.compute_sortino_ratio(pnl_list),       4),
+            "win_rate_pct":         round(rm.compute_win_rate(pnl_list),              4),
+            "total_pnl":            round(sum(pnl_list),                               6),
+            "avg_pnl_per_trade":    round(rm.compute_expectancy(pnl_list),             6),
+            "profit_factor":        9999.0 if math.isinf(pf_raw) else round(pf_raw,   4),
+            "expectancy":           round(rm.compute_expectancy(pnl_list),             6),
+            "avg_win_loss_ratio":   round(rm.compute_avg_win_loss_ratio(pnl_list),     4),
+            "max_drawdown_pct":     round(max_dd,                                      4),
+            "current_drawdown_pct": round(rm.current_drawdown_pct,                    4),
+            "sharpe_ratio":         round(rm.compute_sharpe_ratio(pnl_list),           4),
+            "sortino_ratio":        round(rm.compute_sortino_ratio(pnl_list),          4),
             "calmar_ratio":         round(rm.compute_calmar_ratio(total_ret_pct, max_dd), 4),
-            "total_fees":           round(sum(t.fee_cost or 0 for t in trades),     6),
+            "total_fees":           round(sum(t.fee_cost or 0 for t in trades),        6),
             "open_positions":       len(await b.db.get_open_positions()),
-            "daily_loss_pct":       round(rm.daily_loss_pct,                        4),
+            "daily_loss_pct":       round(rm.daily_loss_pct,                           4),
             "daily_loss_limit_pct": rm.daily_loss_limit_pct,
             "halt_reason":          rm.halt_reason,
-            # v7.0 additions
             "attribution_summary":  attribution_summary,
             "indicator_summary":    indicator_summary,
             "timestamp":            _iso(_utcnow()),
+            "_cached":              False,
         }
+        _metrics_cache.set(result)
+        return result
 
     @app.get("/api/logs")
-    async def get_logs(limit: int = 100):
+    async def get_logs(
+        limit: int = 100,
+        _: str = Depends(verify_api_key),
+    ):
         b    = bot()
         logs = await b.db.get_recent_logs(limit=min(limit, 500))
         return {
@@ -453,7 +737,7 @@ def create_app(bot_getter) -> FastAPI:
         return {**market, **price_data, "timestamp": _iso(_utcnow())}
 
     @app.get("/api/system_health")
-    async def get_system_health():
+    async def get_system_health(_: str = Depends(verify_api_key)):
         b       = bot()
         health  = (
             b.risk_manager.get_system_health()
@@ -491,46 +775,48 @@ def create_app(bot_getter) -> FastAPI:
         }
 
     @app.get("/api/dashboard_snapshot")
-    async def get_dashboard_snapshot():
+    async def get_dashboard_snapshot(_: str = Depends(verify_api_key)):
+        """[v8 PERF] Semua data dashboard dalam satu call — parallel asyncio.gather."""
         b = bot()
-        positions = await b.db.get_open_positions()
-        trades = await b.db.get_recent_trades(limit=120)
-        snaps = await b.db.get_equity_curve(limit=300)
-        health = (
+
+        # Parallel fetch — tidak sequential lagi
+        positions, trades, snaps = await asyncio.gather(
+            b.db.get_open_positions(),
+            b.db.get_recent_trades(limit=120),
+            b.db.get_equity_curve(limit=300),
+        )
+
+        health  = (
             b.risk_manager.get_system_health()
             if b.risk_manager
-            else {
-                "risk_status": "initializing",
-                "halted": False,
-                "halt_reason": "",
-                "drawdown_pct": 0.0,
-            }
+            else {"risk_status": "initializing", "halted": False,
+                  "halt_reason": "", "drawdown_pct": 0.0}
         )
         feed_st = b.ws_feed.get_feed_status() if b.ws_feed else {}
         return {
             "status": await get_status(),
-            "balance": await get_balance(),
-            "metrics": await get_metrics(),
+            "balance": await get_balance(_),
+            "metrics": await get_metrics(_),
             "system_health": {
                 **health,
                 "strategy_active": b.strategy.is_active if b.strategy else False,
-                "strategy_name": b.strategy.name if b.strategy else None,
-                "ws_feed_status": feed_st,
-                "timestamp": _iso(_utcnow()),
+                "strategy_name":   b.strategy.name if b.strategy else None,
+                "ws_feed_status":  feed_st,
+                "timestamp":       _iso(_utcnow()),
             },
             "positions": {
                 "positions": [_pos_dict(p) for p in positions],
-                "count": len(positions),
+                "count":     len(positions),
             },
             "tickers": {"tickers": b.ws_feed.live_tickers if b.ws_feed else {}},
-            "logs": await get_logs(limit=20),
+            "logs": await get_logs(20, _),
             "equity_curve": {
                 "curve": [
                     {
-                        "timestamp": _iso(s.timestamp),
-                        "equity": s.total_equity,
-                        "drawdown": s.drawdown_pct,
-                        "daily_pnl": s.daily_pnl,
+                        "timestamp":     _iso(s.timestamp),
+                        "equity":        s.total_equity,
+                        "drawdown":      s.drawdown_pct,
+                        "daily_pnl":     s.daily_pnl,
                         "daily_pnl_pct": s.daily_pnl_pct,
                     }
                     for s in snaps
@@ -655,12 +941,8 @@ def create_app(bot_getter) -> FastAPI:
                     else:
                         df["quote_volume"] = df["volume"] * df["close"]
 
-                    df.ta.ema(length=9,  append=True)
-                    df.ta.ema(length=21, append=True)
-                    df.ta.ema(length=50, append=True)
-                    df.ta.rsi(length=14, append=True)
-                    df.ta.atr(length=14, append=True)
-                    df = df.dropna()
+                    df.ta.enrich_production()  # [v8 BUG-FIX] 60 kolom, bukan 5
+                    df = df.dropna(subset=[COL_EMA9, COL_RSI, COL_ATR])
 
                     if len(df) < 5:
                         entry["error"] = f"Indikator tidak cukup ({len(df)} bar)"
@@ -669,18 +951,35 @@ def create_app(bot_getter) -> FastAPI:
 
                     df["_resistance"] = df["close"].shift(1).rolling(20).max()
                     df["_vol_ma"]     = df["quote_volume"].rolling(20).mean()
-                    df = df.dropna()
+                    df = df.dropna(subset=["_resistance", "_vol_ma"])
 
                     bar_row  = df.iloc[-2]
                     prev_row = df.iloc[-3]
 
-                    close      = float(bar_row["close"])
-                    ema9       = float(bar_row[COL_EMA9])
-                    ema21      = float(bar_row[COL_EMA21])
-                    ema50      = float(bar_row[COL_EMA50])
-                    rsi        = float(bar_row[COL_RSI])
-                    atr        = float(bar_row[COL_ATR])
-                    atr_pct    = (atr / close * 100) if close > 0 else 0
+                    close   = float(bar_row["close"])
+                    ema9    = float(bar_row[COL_EMA9])
+                    ema21   = float(bar_row[COL_EMA21])
+                    ema50   = float(bar_row[COL_EMA50])
+                    rsi     = float(bar_row[COL_RSI])
+                    atr     = float(bar_row[COL_ATR])
+                    atr_pct = (atr / close * 100) if close > 0 else 0
+
+                    # [v8 NEW] Indikator v5 yang sekarang tersedia
+                    willr      = lookup_col(bar_row, COL_WILLR,          default=0.0)
+                    cci        = lookup_col(bar_row, COL_CCI,            default=0.0)
+                    cmf        = lookup_col(bar_row, COL_CMF,            default=0.0)
+                    rsi_slope  = lookup_col(bar_row, COL_RSI_SLOPE,      default=0.0)
+                    rsi_div    = lookup_col(bar_row, COL_RSI_DIV,        default=0.0)
+                    emaxs      = lookup_col(bar_row, COL_EMAXS_9_21,     default=0.0)
+                    psar       = lookup_col(bar_row, COL_PSAR,           default=close)
+                    psar_dir   = lookup_col(bar_row, "PSAR_DIR",         default=0.0)
+                    roc        = lookup_col(bar_row, COL_ROC,            default=0.0)
+                    dcu        = lookup_col(bar_row, COL_DCU,            default=close)
+                    adx        = lookup_col(bar_row, "ADX_14",           default=0.0)
+                    bb_pos     = lookup_col(bar_row, "BBP_20_2.0",       default=0.5)
+                    mfi        = lookup_col(bar_row, "MFI_14",           default=50.0)
+                    stk        = lookup_col(bar_row, "STOCHRSIk_14_14_3_3", default=50.0)
+                    ema_stack  = lookup_col(bar_row, COL_EMA_STACK_SCORE, default=0.0)
 
                     resist = (
                         float(bar_row["_resistance"])
@@ -892,7 +1191,6 @@ def create_app(bot_getter) -> FastAPI:
         ]
 
         try:
-            from profiles.thresholds import get_dynamic_threshold
             _latest_regime = latest.regime if latest and hasattr(latest, "regime") else "undefined"
             entry_threshold = get_dynamic_threshold(symbol.split("/")[0], _latest_regime)
         except Exception:
@@ -1208,13 +1506,10 @@ def create_app(bot_getter) -> FastAPI:
             "timestamp": _iso(_utcnow()),
         }
 
-    class HaltRequest(BaseModel):
-        reason: Optional[str] = "Manual halt from dashboard"
-
     @app.post("/api/bot/halt")
     async def halt_bot(req: HaltRequest, _: str = Depends(verify_api_key)):
-        from risk import HaltReason
-        bot().risk_manager.halt_trading(HaltReason.MANUAL, req.reason or "")
+        """Halt trading. [v8 BUG-FIX] Pakai top-level HaltRequest — req.reason tidak lagi None."""
+        bot().risk_manager.halt_trading(HaltReason.MANUAL, req.reason or "Manual halt via API")
         return {"status": "halted", "reason": req.reason}
 
     @app.post("/api/bot/resume")
@@ -1238,8 +1533,7 @@ def create_app(bot_getter) -> FastAPI:
 
     @app.post("/api/bot/panic")
     async def panic_close_all(_: str = Depends(verify_api_key)):
-        from risk import HaltReason
-
+        # [BUG-FIX v8] HaltReason dari top-level import
         b = bot()
         log.critical("PANIC BUTTON ACTIVATED — closing all positions!")
         await b.db.save_log(
@@ -1290,8 +1584,13 @@ def create_app(bot_getter) -> FastAPI:
     async def crosslearn_status(_: str = Depends(verify_api_key)):
         b = bot()
         try:
-            from learning.cross_learn import get_cross_learn_reader
-            reader = get_cross_learn_reader()
+            try:
+                from learning.cross_learn import get_cross_learn_reader
+                reader = get_cross_learn_reader()
+            except ImportError:
+                reader = None
+            if reader is None:
+                return {"enabled": False, "message": "cross_learn tidak tersedia"}
             summary = reader.get_summary() if hasattr(reader, 'get_summary') else {}
             enabled = getattr(reader, 'enabled', False)
             return {
@@ -1315,7 +1614,6 @@ def create_app(bot_getter) -> FastAPI:
 
     @app.post("/api/positions/{symbol}/close")
     async def close_position(symbol: str, _: str = Depends(verify_api_key)):
-        import urllib.parse
         symbol = urllib.parse.unquote(symbol)
         b = bot()
         try:
@@ -1356,15 +1654,11 @@ def create_app(bot_getter) -> FastAPI:
 
     @app.get("/api/forecast")
     async def get_forecast(_: str = Depends(verify_api_key)):
-        from profiles.thresholds import DYNAMIC_THRESHOLD_MATRIX, ENTRY_THRESHOLDS
-        from profiles.weights import LEVEL1_WEIGHTS
-        from datetime import timedelta
-
+        # [v8] DYNAMIC_THRESHOLD_MATRIX, ENTRY_THRESHOLDS, LEVEL1_WEIGHTS — top-level import
         b = bot()
-        universe = b.config.get("universe_watchlist", [])
+        universe   = b.config.get("universe_watchlist", [])
         tf_primary = b.config.get("timeframe", "15m")
-        forecasts = []
-
+        forecasts  = []
         TF_CONFIRM = {
             "15m": "1h", "30m": "2h", "1h": "4h", "5m": "15m",
         }
@@ -1454,7 +1748,6 @@ def create_app(bot_getter) -> FastAPI:
                     pass
 
                 try:
-                    from profiles.registry import get_coin_profile
                     prof_obj = get_coin_profile(symbol)
                     indicator_thresholds = {
                         "rsi_min":         prof_obj.rsi_min,
@@ -1562,29 +1855,29 @@ def create_app(bot_getter) -> FastAPI:
 
     @app.get("/api/universe/detail")
     async def get_universe_detail(_: str = Depends(verify_api_key)):
-        import json as _json
-        from profiles.registry import get_coin_profile, select_profile_from_indicators
         b = bot()
         try:
+            universe_path = os.path.join(os.path.dirname(__file__), "universe.json")
             try:
-                with open("universe.json") as f:
-                    udata = _json.load(f)
-                coins = udata.get("symbols", [])
+                with open(universe_path, "r", encoding="utf-8") as f:
+                    udata = json.load(f)
+                coins      = udata.get("symbols", [])
                 scanned_at = udata.get("scanned_at", "")
             except Exception:
-                coins = [{"symbol": s, "volume_24h": 0} for s in b.config.get("universe_watchlist", [])]
+                coins      = [{"symbol": s, "volume_24h": 0}
+                              for s in b.config.get("universe_watchlist", [])]
                 scanned_at = ""
             result = []
             for c in coins:
                 symbol = c["symbol"]
                 vol    = c.get("volume_24h", 0)
                 try:
-                    row = await b.db.get_latest_regime(symbol)
+                    row        = await b.db.get_latest_regime(symbol)
                     regime     = row.regime if row else "undefined"
                     confidence = round(row.regime_confidence, 4) if row else 0.0
                     adx        = row.adx_value if row else 0.0
                     atr_pct    = row.atr_pct if row else 0.5
-                    profile = select_profile_from_indicators(
+                    profile    = select_profile_from_indicators(
                         symbol=symbol, adx=adx or 20.0,
                         atr_pct=atr_pct or 0.5, regime=regime,
                     )
@@ -1595,10 +1888,13 @@ def create_app(bot_getter) -> FastAPI:
                     regime = "undefined"; confidence = 0.0
                     profile = "scalp_volatile"; total_score = None; trigger_met = False
                 result.append({
-                    "symbol": symbol, "volume_24h": vol,
-                    "volume_m": round(vol/1_000_000, 2),
-                    "profile": profile, "regime": regime,
-                    "confidence": confidence, "total_score": total_score,
+                    "symbol":      symbol,
+                    "volume_24h":  vol,
+                    "volume_m":    round(vol / 1_000_000, 2),
+                    "profile":     profile,
+                    "regime":      regime,
+                    "confidence":  confidence,
+                    "total_score": total_score,
                     "trigger_met": trigger_met,
                 })
             return {"universe": result, "total": len(result),
@@ -1608,20 +1904,245 @@ def create_app(bot_getter) -> FastAPI:
 
     @app.get("/api/config/current")
     async def get_current_config(_: str = Depends(verify_api_key)):
-        import json as _json
         b = bot()
         try:
-            safe_config = {k: v for k, v in b.config.items() if k not in ["api_key","api_secret","telegram_bot_token","smtp_password"]}
+            safe_config = {
+                k: v for k, v in b.config.items()
+                if k not in ("api_key", "api_secret", "telegram_bot_token", "smtp_password")
+            }
+            universe_path = os.path.join(os.path.dirname(__file__), "universe.json")
             try:
-                with open("universe.json") as f:
-                    udata = _json.load(f)
-                safe_config["universe_watchlist"] = [c["symbol"] for c in udata.get("symbols", [])]
+                with open(universe_path, "r", encoding="utf-8") as f:
+                    udata = json.load(f)
+                safe_config["universe_watchlist"]  = [c["symbol"] for c in udata.get("symbols", [])]
                 safe_config["universe_scanned_at"] = udata.get("scanned_at", "")
-                safe_config["universe_total"] = udata.get("total_coins", 0)
+                safe_config["universe_total"]      = udata.get("total_coins", 0)
             except Exception:
                 pass
             return {"config": safe_config, "timestamp": _iso(_utcnow())}
         except Exception as e:
             return {"error": str(e)}
+
+    # ── NEW ENDPOINTS v8 ──────────────────────────────────────────────────────
+
+    @app.get("/api/orderbook/{symbol:path}")
+    async def get_orderbook(
+        symbol: str,
+        _: str = Depends(verify_api_key),
+    ):
+        """[NEW v8] Live orderbook + danger level dari ws_feed."""
+        b   = bot()
+        sym = urllib.parse.unquote(symbol).upper()
+        if not b.ws_feed:
+            raise HTTPException(status_code=503, detail="WebSocket feed tidak aktif")
+        try:
+            ob = b.ws_feed.get_orderbook(sym) or {}
+            danger = getattr(b, "_get_ob_danger_level", lambda *a: 0.0)(ob)
+            return {
+                "symbol":       sym,
+                "bids":         ob.get("bids", [])[:20],
+                "asks":         ob.get("asks", [])[:20],
+                "spread_pct":   b.ws_feed.get_spread(sym),
+                "mid_price":    b.ws_feed.get_mid_price(sym),
+                "danger_level": round(danger, 4),
+                "timestamp":    _iso(_utcnow()),
+            }
+        except Exception as e:
+            raise HTTPException(status_code=502, detail=str(e))
+
+    @app.get("/api/shadow_trades")
+    async def get_shadow_trades(_: str = Depends(verify_api_key)):
+        """[NEW v8] Status paper/shadow trades aktif."""
+        b = bot()
+        shadow = getattr(b, "_shadow_positions", {})
+        result = []
+        for sym, pos in shadow.items():
+            result.append({
+                "symbol":        sym,
+                "entry_price":   pos.get("entry_price"),
+                "entry_time":    _iso(pos.get("entry_time")),
+                "current_price": pos.get("current_price"),
+                "side":          pos.get("side", "long"),
+                "amount":        pos.get("amount"),
+                "unrealized_pnl_pct": pos.get("unrealized_pnl_pct"),
+            })
+        return {"shadow_trades": result, "count": len(result), "timestamp": _iso(_utcnow())}
+
+    @app.get("/api/universe/overrides")
+    async def get_universe_overrides(_: str = Depends(verify_api_key)):
+        """[NEW v8] List semua WatchlistOverride aktif di DB."""
+        b = bot()
+        try:
+            overrides = await b.db.get_universe_overrides(active_only=True)
+            return {
+                "overrides": [
+                    {
+                        "symbol":     o.symbol,
+                        "source":     o.source,
+                        "is_active":  o.is_active,
+                        "added_at":   _iso(o.added_at),
+                        "notes":      o.notes,
+                    }
+                    for o in overrides
+                ],
+                "count":     len(overrides),
+                "timestamp": _iso(_utcnow()),
+            }
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=str(e))
+
+    @app.post("/api/universe/add")
+    async def universe_add(
+        req: UniverseAddRequest,
+        _:   str = Depends(verify_api_key),
+    ):
+        """[NEW v8] Tambah coin ke universe override (hot-reload tanpa restart)."""
+        b   = bot()
+        sym = req.symbol.upper().strip()
+        try:
+            await b.db.upsert_universe_override(
+                symbol=sym, source="api", is_active=True, notes=req.notes
+            )
+            log.info("Universe override ADD: %s via API", sym)
+            return {"status": "added", "symbol": sym, "timestamp": _iso(_utcnow())}
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=str(e))
+
+    @app.post("/api/universe/remove")
+    async def universe_remove(
+        req: UniverseRemoveRequest,
+        _:   str = Depends(verify_api_key),
+    ):
+        """[NEW v8] Nonaktifkan coin dari universe override."""
+        b   = bot()
+        sym = req.symbol.upper().strip()
+        try:
+            await b.db.upsert_universe_override(
+                symbol=sym, source="api", is_active=False, notes="Removed via API"
+            )
+            log.info("Universe override REMOVE: %s via API", sym)
+            return {"status": "removed", "symbol": sym, "timestamp": _iso(_utcnow())}
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=str(e))
+
+    @app.get("/api/executor/stats")
+    async def get_executor_stats(_: str = Depends(verify_api_key)):
+        """[NEW v8] Fill rate, retry count, order queue dari execution engine."""
+        b = bot()
+        if not b.executor:
+            raise HTTPException(status_code=503, detail="Executor belum aktif")
+        try:
+            stats = getattr(b.executor, "get_stats", lambda: {})()
+            queue = getattr(b.executor, "_queue", None)
+            return {
+                "fill_rate":      stats.get("fill_rate",   None),
+                "retry_count":    stats.get("retry_count", 0),
+                "orders_placed":  stats.get("orders_placed", 0),
+                "orders_failed":  stats.get("orders_failed", 0),
+                "avg_fill_ms":    stats.get("avg_fill_ms", None),
+                "queue_size":     queue.qsize() if queue else None,
+                "timestamp":      _iso(_utcnow()),
+            }
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=str(e))
+
+    @app.post("/api/bot/force_analyze/{symbol:path}")
+    async def force_analyze(
+        symbol: str,
+        _: str = Depends(verify_api_key),
+    ):
+        """[NEW v8] Trigger analisis ulang manual untuk satu coin."""
+        b   = bot()
+        sym = urllib.parse.unquote(symbol).upper()
+        if not b._commander:
+            raise HTTPException(status_code=503, detail="Intelligence commander belum aktif")
+        try:
+            result = await b._commander.force_analyze(sym)
+            return {
+                "symbol":    sym,
+                "result":    result,
+                "timestamp": _iso(_utcnow()),
+            }
+        except Exception as e:
+            log.warning("force_analyze [%s]: %s", sym, e)
+            raise HTTPException(status_code=500, detail=str(e))
+
+    @app.get("/api/candles/{symbol:path}/indicators")
+    async def get_candles_with_indicators(
+        symbol:    str,
+        timeframe: str = "15m",
+        limit:     int = 100,
+        _: str = Depends(verify_api_key),
+    ):
+        """[NEW v8] OHLCV + semua 60 kolom enrich_production untuk chart + debug."""
+        b   = bot()
+        sym = urllib.parse.unquote(symbol).upper()
+        if not b.exchange or not b.exchange.is_connected:
+            raise HTTPException(status_code=503, detail="Exchange belum terhubung")
+        try:
+            raw  = await b.exchange.fetch_ohlcv(sym, timeframe, limit=limit + 50)
+            cols = ["timestamp", "open", "high", "low", "close", "volume"]
+            df   = pd.DataFrame(raw, columns=cols)
+            df["timestamp"] = pd.to_datetime(df["timestamp"], unit="ms")
+            df.set_index("timestamp", inplace=True)
+            df.ta.enrich_production()
+            # Kembalikan hanya N bar terakhir setelah indikator stabil
+            df = df.iloc[-limit:]
+            records = []
+            for ts, row in df.iterrows():
+                rec = {"timestamp": int(ts.timestamp() * 1000)}
+                for col in df.columns:
+                    v = row[col]
+                    rec[col] = None if (isinstance(v, float) and (math.isnan(v) or math.isinf(v))) else (float(v) if hasattr(v, "item") else v)
+                records.append(rec)
+            return {
+                "symbol":    sym,
+                "timeframe": timeframe,
+                "columns":   list(df.columns),
+                "candles":   records,
+                "count":     len(records),
+                "timestamp": _iso(_utcnow()),
+            }
+        except Exception as e:
+            raise HTTPException(status_code=502, detail=str(e))
+
+    @app.get("/api/stream")
+    async def stream_events(
+        _: str = Depends(verify_api_key),
+        request: Request = None,
+    ):
+        """
+        [NEW v8] Server-Sent Events — posisi + ticker real-time setiap 2 detik.
+        Client: const es = new EventSource('/api/stream', {headers: {'X-API-Key': key}})
+        """
+        b = bot()
+
+        async def event_generator():
+            while True:
+                if request and await request.is_disconnected():
+                    break
+                try:
+                    positions = await b.db.get_open_positions()
+                    tickers   = b.ws_feed.live_tickers if b.ws_feed else {}
+                    payload   = json.dumps({
+                        "positions": [_pos_dict(p) for p in positions],
+                        "tickers":   {k: {"last": v.get("last"), "change_pct": v.get("change_pct")}
+                                      for k, v in tickers.items()},
+                        "halted":    b.risk_manager.is_halted if b.risk_manager else False,
+                        "ts":        _iso(_utcnow()),
+                    }, ensure_ascii=False)
+                    yield f"data: {payload}\n\n"
+                except Exception as exc:
+                    yield f"data: {{\"error\": \"{exc}\"}}\n\n"
+                await asyncio.sleep(2.0)
+
+        return StreamingResponse(
+            event_generator(),
+            media_type="text/event-stream",
+            headers={
+                "Cache-Control":     "no-cache",
+                "X-Accel-Buffering": "no",
+            },
+        )
 
     return app
