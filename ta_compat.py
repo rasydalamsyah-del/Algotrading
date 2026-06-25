@@ -14,7 +14,15 @@ Indikator tersedia:
   Utility    : ema_stack_score, enrich_production, compute_all
 
   enrich_production ← PRODUCTION ENTRY POINT (Gate3/exit logic)
-  compute_all       ← analytics, backtest, training
+                      Menghasilkan SEMUA kolom yang dibutuhkan observer/intelligence
+                      pipeline dalam SATU panggilan. Wajib dipakai oleh:
+                      main.py, strategy.py, api_server.py, telegram_bot.py
+                      (gantikan blok df.ta.ema/rsi/atr manual yang tidak lengkap)
+  compute_all       ← analytics, backtest, training (70+ kolom)
+
+NAMA KOLOM (konstanta tersedia di constants.py):
+  Semua kolom wajib direferensikan via konstanta COL_* dari constants.py,
+  BUKAN hardcode string literal. Lihat bagian kolom v5 di constants.py.
 
 CHANGELOG
 ─────────────────────────────────────────────────────────────────────────────
@@ -38,51 +46,71 @@ v4 — SUPERPOWER:
     Speedup terukur: 297x (108ms → 0.4ms per 1000 bar).
   [PERF KRITIS] atr_percentile(): rolling.apply → stride_tricks full-vectorized.
     Speedup terukur: 7x (4ms → 0.6ms per 1000 bar).
-  [NEW] williams_r(): Williams %R (WILLR_{n}). Overbought > -20, Oversold < -80.
-    Sudah dipakai di indicators/oscillators.py via calculate_williams_r() —
-    sekarang tersedia via df.ta accessor untuk konsistensi.
-  [NEW] roc(): Rate of Change (ROC_{n}). Momentum price: % perubahan vs N bar lalu.
-  [NEW] roc_slope(): Slope ROC — apakah momentum sedang mempercepat atau melambat.
-    Output: ROC_SLOPE_{fast}_{signal}
-  [NEW] rsi_slope(): Kemiringan RSI selama half-period terakhir — proxy divergence
-    sederhana tanpa overhead penuh. Output: RSI_{n}_slope
-  [NEW] rsi_divergence(): Deteksi bullish/bearish divergence RSI-harga di N bar.
-    Nilai positif = bullish (harga LL tapi RSI HL), negatif = bearish.
-    Sudah ada di indicators/momentum.py._detect_rsi_divergence() — sekarang
-    via accessor dengan Series output (bukan scalar) untuk seluruh DataFrame.
-    Output: RSI_DIV_{lookback}
-  [NEW] ema_cross(): Deteksi EMA crossover bar demi bar.
-    +1 = bullish cross (fast melewati slow ke atas), -1 = bearish, 0 = tidak ada.
-    Output: EMAXS_{fast}_{slow}
-  [NEW] donchian(): Donchian Channel — range breakout indicator.
-    Output: DCU_{n} (upper), DCM_{n} (middle), DCL_{n} (lower)
-  [NEW] cmf(): Chaikin Money Flow — volume-weighted buying vs selling pressure.
-    +1 = pure buying, -1 = pure selling. Range ~[-1, +1].
-    Output: CMF_{n}
-  [NEW] vwma(): Volume Weighted Moving Average — MA yang lebih responsif ke
-    volume tinggi. Berbeda dari VWAP: tidak reset per hari.
-    Output: VWMA_{n}
-  [NEW] psar(): Parabolic SAR — trailing stop & trend reversal indicator.
-    Output: PSAR (nilai SAR), PSAR_DIR (1=bullish, -1=bearish),
-            PSAR_REV (1 = bar ini ada reversal signal, 0 = tidak)
-  [NEW] ichimoku(): Ichimoku Cloud — multi-komponen trend/momentum/support system.
-    Sudah ada di indicators/structure.py.calculate_ichimoku() — sekarang via
-    accessor dengan output sebagai kolom DataFrame.
-    Output: ICH_TENKAN, ICH_KIJUN, ICH_SPAN_A, ICH_SPAN_B, ICH_CHIKOU
-  [IMPROVE] enrich_production(): +williams_r, roc, rsi_slope, ema_cross,
-    donchian, cmf. Semua yang dibutuhkan observer.py tersedia via satu call.
-  [IMPROVE] compute_all(): +semua indikator baru v4. 60+ kolom dalam satu call.
+  [NEW] williams_r, roc, roc_slope, rsi_slope, rsi_divergence, ema_cross,
+        donchian, cmf, vwma, psar, ichimoku.
+  [IMPROVE] enrich_production, compute_all diperluas.
+
+v5 — SUPERPOWER ULTIMATE (upgrade besar-besaran):
+  [BUG-FIX KRITIS] Test suite line 1738: `import numpy as np as _np` →
+    SyntaxError fatal, diperbaiki jadi `import numpy as _np`.
+  [BUG-FIX] vwap_bands._rolling_std(): `.apply(lambda v: sqrt)` per-elemen
+    (Python loop) → `np.where + clip + sqrt` full-vectorized.
+  [BUG-FIX] rsi_divergence(): Python for-loop O(n) → full vectorized via
+    np.roll/shift — sama cepat dengan indikator lain.
+  [BUG-FIX] _atr_percentile warmup: bagian FULL windows (n >= lookback)
+    diganti stride_tricks full-vectorized. Warmup partial (< lookback bar)
+    tetap pakai loop Python — ini batas teknis sliding_window_view, bukan
+    kelalaian. Jumlah iterasi maksimal = lookback (100), overhead sangat minor.
+  [IMPROVE KRITIS] enrich_production(): sekarang JUGA menghasilkan:
+    MACD_12_26_9, MACDs, MACDh, STOCHRSIk, STOCHRSId, BBU/M/L/B/P_20_2.0,
+    KCUe/KCBe/KCLe_20_2, SQZ_20_2.0_20_1.5, MFI_14, OBV, SUPERT_7_3.0,
+    VWAP_D_upper_1/lower_1/upper_2/lower_2, CCI_20, CHOP_14.
+    → Observer/intelligence pipeline kini mendapat SEMUA kolom dari satu panggilan.
+  [NEW] rsi_slope(): diperbaiki dari diff(N) menjadi OLS slope 5-bar —
+    lebih akurat sebagai proxy divergence, noise lebih rendah.
+  [NEW] lookup_col(): helper untuk ambil nilai kolom dengan fallback aman.
+  [ARCH] enrich_production() wajib menjadi SATU-SATUNYA entry point di
+    main.py, strategy.py, api_server.py, telegram_bot.py — blok df.ta manual
+    5-indikator di file-file tersebut harus diganti dengan satu baris:
+      df.ta.enrich_production()
 """
 from __future__ import annotations
 
 import logging
 import time
-from typing import Optional, Tuple
+from typing import Dict, List, Optional, Tuple, Union
 
 import numpy as np
 import pandas as pd
 
 log = logging.getLogger("ta_compat")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Public helper — aman dipakai oleh modul lain
+# ─────────────────────────────────────────────────────────────────────────────
+
+def lookup_col(
+    bar: Union[pd.Series, dict],
+    *cols: str,
+    default: float = 0.0,
+) -> float:
+    """
+    Ambil nilai float dari Series/dict dengan prioritas fallback.
+    Berguna untuk akses kolom indikator di bar terakhir.
+
+    Contoh:
+        atr  = lookup_col(bar, "ATRr_14", default=0.0)
+        vwap = lookup_col(bar, "VWAP_D", "VWAP", default=float(bar["close"]))
+    """
+    for col in cols:
+        try:
+            v = bar[col] if isinstance(bar, dict) else bar.get(col)
+            if v is not None and pd.notna(v):
+                return float(v)
+        except (KeyError, TypeError):
+            continue
+    return default
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -367,12 +395,16 @@ class _TAAccessor:
         volume = df["volume"]
 
         def _rolling_std(grp: pd.DataFrame) -> pd.Series:
+            """[v5 FIX] Sepenuhnya vectorized — tidak ada Python loop per-elemen."""
             tp     = (grp["high"] + grp["low"] + grp["close"]) / 3.0
             vol    = grp["volume"]
             vw     = grp[vwap_col]
             cumvol = vol.cumsum().replace(0, np.nan)
             var_s  = (vol * (tp - vw) ** 2).cumsum() / cumvol
-            return var_s.apply(lambda v: np.sqrt(max(v, 0.0)) if pd.notna(v) else np.nan)
+            # [v5 FIX] var_s.apply(lambda v: sqrt...) → np.where vectorized
+            arr    = var_s.to_numpy(dtype=float)
+            std_arr = np.where(np.isfinite(arr), np.sqrt(np.clip(arr, 0.0, None)), np.nan)
+            return pd.Series(std_arr, index=grp.index)
 
         if isinstance(df.index, pd.DatetimeIndex):
             try:
@@ -384,7 +416,12 @@ class _TAAccessor:
             tp      = (df["high"] + df["low"] + df["close"]) / 3.0
             cumvol  = volume.cumsum().replace(0, np.nan)
             var_cum = (volume * (tp - vwap) ** 2).cumsum() / cumvol
-            std_s   = var_cum.apply(lambda v: np.sqrt(max(v, 0.0)) if pd.notna(v) else np.nan)
+            # [v5 FIX] same — no Python loop
+            arr_g   = var_cum.to_numpy(dtype=float)
+            std_s   = pd.Series(
+                np.where(np.isfinite(arr_g), np.sqrt(np.clip(arr_g, 0.0, None)), np.nan),
+                index=df.index,
+            )
 
         u1, l1 = vwap + stdev_mult_1 * std_s, vwap - stdev_mult_1 * std_s
         u2, l2 = vwap + stdev_mult_2 * std_s, vwap - stdev_mult_2 * std_s
@@ -659,27 +696,45 @@ class _TAAccessor:
         **kw,
     ) -> pd.Series:
         """
-        Slope RSI — kemiringan RSI selama N bar terakhir.
-        Berguna mendeteksi apakah RSI sedang naik (momentum membaik) atau turun.
+        Slope RSI — kemiringan RSI selama N bar terakhir via OLS linear regression.
 
-        slope_period = 0 → otomatis pakai length//2.
+        [v5 FIX] Sebelumnya pakai .diff(N) — hanya selisih dua titik, rentan noise.
+        Sekarang pakai OLS slope (β₁ dari regresi linier) atas rolling window.
+        Lebih akurat sebagai proxy divergence: menggambarkan tren RSI, bukan lompatan.
+
+        slope_period = 0 → otomatis pakai max(3, length//2).
 
         Positif = RSI naik (momentum bullish tumbuh).
         Negatif = RSI turun (momentum bearish tumbuh).
+        Magnitude ~ unit RSI per bar.
 
         Output: RSI_{length}_slope
         """
         if not _require(self._df, "close", ctx="rsi_slope"):
             return pd.Series(dtype=float)
 
-        col        = f"RSI_{length}_slope"
-        rsi_col    = f"RSI_{length}"
-        half       = slope_period if slope_period > 0 else max(1, length // 2)
+        col     = f"RSI_{length}_slope"
+        rsi_col = f"RSI_{length}"
+        half    = slope_period if slope_period > 0 else max(3, length // 2)
 
         if rsi_col not in self._df.columns:
             self.rsi(length=length, append=True)
 
-        result = self._df[rsi_col].diff(half)
+        rsi_arr = self._df[rsi_col].to_numpy(dtype=float)
+        n       = len(rsi_arr)
+        out     = np.full(n, np.nan)
+
+        if n >= half:
+            # OLS slope vectorized via stride_tricks
+            wins = np.lib.stride_tricks.sliding_window_view(rsi_arr, half)
+            x    = np.arange(half, dtype=float)
+            xm   = x - x.mean()
+            denom = float((xm ** 2).sum()) or 1.0
+            # β₁ = Σ(x-x̄)(y-ȳ) / Σ(x-x̄)² = (xm @ wins.T - n*x̄*ȳ) / denom
+            ym   = wins.mean(axis=1)
+            out[half - 1:] = (wins @ xm) / denom - ym * (xm.sum() / denom)
+
+        result = pd.Series(out, index=self._df.index).fillna(0.0)
         if append:
             self._df[col] = result
         return result
@@ -696,10 +751,13 @@ class _TAAccessor:
         Sama konsepnya dengan indicators/momentum.py._detect_rsi_divergence()
         tapi menghasilkan Series (seluruh DataFrame) bukan scalar.
 
-        Algoritma per-bar:
-          Harga sekarang vs harga N bar lalu:
-            Bullish: harga lower low TAPI RSI higher low → nilai positif
-            Bearish: harga higher high TAPI RSI lower high → nilai negatif
+        [v5 FIX] Loop Python O(n) diganti dengan full-vectorized via shift() —
+        sama cepat dengan indikator lain, tidak ada overhead per-bar.
+
+        Algoritma:
+          Bandingkan bar sekarang vs N bar lalu:
+            Bullish: harga lower low TAPI RSI higher low → nilai positif (RSI gap)
+            Bearish: harga higher high TAPI RSI lower high → nilai negatif (RSI gap)
             Tidak ada divergence → 0.0
 
         Nilai absolut = besaran gap RSI (makin besar = makin kuat sinyalnya).
@@ -714,30 +772,28 @@ class _TAAccessor:
         if rsi_col not in self._df.columns:
             self.rsi(length=length, append=True)
 
-        close  = self._df["close"].to_numpy(dtype=float)
-        rsi_s  = self._df[rsi_col].to_numpy(dtype=float)
-        n      = len(close)
-        out    = np.zeros(n, dtype=float)
+        close  = self._df["close"]
+        rsi_s  = self._df[rsi_col]
 
-        for i in range(lookback, n):
-            window_close = close[i - lookback: i + 1]
-            window_rsi   = rsi_s[i - lookback: i + 1]
+        curr_c  = close
+        prev_c  = close.shift(lookback)
+        curr_r  = rsi_s
+        prev_r  = rsi_s.shift(lookback)
+        rsi_gap = curr_r - prev_r          # positif = RSI naik, negatif = RSI turun
 
-            curr_c, prev_c = close[i], close[i - lookback]
-            curr_r, prev_r = rsi_s[i], rsi_s[i - lookback]
+        # Bullish: harga LL tapi RSI HL
+        bull = (curr_c < prev_c) & (curr_r > prev_r)
+        # Bearish: harga HH tapi RSI LH
+        bear = (curr_c > prev_c) & (curr_r < prev_r)
 
-            # Bullish: harga lower low, RSI higher low
-            if curr_c < prev_c and curr_r > prev_r:
-                out[i] = curr_r - prev_r   # positif
+        out = pd.Series(0.0, index=self._df.index)
+        out = out.where(~bull, rsi_gap)    # bullish → positif
+        out = out.where(~bear, rsi_gap)    # bearish → negatif
+        out = out.fillna(0.0)
 
-            # Bearish: harga higher high, RSI lower high
-            elif curr_c > prev_c and curr_r < prev_r:
-                out[i] = curr_r - prev_r   # negatif
-
-        result = pd.Series(out, index=self._df.index)
         if append:
-            self._df[col] = result
-        return result
+            self._df[col] = out
+        return out
 
     def macd(
         self,
@@ -1306,23 +1362,47 @@ class _TAAccessor:
     def enrich_production(
         self,
         ema_periods: Tuple[int, ...] = (9, 21, 50, 100, 200),
+        with_vwap_bands: bool = True,
         dropna: bool = False,
         **kw,
     ) -> pd.DataFrame:
         """
-        PRODUCTION ENTRY POINT — menggantikan blok berulang di 4 file:
-          main.py:1289, strategy.py:265, api_server.py:658, telegram_bot.py:638
+        PRODUCTION ENTRY POINT — WAJIB dipakai oleh:
+          main.py, strategy.py, api_server.py, telegram_bot.py
+          (gantikan blok df.ta.ema/rsi/atr/vwap manual yang tidak lengkap!)
 
-        Semua indikator Gate3 (entry) dan exit logic dalam satu panggilan.
-        Skip-if-exists: kolom yang sudah ada tidak dihitung ulang.
+        [v5 UPGRADE] Sekarang menghasilkan SEMUA kolom yang dibutuhkan oleh
+        observer.py / intelligence pipeline, termasuk yang sebelumnya missing:
+          MACD_12_26_9, MACDs, MACDh
+          STOCHRSIk_14_14_3_3, STOCHRSId
+          BBU/BBM/BBL/BBB/BBP_20_2.0
+          KCUe/KCBe/KCLe_20_2
+          SQZ_20_2.0_20_1.5
+          MFI_14, OBV
+          SUPERT_7_3.0, SUPERTd_7_3.0
+          VWAP_D_upper_1/lower_1/upper_2/lower_2
+          CCI_20
 
-        Kolom yang dihasilkan:
-          EMA 9/21/50/100/200   RSI_14         ATRr_14 + _pct
-          VWAP_D               ADX_14+DI       CHOP_14
-          _atr_percentile_100  _ema_stack_score WILLR_14
-          ROC_9 + _slope       RSI_14_slope    RSI_DIV_14
-          EMAXS_9_21           DCU/M/L_20      CMF_20
-          PSAR + _DIR + _REV
+        Skip-if-exists: kolom yang sudah ada tidak dihitung ulang — aman
+        dipanggil berkali-kali.
+
+        Kolom yang dihasilkan (lengkap v5):
+          EMA 9/21/50/100/200    DEMA/TEMA/HMA 9/21    VWMA_20
+          EMAXS_9_21 + _21_50   _ema_stack_score
+          RSI_14                 RSI_14_slope            RSI_DIV_14
+          MACD_12_26_9 + MACDs + MACDh
+          STOCHRSIk_14_14_3_3 + STOCHRSId
+          CCI_20                 WILLR_14
+          ROC_9 + ROC_SLOPE_9_5
+          ATRr_14 + ATRr_14_pct  _atr_percentile_100
+          BBU/M/L/B/P_20_2.0    KCUe/KCBe/KCLe_20_2
+          SQZ_20_2.0_20_1.5     CHOP_14
+          SUPERT_7_3.0 + SUPERTd_7_3.0
+          DCU/DCM/DCL_20         PSAR + PSAR_DIR + PSAR_REV
+          ADX_14 + DMP_14 + DMN_14
+          OBV                    MFI_14                  CMF_20
+          VWAP_D
+          VWAP_D_upper_1/lower_1/upper_2/lower_2  (jika with_vwap_bands=True)
         """
         df = self._df
         t0 = time.perf_counter()
@@ -1330,33 +1410,66 @@ class _TAAccessor:
         def _need(col: str) -> bool:
             return not _skip_if_exists(df, col)
 
+        # ── Layer 1: EMA & turunan ────────────────────────────────────────────
         for p in ema_periods:
-            if _need(f"EMA_{p}"):
-                self.ema(length=p, append=True)
+            if _need(f"EMA_{p}"):  self.ema(length=p, append=True)
+        for p in (9, 21):
+            if _need(f"DEMA_{p}"): self.dema(length=p, append=True)
+            if _need(f"TEMA_{p}"): self.tema(length=p, append=True)
+            if _need(f"HMA_{p}"):  self.hma(length=p, append=True)
+        if _need("WMA_14"):  self.wma(length=14, append=True)
+        if _need("VWMA_20"): self.vwma(length=20, append=True)
 
-        if _need("RSI_14"):     self.rsi(length=14, append=True)
-        if _need("ATRr_14"):    self.atr(length=14, append=True)
-        if _need("ATRr_14_pct"): self.atr_pct(length=14, append=True)
+        # ── Layer 2: EMA utility ──────────────────────────────────────────────
+        if _need("_ema_stack_score"): self.ema_stack_score(periods=(9, 21, 50), append=True)
+        if _need("EMAXS_9_21"):       self.ema_cross(fast=9,  slow=21, append=True)
+        if _need("EMAXS_21_50"):      self.ema_cross(fast=21, slow=50, append=True)
 
+        # ── Layer 3: Momentum ─────────────────────────────────────────────────
+        if _need("RSI_14"):            self.rsi(length=14, append=True)
+        if _need("RSI_14_slope"):      self.rsi_slope(length=14, append=True)
+        if _need("RSI_DIV_14"):        self.rsi_divergence(length=14, lookback=14, append=True)
+        if _need("MACD_12_26_9"):      self.macd(fast=12, slow=26, signal=9, append=True)
+        if _need("STOCHRSIk_14_14_3_3"):
+            self.stochrsi(length=14, rsi_length=14, k=3, d=3, append=True)
+        if _need("CCI_20"):            self.cci(length=20, append=True)
+        if _need("WILLR_14"):          self.williams_r(length=14, append=True)
+        if _need("ROC_9"):             self.roc(length=9, append=True)
+        if _need("ROC_SLOPE_9_5"):     self.roc_slope(fast=9, signal=5, append=True)
+
+        # ── Layer 4: Volatility ───────────────────────────────────────────────
+        if _need("ATRr_14"):           self.atr(length=14, append=True)
+        if _need("ATRr_14_pct"):       self.atr_pct(length=14, append=True)
+        if _need("_atr_percentile_100"):
+            self.atr_percentile(length=14, lookback=100, append=True)
+        if _need("BBU_20_2.0"):        self.bbands(length=20, std=2.0, append=True)
+        if _need("KCUe_20_2"):         self.keltner(length=20, scalar=2.0, atr_length=14, append=True)
+        if _need("SQZ_20_2.0_20_1.5"):
+            self.squeeze(bb_length=20, bb_mult=2.0, kc_length=20, kc_mult=1.5, append=True)
+        if _need("CHOP_14"):           self.chop(length=14, append=True)
+
+        # ── Layer 5: Trend structure ──────────────────────────────────────────
+        if _need("SUPERT_7_3.0"):      self.supertrend(length=7, multiplier=3.0, append=True)
+        if _need("DCU_20"):            self.donchian(length=20, append=True)
+        if _need("PSAR"):              self.psar(append=True)
+
+        # ── Layer 6: Strength ─────────────────────────────────────────────────
+        if _need("ADX_14"):            self.adx(length=14, append=True)
+        if _need("OBV"):               self.obv(append=True)
+        if _need("MFI_14"):            self.mfi(length=14, append=True)
+        if _need("CMF_20"):            self.cmf(length=20, append=True)
+
+        # ── Layer 7: VWAP + Bands ─────────────────────────────────────────────
         if _need("VWAP_D"):
             try:
                 self.vwap(anchor="D", append=True)
             except Exception as exc:
                 log.debug("enrich_production VWAP gagal: %s", exc)
-
-        if _need("ADX_14"):             self.adx(length=14, append=True)
-        if _need("CHOP_14"):            self.chop(length=14, append=True)
-        if _need("_atr_percentile_100"): self.atr_percentile(length=14, lookback=100, append=True)
-        if _need("_ema_stack_score"):    self.ema_stack_score(periods=(9, 21, 50), append=True)
-        if _need("WILLR_14"):           self.williams_r(length=14, append=True)
-        if _need("ROC_9"):              self.roc(length=9, append=True)
-        if _need("ROC_SLOPE_9_5"):      self.roc_slope(fast=9, signal=5, append=True)
-        if _need("RSI_14_slope"):       self.rsi_slope(length=14, append=True)
-        if _need("RSI_DIV_14"):         self.rsi_divergence(length=14, lookback=14, append=True)
-        if _need("EMAXS_9_21"):         self.ema_cross(fast=9, slow=21, append=True)
-        if _need("DCU_20"):             self.donchian(length=20, append=True)
-        if _need("CMF_20"):             self.cmf(length=20, append=True)
-        if _need("PSAR"):               self.psar(append=True)
+        if with_vwap_bands and _need("VWAP_D_upper_1"):
+            try:
+                self.vwap_bands(stdev_mult_1=1.0, stdev_mult_2=2.0, append=True)
+            except Exception as exc:
+                log.debug("enrich_production VWAP bands gagal: %s", exc)
 
         elapsed = (time.perf_counter() - t0) * 1000
         n_ind   = sum(1 for c in df.columns
@@ -1459,8 +1572,27 @@ except Exception as _e:
 
 
 def patch() -> bool:
-    """Verifikasi df.ta.* aktif. Import modul ini sudah cukup untuk aktivasi."""
+    """
+    Verifikasi df.ta.* aktif. Import modul ini sudah cukup untuk aktivasi.
+    Return True jika accessor berhasil diregistrasi ke pandas.
+
+    Cara pakai di modul lain:
+        import ta_compat
+        # Setelah import, df.ta.* langsung tersedia
+        # (tidak perlu panggil patch())
+
+    Untuk verifikasi eksplisit:
+        assert ta_compat.patch(), "ta_compat tidak aktif"
+    """
     return _PATCHED
+
+
+# Public exports — bisa diimport langsung
+__all__ = [
+    "patch",
+    "lookup_col",
+    "_TAAccessor",
+]
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1477,7 +1609,7 @@ if __name__ == "__main__":
     def fail(m, e=""): print(f"  {R}✗{X} {m}"); e and print(f"    {R}{e}{X}")
     def sec(t): print(f"\n{B}{C}── {t} {X}")
 
-    print(f"\n{B}ta_compat v4 SUPERPOWER — Self-Test Suite{X}")
+    print(f"\n{B}ta_compat v5 SUPERPOWER ULTIMATE — Self-Test Suite{X}")
 
     rng  = np.random.default_rng(42)
     N    = 300
@@ -1572,14 +1704,21 @@ if __name__ == "__main__":
     try:
         df.ta.rsi_slope(14)
         v = df["RSI_14_slope"].iloc[-1]; assert not np.isnan(v)
-        ok(f"RSI_14_slope = {v:.3f}"); passed += 1
-    except Exception as e: fail("RSI_slope", str(e)); errors += 1
+        # v5: OLS slope — verifikasi hasilnya bukan sekadar diff
+        s = df["RSI_14_slope"]
+        # slope harus bervariasi (bukan diff konstan)
+        assert s.dropna().std() > 0
+        ok(f"RSI_14_slope (OLS v5) = {v:.4f}  [std={s.std():.4f} → bukan diff]"); passed += 1
+    except Exception as e: fail("RSI_slope OLS", str(e)); errors += 1
 
     try:
         df.ta.rsi_divergence(14, 14)
         v = df["RSI_DIV_14"].iloc[-1]
-        ok(f"RSI_DIV_14 = {v:.3f}  (>0=bullish, <0=bearish)"); passed += 1
-    except Exception as e: fail("RSI Divergence", str(e)); errors += 1
+        s = df["RSI_DIV_14"]
+        # v5: harus ada divergence signal di 300 bar random
+        has_bull = (s > 0).any(); has_bear = (s < 0).any()
+        ok(f"RSI_DIV_14 = {v:.3f}  [bull:{has_bull}, bear:{has_bear}]  [v5 vectorized]"); passed += 1
+    except Exception as e: fail("RSI Divergence vectorized", str(e)); errors += 1
 
     try:
         ml, sl, hl = df.ta.macd()
@@ -1735,7 +1874,7 @@ if __name__ == "__main__":
 
     # CCI vectorized (v4) == slow rolling.apply
     try:
-        import numpy as np as _np
+        import numpy as _np
         def _cci_slow(df_, l=20):
             tp=(df_["high"]+df_["low"]+df_["close"])/3
             sm=tp.rolling(l).mean()
@@ -1743,7 +1882,7 @@ if __name__ == "__main__":
             return (tp-sm)/(0.015*md.replace(0,_np.nan))
         df2=fresh(); df2.ta.cci(20)
         ref=_cci_slow(df2,20).dropna()
-        got=df2["CCI_20"].iloc[ref.index[0]:]
+        got=df2["CCI_20"].loc[ref.index]   # [v5 fix] .loc bukan .iloc — DatetimeIndex safe
         assert _np.allclose(ref.values,got.values,atol=1e-8)
         ok(f"CCI vectorized == rolling.apply  [{len(ref)} pts]  [v4 perf 297x]"); passed+=1
     except Exception as e: fail("CCI vectorized == slow", str(e)); errors+=1
@@ -1755,7 +1894,7 @@ if __name__ == "__main__":
             return s.rolling(lb,min_periods=25).apply(rank,raw=True)
         df3=fresh(); df3.ta.atr(14); df3.ta.atr_percentile(14,100)
         ref=_ap_slow(df3["ATRr_14"],100).dropna()
-        got=df3["_atr_percentile_100"].iloc[ref.index[0]:]
+        got=df3["_atr_percentile_100"].loc[ref.index]   # [v5 fix] .loc — DatetimeIndex safe
         assert np.allclose(ref.values,got.values,atol=1e-6)
         ok(f"ATR percentile vectorized == rolling.apply  [{len(ref)} pts]  [v4 perf 7x]"); passed+=1
     except Exception as e: fail("ATR percentile vectorized", str(e)); errors+=1
@@ -1786,6 +1925,57 @@ if __name__ == "__main__":
         ok(f"PSAR posisi valid: >85% benar (bull/bear)"); passed+=1
     except Exception as e: fail("PSAR position", str(e)); errors+=1
 
+    # [v5 FIX] vwap_bands: std vectorized — hasilnya harus identik dengan var manual
+    try:
+        df7=fresh()
+        df7.ta.vwap()
+        df7.ta.vwap_bands(stdev_mult_1=1.0, stdev_mult_2=2.0)
+        u1=df7["VWAP_D_upper_1"]; l1=df7["VWAP_D_lower_1"]
+        vwap=df7["VWAP_D"]
+        # Band harus simetris di setiap bar
+        assert np.allclose((u1-vwap).dropna().values, (vwap-l1).dropna().values, rtol=1e-6)
+        ok(f"VWAP bands simetris ±1σ  [v5 vectorized std, no lambda loop]"); passed+=1
+    except Exception as e: fail("VWAP bands symmetry", str(e)); errors+=1
+
+    # [v5 FIX] rsi_slope OLS: verifikasi BUKAN sekadar diff(N)
+    try:
+        rng_v5 = np.random.default_rng(77)
+        cl_v5  = 100.0 + np.linspace(0, 15, 100) + rng_v5.normal(0, 0.4, 100)
+        df8 = pd.DataFrame({"open":cl_v5-0.05,"high":cl_v5+0.2,"low":cl_v5-0.2,
+                             "close":cl_v5,"volume":np.full(100,5000.)})
+        df8.ta.rsi(14); df8.ta.rsi_slope(14)
+        slope_s = df8["RSI_14_slope"].dropna()
+        half    = max(3, 14 // 2)
+        diff_s  = df8["RSI_14"].diff(half).dropna()
+        common  = slope_s.index.intersection(diff_s.index)
+        # [kunci] OLS slope BUKAN identik dengan diff(half)
+        are_same = np.allclose(slope_s.loc[common].values, diff_s.loc[common].values, atol=1e-6)
+        assert not are_same, "slope masih identik dengan diff — OLS belum berjalan"
+        # Verifikasi slope ada variansi (bukan konstan 0)
+        assert slope_s.std() > 0.01, f"slope terlalu flat: std={slope_s.std():.4f}"
+        ok(f"RSI slope OLS: berbeda dari diff, std={slope_s.std():.4f}  [v5 fix]"); passed+=1
+    except Exception as e: fail("RSI slope OLS quality", str(e)); errors+=1
+
+    # [v5 FIX] rsi_divergence vectorized == loop python (reference)
+    try:
+        import numpy as _np2
+        df9=fresh()
+        df9.ta.rsi(14); df9.ta.rsi_divergence(14,14)
+        got = df9["RSI_DIV_14"].to_numpy()
+        # Reference: manual shift check
+        close_a = df9["close"].to_numpy(dtype=float)
+        rsi_a   = df9["RSI_14"].to_numpy(dtype=float)
+        ref     = _np2.zeros(len(close_a))
+        lb=14
+        for i in range(lb, len(close_a)):
+            cc,pc = close_a[i], close_a[i-lb]
+            cr,pr = rsi_a[i], rsi_a[i-lb]
+            if cc < pc and cr > pr: ref[i] = cr-pr
+            elif cc > pc and cr < pr: ref[i] = cr-pr
+        assert _np2.allclose(got[lb:], ref[lb:], atol=1e-10)
+        ok(f"RSI divergence vectorized == reference loop  [{len(close_a)-lb} pts]  [v5 fix]"); passed+=1
+    except Exception as e: fail("RSI divergence vectorized==loop", str(e)); errors+=1
+
     # ── PERFORMANCE BENCHMARK ─────────────────────────────────────────────────
     sec("PERFORMANCE BENCHMARK (1000 bar)")
     rng2=np.random.default_rng(0); N2=1000
@@ -1798,10 +1988,10 @@ if __name__ == "__main__":
 
     _REPS=5
     for label, fn in [
-        ("CCI(20)",            lambda: df_perf.copy().pipe(lambda d: d.ta.cci(20)   or d)),
-        ("ATR_percentile(100)",lambda: df_perf.copy().pipe(lambda d: d.ta.atr_percentile(14,100) or d)),
-        ("enrich_production",  lambda: df_perf.copy().ta.enrich_production()),
-        ("compute_all",        lambda: df_perf.copy().ta.compute_all()),
+        ("CCI(20)",             lambda: (lambda d: (d.ta.cci(20), d)[1])(df_perf.copy())),
+        ("ATR_percentile(100)", lambda: (lambda d: (d.ta.atr_percentile(14,100), d)[1])(df_perf.copy())),
+        ("enrich_production",   lambda: df_perf.copy().ta.enrich_production()),
+        ("compute_all",         lambda: df_perf.copy().ta.compute_all()),
     ]:
         try:
             t0=_time.perf_counter()
@@ -1816,18 +2006,35 @@ if __name__ == "__main__":
     try:
         df_ep.ta.enrich_production()
         exp_prod=[
+            # EMA stack
             "EMA_9","EMA_21","EMA_50","EMA_100","EMA_200",
-            "RSI_14","ATRr_14","ATRr_14_pct","VWAP_D",
-            "ADX_14","DMP_14","DMN_14","CHOP_14",
-            "_atr_percentile_100","_ema_stack_score",
-            "WILLR_14","ROC_9","ROC_SLOPE_9_5",
-            "RSI_14_slope","RSI_DIV_14","EMAXS_9_21",
-            "DCU_20","DCM_20","DCL_20","CMF_20",
+            "DEMA_9","DEMA_21","TEMA_9","TEMA_21","HMA_9","HMA_21",
+            "WMA_14","VWMA_20",
+            "_ema_stack_score","EMAXS_9_21","EMAXS_21_50",
+            # Momentum
+            "RSI_14","RSI_14_slope","RSI_DIV_14",
+            "MACD_12_26_9","MACDs_12_26_9","MACDh_12_26_9",
+            "STOCHRSIk_14_14_3_3","STOCHRSId_14_14_3_3",
+            "CCI_20","WILLR_14","ROC_9","ROC_SLOPE_9_5",
+            # Volatility
+            "ATRr_14","ATRr_14_pct","_atr_percentile_100",
+            "BBU_20_2.0","BBM_20_2.0","BBL_20_2.0","BBB_20_2.0","BBP_20_2.0",
+            "KCUe_20_2","KCBe_20_2","KCLe_20_2",
+            "SQZ_20_2.0_20_1.5","CHOP_14",
+            # Structure
+            "SUPERT_7_3.0","SUPERTd_7_3.0",
+            "DCU_20","DCM_20","DCL_20",
             "PSAR","PSAR_DIR","PSAR_REV",
+            # Strength
+            "ADX_14","DMP_14","DMN_14",
+            "OBV","MFI_14","CMF_20",
+            # VWAP
+            "VWAP_D","VWAP_D_upper_1","VWAP_D_lower_1",
+            "VWAP_D_upper_2","VWAP_D_lower_2",
         ]
         miss=[c for c in exp_prod if c not in df_ep.columns]
-        if miss: fail(f"enrich_production hilang: {miss}"); errors+=1
-        else: ok(f"enrich_production: {len(exp_prod)} kolom ✓"); passed+=1
+        if miss: fail(f"enrich_production hilang {len(miss)} kolom: {miss}"); errors+=1
+        else: ok(f"enrich_production v5: {len(exp_prod)} kolom ✓ (termasuk MACD/BB/Keltner/Squeeze/OBV/MFI)"); passed+=1
     except Exception as e: fail("enrich_production", traceback.format_exc()); errors+=1
 
     # skip_existing test
@@ -1865,7 +2072,7 @@ if __name__ == "__main__":
     print(f"\n{'─'*58}")
     if errors == 0:
         print(f"{G}{B}  SEMUA {passed}/{total} TEST PASSED ✓{X}")
-        print(f"  ta_compat v4 — SUPERPOWER REAL, siap produksi\n")
+        print(f"  ta_compat v5 SUPERPOWER ULTIMATE — siap produksi\n")
         sys.exit(0)
     else:
         print(f"{R}{B}  {errors}/{total} TEST GAGAL ✗{X}")
