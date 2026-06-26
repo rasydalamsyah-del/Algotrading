@@ -254,13 +254,22 @@ class PatternIndicators:
 
 @dataclass
 class OscillatorIndicators:
+    # ── CCI ───────────────────────────────────────────────────────────────────
     cci:              Optional[float] = None
     cci_score:        float           = 50.0
+    cci_trend:        Optional[str]   = None   # "rising"|"falling"|"flat"
+    cci_divergence:   Optional[float] = None   # bull(+) / bear(-) divergence score
+    # ── Williams %R ───────────────────────────────────────────────────────────
     williams_r:       Optional[float] = None
     williams_r_score: float           = 50.0
-    roc:              Optional[float] = None
-    roc_slope:        Optional[float] = None
+    willr_trend:      Optional[str]   = None   # "rising"|"falling"|"flat"
+    # ── ROC / Momentum ────────────────────────────────────────────────────────
+    roc:              Optional[float] = None   # ROC fast (9-period)
+    roc_slow:         Optional[float] = None   # ROC slow (21-period)
+    roc_slope:        Optional[float] = None   # acceleration of fast ROC
+    roc_crossover:    Optional[str]   = None   # "bullish"|"bearish"|None
     roc_score:        float           = 50.0
+    # ── Composite ─────────────────────────────────────────────────────────────
     composite_score:  float           = 50.0
 
     def is_valid(self) -> bool:
