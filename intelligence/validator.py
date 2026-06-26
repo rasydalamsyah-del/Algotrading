@@ -309,7 +309,7 @@ def _check_oscillator_context(iset: IndicatorSet, result: ValidationResult) -> N
     if not osc.is_valid():
         return
 
-    # CCI — overbought/oversold konfirmasi
+    # ── CCI ───────────────────────────────────────────────────────────────────
     if osc.cci is not None:
         if osc.cci > 150:
             result.add_warning(
@@ -323,7 +323,32 @@ def _check_oscillator_context(iset: IndicatorSet, result: ValidationResult) -> N
             result.add_note(f"✅ CCI {osc.cci:.1f} — zona bullish sehat")
             result.confidence_adjustment += 0.02
 
-    # Williams %R — konfirmasi zona
+    # [v2] CCI trend — arah pergerakan indikator lebih penting dari nilai sesaat
+    if osc.cci_trend == "rising" and osc.cci is not None and osc.cci < 0:
+        result.add_note(
+            f"✅ CCI rising ({osc.cci:.1f}) dari zona negatif — potensi recovery"
+        )
+        result.confidence_adjustment += 0.02
+    elif osc.cci_trend == "falling" and osc.cci is not None and osc.cci > 50:
+        result.add_warning(
+            f"CCI falling ({osc.cci:.1f}) dari zona positif — momentum melemah",
+            confidence_penalty=0.03,
+        )
+
+    # [v2] CCI divergence — early reversal signal
+    if osc.cci_divergence is not None:
+        if osc.cci_divergence > 5:
+            result.add_note(
+                f"✅ CCI bullish divergence ({osc.cci_divergence:.1f}) — potensi reversal up"
+            )
+            result.confidence_adjustment += 0.04
+        elif osc.cci_divergence < -5:
+            result.add_warning(
+                f"CCI bearish divergence ({osc.cci_divergence:.1f}) — potensi reversal down",
+                confidence_penalty=0.04,
+            )
+
+    # ── Williams %R ───────────────────────────────────────────────────────────
     if osc.williams_r is not None:
         if osc.williams_r >= -20:
             result.add_warning(
@@ -334,7 +359,19 @@ def _check_oscillator_context(iset: IndicatorSet, result: ValidationResult) -> N
             result.add_note(f"✅ Williams %R {osc.williams_r:.1f} — oversold, momentum recovery")
             result.confidence_adjustment += 0.02
 
-    # ROC — early warning momentum melambat
+    # [v2] Williams %R trend — apakah bergerak keluar dari oversold?
+    if osc.willr_trend == "rising" and osc.williams_r is not None and osc.williams_r <= -70:
+        result.add_note(
+            f"✅ Williams %R rising dari oversold ({osc.williams_r:.1f}) — sinyal recovery"
+        )
+        result.confidence_adjustment += 0.02
+    elif osc.willr_trend == "falling" and osc.williams_r is not None and osc.williams_r >= -30:
+        result.add_warning(
+            f"Williams %R jatuh dari overbought ({osc.williams_r:.1f}) — tekanan jual",
+            confidence_penalty=0.03,
+        )
+
+    # ── ROC — early warning momentum ──────────────────────────────────────────
     if osc.roc is not None and osc.roc_slope is not None:
         if osc.roc > 0 and osc.roc_slope < -1.5:
             result.add_warning(
@@ -348,6 +385,20 @@ def _check_oscillator_context(iset: IndicatorSet, result: ValidationResult) -> N
                 f"— momentum menguat"
             )
             result.confidence_adjustment += 0.03
+
+    # [v2] ROC fast/slow crossover
+    if osc.roc_crossover == "bullish":
+        result.add_note(
+            f"✅ ROC crossover bullish (fast={osc.roc:.2f}% > slow={osc.roc_slow:.2f}%) "
+            f"— momentum shift positif"
+        )
+        result.confidence_adjustment += 0.03
+    elif osc.roc_crossover == "bearish":
+        result.add_warning(
+            f"ROC crossover bearish (fast={osc.roc:.2f}% < slow={osc.roc_slow:.2f}%) "
+            f"— momentum shift negatif",
+            confidence_penalty=0.04,
+        )
 
 
 def _check_structure_context(iset: IndicatorSet, result: ValidationResult) -> None:
