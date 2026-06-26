@@ -62,7 +62,7 @@ except ImportError:
         return default
 
 import pandas as pd
-from fastapi import FastAPI, HTTPException, Depends, Request
+from fastapi import FastAPI, HTTPException, Depends, Request, Security
 from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import APIKeyHeader
@@ -91,6 +91,32 @@ API_KEY_HEADER = APIKeyHeader(name="X-API-Key", auto_error=False)
 HOLD_MINUTES: Dict[str, int] = {
     "1m": 1, "3m": 3, "5m": 5, "15m": 15,
     "30m": 30, "1h": 60, "4h": 240, "1d": 1440,
+}
+
+# [v9 PERF FIX] Sebelumnya didefinisikan ulang di dalam get_forecast() setiap
+# request — dipindah ke module-level agar tidak dibuat ulang tiap panggilan.
+# Nama dibuat unik (bukan "HOLD_MINUTES") karena strukturnya beda total dari
+# HOLD_MINUTES di atas (itu {timeframe: menit}, ini {profile: {regime: menit}}).
+FORECAST_HOLD_MINUTES_MATRIX: Dict[str, Dict[str, int]] = {
+    "scalp_volatile":   {"trending_bull": 30, "volatile_expansion": 20, "ranging": 45, "undefined": 35},
+    "extreme_momentum": {"trending_bull": 25, "volatile_expansion": 15, "ranging": 60, "undefined": 30},
+    "breakout_swift":   {"trending_bull": 120, "volatile_expansion": 90, "ranging": 180, "undefined": 150},
+    "trend_follow":     {"trending_bull": 480, "volatile_expansion": 300, "ranging": 600, "undefined": 360},
+    "mean_revert":      {"trending_bull": 240, "volatile_expansion": 300, "ranging": 120, "undefined": 180},
+    "hodl_accumulate":  {"trending_bull": 2880, "volatile_expansion": 4320, "ranging": 1440, "undefined": 2160},
+}
+
+# [v9 PERF FIX] Sebelumnya local di get_forecast() — dipindah ke module-level.
+FORECAST_TF_CONFIRM: Dict[str, str] = {
+    "15m": "1h", "30m": "2h", "1h": "4h", "5m": "15m",
+}
+
+# [v9 PERF FIX] Sebelumnya local di get_diagnosa() — dipindah ke module-level.
+DIAGNOSA_TF_FALLBACK: Dict[str, List[str]] = {
+    "1d":  ["4h", "1h"],
+    "4h":  ["1h"],
+    "1h":  ["15m"],
+    "15m": [],
 }
 
 # ── Request models ─────────────────────────────────────────────────────────────
@@ -481,7 +507,7 @@ def create_app(bot_getter) -> FastAPI:
         }
 
     @app.get("/api/balance")
-    async def get_balance():
+    async def get_balance(_: str = Depends(verify_api_key)):
         b  = bot()
         ps = b.portfolio_state
         drawdown_pct = (
@@ -832,13 +858,6 @@ def create_app(bot_getter) -> FastAPI:
         is_testnet = b.config.get("testnet", True)
         results: list[dict] = []
 
-        _TF_FALLBACK = {
-            "1d":  ["4h", "1h"],
-            "4h":  ["1h"],
-            "1h":  ["15m"],
-            "15m": [],
-        }
-
         for symbol in universe:
             entry: dict = {"symbol": symbol}
             try:
@@ -904,7 +923,7 @@ def create_app(bot_getter) -> FastAPI:
                     tf_used = tf
                     tf_note = ""
 
-                    for tf_try in [tf] + _TF_FALLBACK.get(tf, []):
+                    for tf_try in [tf] + DIAGNOSA_TF_FALLBACK.get(tf, []):
                         try:
                             candidate = await b.exchange.fetch_ohlcv(
                                 symbol, tf_try, limit=250
@@ -1632,7 +1651,6 @@ def create_app(bot_getter) -> FastAPI:
 
     @app.post("/api/config/update")
     async def update_config(payload: dict, _: str = Depends(verify_api_key)):
-        import json
         b = bot()
         try:
             allowed = [
@@ -1659,17 +1677,6 @@ def create_app(bot_getter) -> FastAPI:
         universe   = b.config.get("universe_watchlist", [])
         tf_primary = b.config.get("timeframe", "15m")
         forecasts  = []
-        TF_CONFIRM = {
-            "15m": "1h", "30m": "2h", "1h": "4h", "5m": "15m",
-        }
-        HOLD_MINUTES = {
-            "scalp_volatile":   {"trending_bull": 30, "volatile_expansion": 20, "ranging": 45, "undefined": 35},
-            "extreme_momentum": {"trending_bull": 25, "volatile_expansion": 15, "ranging": 60, "undefined": 30},
-            "breakout_swift":   {"trending_bull": 120, "volatile_expansion": 90, "ranging": 180, "undefined": 150},
-            "trend_follow":     {"trending_bull": 480, "volatile_expansion": 300, "ranging": 600, "undefined": 360},
-            "mean_revert":      {"trending_bull": 240, "volatile_expansion": 300, "ranging": 120, "undefined": 180},
-            "hodl_accumulate":  {"trending_bull": 2880, "volatile_expansion": 4320, "ranging": 1440, "undefined": 2160},
-        }
 
         for symbol in universe:
             try:
@@ -1777,7 +1784,7 @@ def create_app(bot_getter) -> FastAPI:
                     indicator_status["adx"] = "strong" if adx_val >= 25 else "moderate" if adx_val >= 20 else "weak"
 
                 now_utc    = _utcnow()
-                hold_map   = HOLD_MINUTES.get(profile, {})
+                hold_map   = FORECAST_HOLD_MINUTES_MATRIX.get(profile, {})
                 hold_mins  = hold_map.get(regime, 60)
                 hold_mins  = int(hold_mins * (0.7 + conf * 0.6))
                 hold_mins  = max(10, hold_mins)
@@ -1798,7 +1805,7 @@ def create_app(bot_getter) -> FastAPI:
                     "Bearish"
                 )
 
-                htf_label   = TF_CONFIRM.get(tf_primary, "1h")
+                htf_label   = FORECAST_TF_CONFIRM.get(tf_primary, "1h")
                 htf_confirm = None
                 if conf_tf_data:
                     htf_rsi  = conf_tf_data.get("rsi")
