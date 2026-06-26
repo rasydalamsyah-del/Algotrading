@@ -182,7 +182,7 @@ def _build_indicator_set(
 
     try:
         if ob_data:
-            iset.orderbook = score_orderbook_data(ob_data, errors=errors)
+            iset.orderbook = score_orderbook_data(ob_data, errors=errors, symbol=symbol)
     except Exception as exc:
         iset.add_error("orderbook", str(exc))
         log.exception("%s/%s: Error kalkulasi orderbook: %s", symbol, timeframe, exc)
