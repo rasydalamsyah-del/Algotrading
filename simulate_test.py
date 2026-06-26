@@ -127,20 +127,13 @@ except Exception as e:
 try:
     from indicators.momentum  import calculate_rsi_enhanced
     from indicators.trend import score_trend
-    from indicators.strength import calculate_all as _str_all
-    from indicators.patterns import score_pattern as _pat_score
-    from indicators.volatility import calculate_atr_enhanced
-    from indicators.trend      import score_trend as calculate_trend_indicators
     from indicators.strength   import calculate_all as _str_all
     from indicators.patterns   import score_pattern as _pat_score, detect_all as _pat_detect
+    from indicators.volatility import calculate_atr_enhanced
+    from indicators.trend      import score_trend as calculate_trend_indicators
     from indicators.oscillators import score_oscillators as calculate_oscillator_indicators
     from indicators.structure  import score_structure as calculate_structure_indicators
     from indicators.orderbook  import score_orderbook_data as calculate_orderbook_indicators
-    # strength already imported above
-    # patterns already imported above
-    from indicators.oscillators import calculate_oscillator_indicators
-    from indicators.structure  import calculate_structure_indicators
-    from indicators.orderbook  import calculate_orderbook_indicators
     ok("indicators.* loaded")
 except Exception as e:
     fail("indicators.*", str(e))
@@ -289,9 +282,9 @@ for label, df in [("BULL", df_bull), ("BEAR", df_bear), ("FLAT", df_range), ("VO
         fail(f"Structure [{label}]", str(e))
 
     try:
-        obind = calculate_orderbook_indicators(ob, df["close"].iloc[-1])
+        obind = calculate_orderbook_indicators(ob)
         assert obind is not None
-        ok(f"Orderbook [{label}]: score={obind.composite_score:.1f}")
+        ok(f"Orderbook [{label}]: score={obind.composite_score:.1f}, liq={obind.liquidity_score:.1f}, spoof={obind.spoofing_confidence:.2f}")
     except Exception as e:
         fail(f"Orderbook [{label}]", str(e))
 
