@@ -1,6 +1,6 @@
 """
 indicators/orderbook.py
-AlgoTrader Pro — Orderbook / Whale Detector  v2 SUPERPOWER
+AlgoTrader Pro — Orderbook / Whale Detector  v3
 
 Changelog v1:
   [MSL-2] WhaleDetector dipindah dari main.py ke sini — separation of concerns.
@@ -13,6 +13,21 @@ Changelog v1:
   [MSL-6] liquidity_score — total depth dalam USDT, normalized 0-100.
   [MSL-7] OrderbookIndicators di models.py diperluas dengan sub-scores baru.
   [BUG-2] simulate_test.py import alias dan signature mismatch diperbaiki.
+
+Changelog v3:
+  [BUG-A FIX] Spoofing penalty sebelumnya membandingkan current vs current karena
+              state.prev_bid_walls sudah di-overwrite sebelum _spoofing_penalty
+              dipanggil → selalu return 1.0, spoof tidak pernah terdeteksi.
+              Fix: simpan prev_bid/ask_snapshot SEBELUM state.prev di-update.
+  [BUG-B FIX] _walls_to_dict menyimpan semua 20 level termasuk micro-order kecil.
+              Micro-order yang menghilang bisa trigger absorbed=True secara salah.
+              Fix: tambah filter level >= WHALE_WALL_PCT * total_usdt (whale-only).
+  [MSL-A FIX] _state_registry tumbuh selamanya jika coin dirotasi keluar universe.
+              Fix: tambah reset_state(symbol) + cleanup_stale_states(ttl_secs=3600).
+              _SnapshotState.last_active di-update setiap akses via _get_state().
+  [MSL-B FIX] _SnapshotState.wall_first_seen adalah dead field — didefinisikan tapi
+              tidak pernah dipakai (WhaleDetector punya self._wall_first_seen sendiri).
+              Field dihapus agar tidak menyesatkan.
 """
 from __future__ import annotations
 
@@ -212,17 +227,50 @@ class _SnapshotState:
     prev_bid_walls: Dict[float, float] = field(default_factory=dict)  # price→usdt_weighted
     prev_ask_walls: Dict[float, float] = field(default_factory=dict)
     prev_ts:        float              = 0.0
-    wall_first_seen: Dict[str, float]  = field(default_factory=dict)  # key→timestamp
+    # [MSL-B FIX] wall_first_seen dihapus — field ini tidak pernah dipakai di
+    # calculate_orderbook(). WhaleDetector mengelola wall age via self._wall_first_seen
+    # internal sendiri. Field di sini adalah dead code yang menyesatkan.
     spread_history:  List[float]       = field(default_factory=list)   # rolling spread
+    last_active:     float             = field(default_factory=time.time)  # untuk TTL cleanup
 
 
 _state_registry: Dict[str, _SnapshotState] = {}
 
+_STATE_TTL_SECS = 3600.0  # state coin yang tidak aktif > 1 jam dihapus otomatis
+
 
 def _get_state(symbol: str) -> _SnapshotState:
+    """Ambil state per-symbol. Buat baru jika belum ada. Update last_active."""
     if symbol not in _state_registry:
         _state_registry[symbol] = _SnapshotState()
-    return _state_registry[symbol]
+    state = _state_registry[symbol]
+    state.last_active = time.time()
+    return state
+
+
+def reset_state(symbol: str) -> None:
+    """[MSL-A FIX] Hapus state coin tertentu — panggil saat coin dikeluarkan dari universe."""
+    _state_registry.pop(symbol, None)
+    log.debug("orderbook: state '%s' direset", symbol)
+
+
+def cleanup_stale_states(ttl_secs: float = _STATE_TTL_SECS) -> int:
+    """[MSL-A FIX] Hapus state coin yang tidak aktif lebih dari ttl_secs.
+
+    Panggil dari main loop periodik (misal setiap jam) agar _state_registry
+    tidak tumbuh selamanya ketika coin dirotasi keluar dari universe.
+
+    Returns:
+        Jumlah state yang dihapus.
+    """
+    now   = time.time()
+    stale = [sym for sym, st in _state_registry.items()
+             if (now - st.last_active) > ttl_secs]
+    for sym in stale:
+        del _state_registry[sym]
+    if stale:
+        log.info("orderbook: cleanup %d stale state(s): %s", len(stale), stale)
+    return len(stale)
 
 
 def _detect_absorption(
@@ -242,15 +290,24 @@ def _detect_absorption(
     return False
 
 
-def _walls_to_dict(levels: list) -> Dict[float, float]:
-    """Konversi levels ke dict price→weighted_usdt untuk perbandingan."""
+def _walls_to_dict(levels: list, total_usdt: float = 0.0) -> Dict[float, float]:
+    """Konversi levels ke dict price→weighted_usdt untuk perbandingan absorption.
+
+    [BUG-B FIX] Hanya simpan level yang kekuatannya >= WHALE_WALL_PCT * total_usdt.
+    Sebelumnya semua 20 level disimpan sehingga micro-order kecil di level 18
+    yang menghilang bisa trigger absorbed=True. Sekarang hanya whale-level wall
+    yang masuk dict — absorption hanya aktif untuk wall yang benar-benar signifikan.
+    """
     result: Dict[float, float] = {}
+    whale_threshold = total_usdt * WHALE_WALL_PCT if total_usdt > 0 else 0.0
     for i, (p, q) in enumerate(levels[:20]):
         p, q = float(p), float(q)
         if p <= 0 or q <= 0:
             continue
-        w = _DEPTH_WEIGHTS[i] if i < len(_DEPTH_WEIGHTS) else 0.4
-        result[p] = p * q * w
+        w    = _DEPTH_WEIGHTS[i] if i < len(_DEPTH_WEIGHTS) else 0.4
+        usdt = p * q * w
+        if whale_threshold <= 0 or usdt >= whale_threshold:
+            result[p] = usdt
     return result
 
 
@@ -460,12 +517,18 @@ def calculate_orderbook(ob: dict, symbol: str = "_default") -> dict:
     result["ask_wall_dist"] = ask_dist_factor
 
     # ── Absorption detection (BUG-1 + MSL-1 fix) ─────────────────────────────
-    curr_bid_dict = _walls_to_dict(bids_f)
-    curr_ask_dict = _walls_to_dict(asks_f)
+    curr_bid_dict = _walls_to_dict(bids_f, total_raw)
+    curr_ask_dict = _walls_to_dict(asks_f, total_raw)
 
     if state.prev_ts > 0:  # Hanya cek jika ada snapshot sebelumnya
         result["absorbed_bid"] = _detect_absorption(curr_bid_dict, state.prev_bid_walls)
         result["absorbed_ask"] = _detect_absorption(curr_ask_dict, state.prev_ask_walls)
+
+    # [BUG-A FIX] Simpan snapshot prev SEBELUM state di-update — dipakai spoofing di bawah.
+    # Sebelumnya spoofing menggunakan state.prev_bid_walls SETELAH di-overwrite curr,
+    # sehingga membandingkan current vs current → _spoofing_penalty selalu return 1.0.
+    prev_bid_snapshot = dict(state.prev_bid_walls)
+    prev_ask_snapshot = dict(state.prev_ask_walls)
 
     # Update state
     state.prev_bid_walls = curr_bid_dict
@@ -473,8 +536,9 @@ def calculate_orderbook(ob: dict, symbol: str = "_default") -> dict:
     state.prev_ts        = time.time()
 
     # ── Spoofing confidence ───────────────────────────────────────────────────
-    pen_b = _spoofing_penalty(bids_f, {p: v for p, v in state.prev_bid_walls.items()})
-    pen_a = _spoofing_penalty(asks_f, {p: v for p, v in state.prev_ask_walls.items()})
+    # [BUG-A FIX] Pakai prev_snapshot (sebelum update) bukan state.prev yang sudah = curr
+    pen_b = _spoofing_penalty(bids_f, prev_bid_snapshot)
+    pen_a = _spoofing_penalty(asks_f, prev_ask_snapshot)
     result["spoofing_confidence"] = round((pen_b + pen_a) / 2, 3)
 
     # ── Liquidity score (MSL-6) ───────────────────────────────────────────────
