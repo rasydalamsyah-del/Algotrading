@@ -316,6 +316,30 @@ class StructureIndicators:
     nearest_fib_support:     Optional[float] = None
     nearest_fib_resistance:  Optional[float] = None
     fib_score:               float           = 50.0
+    # [v2 NEW] Fibonacci trend-awareness (uptrend/downtrend retracement) + extension target
+    fib_trend:               Optional[str]   = None   # "uptrend" | "downtrend"
+    fib_ext_1272:            Optional[float] = None
+    fib_ext_1618:            Optional[float] = None
+    # [v2 NEW] Pivot — transparansi sumber data setelah fix daily-resample
+    pivot_period:            Optional[str]   = None   # "daily" | "bar_fallback"
+    # [v2 NEW] Market Structure — HH/HL/LH/LL, Break of Structure, Change of Character
+    trend_structure:         Optional[str]   = None   # "bullish"|"bearish"|"choppy"|"undefined"
+    structure_event:         Optional[str]   = None   # "BOS_bullish"|"BOS_bearish"|"CHoCH_bullish"|"CHoCH_bearish"|None
+    last_swing_high:         Optional[float] = None
+    last_swing_low:          Optional[float] = None
+    swing_points:            List[dict]      = field(default_factory=list)
+    market_structure_score:  float           = 50.0
+    # [v2 NEW] Support/Resistance zone clustering (confluence pivot+fib+swing)
+    sr_zones:                      List[dict]      = field(default_factory=list)
+    nearest_structure_support:     Optional[float] = None
+    nearest_structure_resistance:  Optional[float] = None
+    # [v2 NEW] Donchian Channel (scalar) — pendamping df.ta.donchian() vectorized di ta_compat.py
+    donchian_upper:          Optional[float] = None
+    donchian_lower:          Optional[float] = None
+    donchian_middle:         Optional[float] = None
+    donchian_pct_b:          Optional[float] = None
+    donchian_width_pct:      Optional[float] = None
+    donchian_score:          float           = 50.0
     composite_score:         float           = 50.0
 
     def is_valid(self) -> bool:
