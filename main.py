@@ -1684,6 +1684,15 @@ class TradingBot:
             except Exception as e:
                 log.error("CoinSwap loop error: %s", e)
 
+            # [MSL-A FIX] Bersihkan state orderbook yang sudah tidak aktif > 1 jam
+            try:
+                from indicators.orderbook import cleanup_stale_states
+                n = cleanup_stale_states()
+                if n:
+                    log.info("Orderbook: %d stale state dibersihkan.", n)
+            except Exception as e:
+                log.debug("Orderbook cleanup error (non-fatal): %s", e)
+
             # Cek setiap 1 jam
             await asyncio.sleep(3600)
 
