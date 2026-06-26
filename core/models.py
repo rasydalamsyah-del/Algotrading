@@ -314,14 +314,29 @@ class StructureIndicators:
 
 @dataclass
 class OrderbookIndicators:
-    bid_ask_imbalance:  Optional[float] = None   # 0-1, >0.6 bullish
-    whale_bid_wall:     Optional[float] = None   # harga level whale bid
-    whale_ask_wall:     Optional[float] = None   # harga level whale ask
-    bid_wall_strength:  Optional[float] = None   # % dari total volume
+    # ── Raw data ──────────────────────────────────────────────────────────────
+    bid_ask_imbalance:  Optional[float] = None   # 0-1, >0.62 bullish
+    whale_bid_wall:     Optional[float] = None   # harga level whale bid terbesar
+    whale_ask_wall:     Optional[float] = None   # harga level whale ask terbesar
+    bid_wall_strength:  Optional[float] = None   # % dari total weighted volume
     ask_wall_strength:  Optional[float] = None
-    spread_pct:         Optional[float] = None
-    absorbed_bid:       bool            = False
-    absorbed_ask:       bool            = False
+    cluster_bid_wall:   Optional[float] = None   # harga cluster bid wall
+    cluster_bid_str:    Optional[float] = None   # kekuatan cluster bid (%)
+    cluster_ask_wall:   Optional[float] = None   # harga cluster ask wall
+    cluster_ask_str:    Optional[float] = None   # kekuatan cluster ask (%)
+    spread_pct:         Optional[float] = None   # spread best bid-ask (%)
+    absorbed_bid:       bool            = False   # bid wall diserap (breakdown)
+    absorbed_ask:       bool            = False   # ask wall diserap (breakout)
+    bid_wall_dist:      Optional[float] = None   # relevansi jarak bid wall (0-1)
+    ask_wall_dist:      Optional[float] = None   # relevansi jarak ask wall (0-1)
+    # ── Sub-scores (0-100) ────────────────────────────────────────────────────
+    imbalance_score:    float           = 50.0   # bid/ask ratio score
+    whale_score:        float           = 50.0   # whale wall + cluster score
+    spread_score:       float           = 80.0   # likuiditas spread score
+    absorption_score:   float           = 50.0   # absorption signal score
+    liquidity_score:    float           = 50.0   # total depth USDT score
+    spoofing_confidence: float          = 1.0    # 0-1, makin rendah makin banyak spoof
+    # ── Composite ─────────────────────────────────────────────────────────────
     orderbook_score:    float           = 50.0
     composite_score:    float           = 50.0
 
