@@ -143,9 +143,14 @@ def _extract_indicator_scores(iset: IndicatorSet) -> Dict[str, Dict[str, float]]
             "context_score": iset.patterns.context_score,
         },
         "oscillator": {
-            "cci":       iset.oscillators.cci_score,
-            "williams":  iset.oscillators.williams_r_score,
-            "roc":       iset.oscillators.roc_score,
+            "cci":            iset.oscillators.cci_score,
+            "williams":       iset.oscillators.williams_r_score,
+            "roc":            iset.oscillators.roc_score,
+            # [v2] field baru
+            "cci_trend":      iset.oscillators.cci_trend,
+            "willr_trend":    iset.oscillators.willr_trend,
+            "roc_crossover":  iset.oscillators.roc_crossover,
+            "cci_divergence": iset.oscillators.cci_divergence,
         },
         "structure": {
             "ichimoku":  iset.structure.ichimoku_score,
