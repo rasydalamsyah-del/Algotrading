@@ -35,6 +35,7 @@ from risk import RiskManager, RiskAssessment, RiskDecision, HaltReason
 from execution import OrderExecutionManager
 from api_server import create_app
 from notifications import NotificationManager
+from indicators.orderbook import WhaleDetector  # [v2] dipindah dari main.py ke indicators/orderbook.py
 
 load_dotenv()
 
@@ -88,118 +89,6 @@ def setup_logging() -> None:
 def _utcnow_dt():
     return datetime.now(timezone.utc).replace(tzinfo=None)
 
-class WhaleDetector:
-    """
-    Weighted order book analyzer dengan spoofing detection,
-    minimum size filter, wall age tracking, dan coin-aware threshold.
-    """
-    WEIGHTS = [
-        *([1.0] * 5),   # level 1-5  bobot penuh
-        *([0.7] * 5),   # level 6-10 bobot sedang
-        *([0.4] * 10),  # level 11-20 bobot rendah
-    ]
-
-    def __init__(self):
-        self._prev_bids: Dict[float, float] = {}
-        self._prev_asks: Dict[float, float] = {}
-        self._prev_ts:   float              = 0.0
-
-    def _weighted_wall(self, levels: list) -> float:
-        total = 0.0
-        for i, (p, v) in enumerate(levels[:20]):
-            w = self.WEIGHTS[i] if i < len(self.WEIGHTS) else 0.4
-            total += float(p) * float(v) * w
-        return total
-
-    def _filter_min_size(self, levels: list) -> list:
-        if not levels:
-            return levels
-        qtys = [float(v) for _, v in levels]
-        med  = statistics.median(qtys)
-        return [(p, v) for p, v in levels if float(v) >= med * 0.5]
-
-    def _spoofing_penalty(self, levels: list, prev: Dict[float, float]) -> float:
-        """Return 0.0-1.0, makin rendah makin banyak spoof terdeteksi."""
-        if not prev:
-            return 1.0
-        curr_map = {float(p): float(v) for p, v in levels[:20]}
-        disappeared = sum(
-            v for p, v in prev.items()
-            if p not in curr_map and v > statistics.median(list(prev.values()) or [0]) * 2
-        ) if prev else 0
-        total_prev = sum(prev.values()) or 1
-        spoof_ratio = min(disappeared / total_prev, 1.0)
-        return max(0.3, 1.0 - spoof_ratio)
-
-    def _dynamic_threshold(self, bids: list, asks: list):
-        """Threshold dinamis: coin tipis lebih longgar, coin tebal lebih ketat."""
-        all_vals = [
-            float(p) * float(v)
-            for p, v in (bids + asks)[:40]
-        ]
-        if not all_vals:
-            return 0.65, 1.55
-        depth = sum(all_vals)
-        med   = statistics.median(all_vals)
-        depth_norm = min(depth / (med * 40 + 1e-9), 1.0)
-        thr_sell = round(0.50 + 0.20 * depth_norm, 3)  # 0.50-0.70
-        thr_buy  = round(1.70 - 0.20 * depth_norm, 3)  # 1.50-1.70
-        return thr_sell, thr_buy
-
-    def analyze(
-        self,
-        symbol:         str,
-        bids:           list,
-        asks:           list,
-        wall_first_seen: Dict[str, float],
-    ) -> Dict:
-        now = time.time()
-
-        # --- filter order kecil ---
-        bids_f = self._filter_min_size(bids)
-        asks_f = self._filter_min_size(asks)
-
-        # --- weighted wall ---
-        bid_wall = self._weighted_wall(bids_f)
-        ask_wall = self._weighted_wall(asks_f)
-        ratio    = bid_wall / ask_wall if ask_wall > 0 else 1.0
-
-        # --- spoofing penalty ---
-        prev_bids = self._prev_bids
-        prev_asks = self._prev_asks
-        penalty_b = self._spoofing_penalty(bids_f, prev_bids)
-        penalty_a = self._spoofing_penalty(asks_f, prev_asks)
-        confidence = round((penalty_b + penalty_a) / 2, 3)
-
-        # --- update snapshot ---
-        self._prev_bids = {float(p): float(v) for p, v in bids_f[:20]}
-        self._prev_asks = {float(p): float(v) for p, v in asks_f[:20]}
-        self._prev_ts   = now
-
-        # --- wall age bonus ---
-        key = f"{symbol}_wall"
-        if ratio < 0.80 or ratio > 1.25:
-            if key not in wall_first_seen:
-                wall_first_seen[key] = now
-            age = now - wall_first_seen[key]
-            if age < 30:
-                confidence = min(confidence * 1.20, 1.0)  # fresh wall +20%
-            elif age > 300:
-                confidence = confidence * 0.80             # stale wall -20%
-        else:
-            wall_first_seen.pop(key, None)
-
-        # --- dynamic threshold ---
-        thr_sell, thr_buy = self._dynamic_threshold(bids, asks)
-
-        return {
-            "ratio":      round(ratio, 4),
-            "confidence": confidence,
-            "bid_wall":   round(bid_wall, 2),
-            "ask_wall":   round(ask_wall, 2),
-            "thr_sell":   thr_sell,
-            "thr_buy":    thr_buy,
-        }
 
 
 class TradingBot:
