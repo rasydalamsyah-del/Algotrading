@@ -38,6 +38,18 @@ CHANGELOG v2:
     di atas — semua field LAMA tidak diubah/dihapus, jadi konsumen existing
     (intelligence/scorer.py, intelligence/validator.py, database.py,
     api_server.py) tidak terdampak.
+
+CHANGELOG v2.1:
+  [BUG-FIX] _previous_calendar_day_ohlc() pakai konstanta hardcoded
+    86_400_000_000_000 (nanoseconds/hari) — salah untuk pandas >= 2.0 yang
+    mengubah dtype DatetimeIndex dari datetime64[ns] ke datetime64[us].
+    Akibatnya df.index.asi8 // 86_400_000_000_000 selalu menghasilkan bucket
+    0-20an (salah) alih-alih nomor hari epoch yang benar (~20600), sehingga
+    semua bar dianggap satu hari → helper selalu return None → pivot points
+    jatuh ke bar_fallback (nilai 160.67, salah) bukan daily OHLC (139.09).
+    Fix: tambah helper _ticks_per_day() yang auto-detect unit dari dtype string
+    ("[us", "[ms", "[s"), kompatibel dengan pandas 1.x (ns), 2.x & 3.x (us).
+    Diverifikasi: hasil identik dengan resample('1D') sebagai ground truth.
 """
 
 from __future__ import annotations
@@ -263,6 +275,25 @@ def score_sar(sar_value: Optional[float], sar_direction: Optional[str],
 # ══════════════════════════════════════════════════════════════════════════════
 # PIVOT POINTS (Classic Daily)
 # ══════════════════════════════════════════════════════════════════════════════
+def _ticks_per_day(idx: pd.DatetimeIndex) -> int:
+    """
+    [v2 BUG-FIX] Pandas 3.x berubah dari datetime64[ns] ke datetime64[us],
+    sehingga .asi8 sekarang mengembalikan MICROSECONDS bukan nanoseconds.
+    Fungsi ini mendeteksi unit dari dtype index secara otomatis agar pembagian
+    integer day-bucket selalu benar terlepas dari versi pandas yang dipakai.
+
+    Mapping: ns  → 86_400_000_000_000
+             us  → 86_400_000_000      ← pandas >= 2.0 default
+             ms  → 86_400_000
+             s   → 86_400
+    """
+    s = str(idx.dtype)
+    if "[us" in s:  return 86_400_000_000        # microseconds/hari (pandas >= 2.0)
+    if "[ms" in s:  return 86_400_000             # milliseconds/hari
+    if "[s," in s or s.endswith("[s]"): return 86_400  # seconds/hari
+    return 86_400_000_000_000                     # nanoseconds/hari (pandas < 2.0)
+
+
 def _previous_calendar_day_ohlc(df: pd.DataFrame) -> Optional[pd.Series]:
     """
     [v2 PERF] Cari H/L/C dari hari kalender PENUH terakhir TANPA overhead
@@ -272,22 +303,24 @@ def _previous_calendar_day_ohlc(df: pd.DataFrame) -> Optional[pd.Series]:
     dibutuhkan cuma agregat SATU hari, bukan resample seluruh histori.
 
     Strategi: bucket setiap bar ke "hari" via integer division
-    epoch-nanosecond (df.index.asi8 // NS_PER_DAY) — murni operasi numpy
-    int64, ~100x lebih cepat dari resample. Ini VALID selama index
-    tz-aware UTC atau tz-naive (konvensi seluruh pipeline ini — lihat
-    main.py: pd.to_datetime(..., utc=True)). Kalau index ternyata
-    bertimezone NON-UTC, integer-bucket bisa salah hari kalender LOKAL
-    (offset beberapa jam) — fallback otomatis ke .normalize() yang tetap
-    jauh lebih cepat dari resample dan tetap benar secara timezone.
+    (df.index.asi8 // ticks_per_day) — murni operasi numpy int64, ~100x
+    lebih cepat dari resample. Unit ticks_per_day di-detect otomatis via
+    _ticks_per_day() agar kompatibel dengan pandas 2.x (us) maupun 1.x (ns).
+
+    Untuk tz-naive atau UTC: integer-bucket langsung pada epoch ticks absolut,
+    hasil identik dengan resample('1D') UTC (diverifikasi unit-test).
+    Untuk tz NON-UTC: fallback ke .normalize().asi8 yang lebih lambat tapi
+    tetap benar secara hari kalender lokal.
     """
     if not isinstance(df.index, pd.DatetimeIndex) or len(df) < 2:
         return None
 
     tz = df.index.tz
     if tz is None or str(tz) == "UTC":
-        day_bucket = df.index.asi8 // 86_400_000_000_000  # ns per hari
+        tpd = _ticks_per_day(df.index)
+        day_bucket = df.index.asi8 // tpd          # unit-agnostic, auto-detect
     else:
-        day_bucket = df.index.normalize().asi8  # tetap cepat, correct utk tz manapun
+        day_bucket = df.index.normalize().asi8      # tetap cepat, correct utk tz manapun
 
     last_day = day_bucket[-1]
     mask_prev = day_bucket < last_day
