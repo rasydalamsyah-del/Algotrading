@@ -2676,6 +2676,15 @@ class TradingBot:
 
         self._close_retry_count.pop(pos.symbol, None)
 
+        # [UPGRADE] Reset orderbook state tracking untuk simbol ini setelah posisi
+        # ditutup — agar absorption/spoofing history tidak terbawa ke trade berikutnya.
+        # reset_state() ada di orderbook.py tapi belum pernah dipanggil dari manapun.
+        try:
+            from indicators.orderbook import reset_state as _ob_reset
+            _ob_reset(pos.symbol)
+        except Exception:
+            pass  # non-critical, jangan crash close flow
+
         taker_fee = self.exchange.get_taker_fee(pos.symbol)
 
         if pos.entry_price and pos.amount:
