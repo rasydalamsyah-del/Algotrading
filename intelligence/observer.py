@@ -33,7 +33,7 @@ from core.models import (
     OrderbookIndicators,
 )
 from indicators.trend import score_trend
-from indicators.momentum import score_momentum
+from indicators.momentum import score_momentum, _calc_rsi
 from indicators.strength import score_strength
 from indicators.volatility import score_volatility
 from indicators.patterns import score_pattern
@@ -124,14 +124,29 @@ def _build_indicator_set(
         iset.add_error("trend", str(exc))
         log.exception("%s/%s: Error kalkulasi trend: %s", symbol, timeframe, exc)
 
+    # [PERF v2.2] RSI(14) dihitung SEKALI di sini lalu dibagikan ke score_momentum
+    # dan score_strength — sebelumnya keduanya menghitung _calc_rsi() independen
+    # dengan period sama (14) dari close yang sama, ~19% waktu score_strength()
+    # terbuang untuk kerja dobel. Period 14 di sini cocok dengan default
+    # calculate_rsi_enhanced() (momentum.py) dan _MFI_PERIOD (strength.py).
+    # Kalau gagal dihitung (data kurang/exception), fallback None — masing-masing
+    # fungsi tetap menghitung sendiri seperti semula (backward-compatible).
+    shared_rsi_series: Optional[pd.Series] = None
     try:
-        iset.momentum = score_momentum(df, errors=errors)
+        if "close" in df.columns and len(df) >= 16:
+            shared_rsi_series = _calc_rsi(df["close"], 14)
+    except Exception as exc:
+        log.debug("%s/%s: Gagal precompute shared RSI: %s", symbol, timeframe, exc)
+        shared_rsi_series = None
+
+    try:
+        iset.momentum = score_momentum(df, errors=errors, rsi_series=shared_rsi_series)
     except Exception as exc:
         iset.add_error("momentum", str(exc))
         log.exception("%s/%s: Error kalkulasi momentum: %s", symbol, timeframe, exc)
 
     try:
-        iset.strength = score_strength(df, errors=errors)
+        iset.strength = score_strength(df, errors=errors, rsi_series=shared_rsi_series)
     except Exception as exc:
         iset.add_error("strength", str(exc))
         log.exception("%s/%s: Error kalkulasi strength: %s", symbol, timeframe, exc)
