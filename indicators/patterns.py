@@ -2,6 +2,22 @@
 indicators/patterns.py
 AlgoTrader Pro v7.0 — "The Intelligence Pipeline"
 
+CHANGELOG v2 (audit kualitas internal + field utilization):
+  [BUG-FIX] _is_volume_confirmed(): sebelumnya cek df[vol_col].iloc[-1] —
+           candle LIVE/belum closed. Semua fungsi detect_* di file ini
+           (engulfing, hammer, doji, marubozu) pakai iloc[-2] sebagai candle
+           pattern (konsisten dgn main.py: confirmed_ts = bars[-2][0]).
+           Dibuktikan dgn skenario: candle -2 volume 2.8x MA (harusnya
+           confirmed) tapi candle -1 baru 0.14x MA (live, wajar kecil) —
+           hasil lama False, seharusnya True. Diganti ke iloc[-2].
+  [CLEANUP] Hapus parameter require_volume_confirmation dari
+           _detect_engulfing_raw()/detect_engulfing() — diterima tapi tidak
+           pernah dipakai di body manapun, tidak ada caller yang pass False.
+  [UPGRADE] intelligence/validator.py: primary_pattern (field paling
+           informatif, sebelumnya 100% idle di luar file ini) dan
+           distance_to_support (asimetris dgn distance_to_resistance yg
+           sudah aktif) sekarang diaktifkan lewat _check_pattern_type_context()
+           dan _check_support_resistance_context().
 """
 
 from __future__ import annotations
@@ -77,11 +93,21 @@ def _get_volume_ma(df: pd.DataFrame) -> Optional[float]:
     return float(lookback.mean())
 
 def _is_volume_confirmed(df: pd.DataFrame) -> bool:
+    """
+    [BUG-FIX v2] Sebelumnya cek df[vol_col].iloc[-1] — itu candle LIVE/belum
+    closed (main.py pakai konvensi confirmed_ts = bars[-2][0], dan SEMUA
+    fungsi detect_* di file ini — engulfing, hammer, doji, marubozu — pakai
+    iloc[-2] sebagai candle pattern). Cek volume harus di candle YANG SAMA
+    dengan candle tempat pattern terdeteksi (-2), bukan candle selanjutnya
+    yang masih berjalan. Sebelumnya pattern dgn volume tinggi di candle -2
+    bisa salah dapat PATTERN_NO_CONFIRM_PENALTY karena candle -1 (baru
+    sebagian waktu berlalu) volumenya wajar kecil.
+    """
     vol_col = "quote_volume" if "quote_volume" in df.columns else "volume"
     if vol_col not in df.columns:
         return False
 
-    current_vol = float(df[vol_col].iloc[-1])
+    current_vol = float(df[vol_col].iloc[-2])
     vol_ma      = _get_volume_ma(df)
 
     if vol_ma is None or vol_ma < 1e-9:
@@ -160,9 +186,13 @@ def get_pattern_context(
 
 def _detect_engulfing_raw(
     df: pd.DataFrame,
-    require_volume_confirmation: bool = True,
     errors: Optional[List[str]] = None,
 ) -> Tuple[PatternType, float]:
+    # [CLEANUP v2] Parameter require_volume_confirmation dihapus — sebelumnya
+    # diterima tapi tidak pernah dipakai di body fungsi ini (volume confirmation
+    # yang sesungguhnya sudah ditangani terpisah lewat _is_volume_confirmed()
+    # yang dipanggil score_pattern(), bukan di sini), dan tidak ada caller yang
+    # pernah pass False — parameter ini 100% kosmetik/dead.
     if errors is None:
         errors = []
 
@@ -228,12 +258,10 @@ def _detect_engulfing_raw(
 
 def detect_engulfing(
     df: pd.DataFrame,
-    require_volume_confirmation: bool = True,
     errors: Optional[List[str]] = None,
 ) -> PatternIndicators:
     p, q = _detect_engulfing_raw(
         df,
-        require_volume_confirmation=require_volume_confirmation,
         errors=errors,
     )
     out = PatternIndicators()
