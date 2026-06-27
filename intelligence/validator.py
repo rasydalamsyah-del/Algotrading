@@ -739,62 +739,171 @@ def _check_structure_context(iset: IndicatorSet, result: ValidationResult) -> No
 
 
 def _check_orderbook_context(iset: IndicatorSet, result: ValidationResult) -> None:
-    """Orderbook imbalance & whale wall — tekanan beli/jual real-time."""
+    """[UPGRADE] Semua 22 field OrderbookIndicators kini aktif.
+
+    Sebelumnya hanya 6 field terpakai. Sekarang:
+    - imbalance_score      → skor kalkulasi imbalance bid/ask
+    - cluster_bid/ask_wall → wall yang terbentuk dari cluster level (lebih reliable dari single)
+    - bid/ask_wall_dist    → relevance factor: wall yang jauh = pengaruh kecil
+    - absorbed_bid         → bid wall terserap = breakdown signal (simetri absorbed_ask)
+    - whale_score          → sub-skor komposit whale activity
+    - spread_score         → spread kontekstual vs baseline historis coin ini
+    - absorption_score     → sub-skor absorption event
+    - liquidity_score      → total depth USDT → apakah cukup likuid untuk entry?
+    - spoofing_confidence  → berapa % wall yang kemungkinan genuine (bukan spoof)
+    """
     ob = iset.orderbook
     if not ob.is_valid():
         return
 
-    # Bid/Ask imbalance
+    price = iset.current_price
+
+    # ── Imbalance ─────────────────────────────────────────────────────────────
     imb = ob.bid_ask_imbalance
     if imb is not None:
         if imb >= 0.65:
             result.add_note(
-                f"✅ Orderbook: bid dominan ({imb:.2f}) — "
+                f"✅ Orderbook: bid dominan ({imb:.2f}, score={ob.imbalance_score:.0f}) — "
                 f"tekanan beli kuat, mendukung entry"
             )
             result.confidence_adjustment += 0.04
         elif imb <= 0.35:
             result.add_warning(
-                f"Orderbook: ask dominan ({imb:.2f}) — "
+                f"Orderbook: ask dominan ({imb:.2f}, score={ob.imbalance_score:.0f}) — "
                 f"tekanan jual kuat, hati-hati entry long",
                 confidence_penalty=0.08,
             )
         elif imb >= 0.55:
             result.add_note(f"📊 Orderbook: sedikit condong bid ({imb:.2f})")
 
-    # Whale ask wall — resistance besar
+    # ── Whale walls (single level) ────────────────────────────────────────────
     if ob.whale_ask_wall and ob.ask_wall_strength:
+        dist_adj = ob.ask_wall_dist if ob.ask_wall_dist is not None else 1.0
+        eff_str  = ob.ask_wall_strength * dist_adj
         result.add_warning(
             f"Whale ask wall di ${ob.whale_ask_wall:.6f} "
-            f"({ob.ask_wall_strength:.1f}% volume) — "
-            f"resistance kuat dari whale",
-            confidence_penalty=0.06,
+            f"({ob.ask_wall_strength:.1f}% vol, relevance={dist_adj:.2f}, eff={eff_str:.1f}) — "
+            f"resistance dari whale{' (dekat harga, sangat relevan)' if dist_adj > 0.7 else ' (jauh, pengaruh kecil)'}",
+            confidence_penalty=0.06 * dist_adj,
         )
 
-    # Whale bid wall — support besar
     if ob.whale_bid_wall and ob.bid_wall_strength:
+        dist_adj = ob.bid_wall_dist if ob.bid_wall_dist is not None else 1.0
         result.add_note(
             f"✅ Whale bid wall di ${ob.whale_bid_wall:.6f} "
-            f"({ob.bid_wall_strength:.1f}% volume) — "
+            f"({ob.bid_wall_strength:.1f}% vol, relevance={dist_adj:.2f}) — "
             f"support kuat dari whale"
         )
-        result.confidence_adjustment += 0.03
+        result.confidence_adjustment += 0.03 * dist_adj
 
-    # Absorbed ask wall = breakout signal
+    # ── Cluster walls (MSL-3): lebih reliable dari single wall ────────────────
+    if ob.cluster_bid_wall and ob.cluster_bid_str:
+        # Cluster berbeda dari whale wall = double support layer
+        is_different = (ob.cluster_bid_wall != ob.whale_bid_wall)
+        dist_adj = ob.bid_wall_dist if ob.bid_wall_dist is not None else 1.0
+        if is_different:
+            result.add_note(
+                f"✅ Cluster bid wall di ${ob.cluster_bid_wall:.6f} "
+                f"({ob.cluster_bid_str:.1f}% vol) — "
+                f"support berlapis: whale + cluster di level berbeda"
+            )
+            result.confidence_adjustment += 0.03 * dist_adj
+        else:
+            result.add_note(
+                f"✅ Bid wall dikonfirmasi cluster ({ob.cluster_bid_str:.1f}% vol) — "
+                f"wall lebih genuine, bukan single order"
+            )
+            result.confidence_adjustment += 0.02
+
+    if ob.cluster_ask_wall and ob.cluster_ask_str:
+        is_different = (ob.cluster_ask_wall != ob.whale_ask_wall)
+        dist_adj = ob.ask_wall_dist if ob.ask_wall_dist is not None else 1.0
+        if is_different:
+            result.add_warning(
+                f"Cluster ask wall di ${ob.cluster_ask_wall:.6f} "
+                f"({ob.cluster_ask_str:.1f}% vol) — "
+                f"resistance berlapis: whale + cluster",
+                confidence_penalty=0.04 * dist_adj,
+            )
+
+    # ── Absorption ────────────────────────────────────────────────────────────
     if ob.absorbed_ask:
         result.add_note(
-            "✅ Orderbook: whale ask wall terserap — "
-            "breakout signal kuat"
+            "🚀 Orderbook: whale ASK wall terserap — "
+            f"breakout signal kuat (absorption_score={ob.absorption_score:.0f})"
         )
-        result.confidence_adjustment += 0.05
+        result.confidence_adjustment += 0.06
 
-    # Spread lebar = likuiditas buruk
-    if ob.spread_pct and ob.spread_pct > 0.15:
+    if ob.absorbed_bid:
+        # [UPGRADE] absorbed_bid sebelumnya tidak dipakai — ini BEARISH signal
         result.add_warning(
-            f"Spread lebar ({ob.spread_pct:.3f}%) — "
-            f"likuiditas rendah, fee/slippage bisa besar",
-            confidence_penalty=0.03,
+            "⚠️ Orderbook: whale BID wall terserap — "
+            f"breakdown signal: support dari whale gagal menahan tekanan jual "
+            f"(absorption_score={ob.absorption_score:.0f})",
+            confidence_penalty=0.07,
         )
+
+    # ── Spoofing confidence ───────────────────────────────────────────────────
+    sc = ob.spoofing_confidence
+    if sc is not None and sc < 0.7:
+        result.add_warning(
+            f"⚠️ Spoofing confidence rendah ({sc:.2f}) — "
+            f"banyak wall kemungkinan tidak genuine, data orderbook kurang reliable",
+            confidence_penalty=0.05,
+        )
+    elif sc is not None and sc >= 0.90:
+        result.add_note(
+            f"✅ Spoofing confidence tinggi ({sc:.2f}) — "
+            f"wall-wall orderbook kemungkinan besar genuine"
+        )
+        result.confidence_adjustment += 0.02
+
+    # ── Liquidity score ───────────────────────────────────────────────────────
+    liq = ob.liquidity_score
+    if liq is not None:
+        if liq < 35:
+            result.add_warning(
+                f"Likuiditas orderbook rendah (score={liq:.0f}) — "
+                f"depth USDT tipis, slippage bisa besar untuk order ini",
+                confidence_penalty=0.05,
+            )
+        elif liq >= 70:
+            result.add_note(
+                f"✅ Likuiditas orderbook baik (score={liq:.0f}) — "
+                f"depth cukup untuk eksekusi bersih"
+            )
+            result.confidence_adjustment += 0.02
+
+    # ── Spread score (kontekstual vs baseline historis coin) ─────────────────
+    ssp = ob.spread_score
+    if ssp is not None and ssp <= 40:
+        result.add_warning(
+            f"Spread tidak normal (score={ssp:.0f}) — "
+            f"spread saat ini jauh di atas baseline historis coin ini, "
+            f"kondisi likuiditas memburuk",
+            confidence_penalty=0.04,
+        )
+    elif ssp is not None and ssp >= 80:
+        result.add_note(
+            f"✅ Spread normal/bagus (score={ssp:.0f}) — "
+            f"spread dalam range historis coin ini"
+        )
+
+    # ── Whale score composite ─────────────────────────────────────────────────
+    ws = ob.whale_score
+    if ws is not None:
+        if ws >= 65:
+            result.add_note(
+                f"✅ Whale score {ws:.0f} — "
+                f"aktivitas whale net bullish, mendukung entry"
+            )
+            result.confidence_adjustment += 0.02
+        elif ws <= 35:
+            result.add_warning(
+                f"Whale score {ws:.0f} — "
+                f"aktivitas whale net bearish",
+                confidence_penalty=0.04,
+            )
 
 
 def _check_trend_cross_context(
