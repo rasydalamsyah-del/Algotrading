@@ -21,6 +21,7 @@ from core.models import (
     MarketRegime,
     ObservationReport,
     PatternContext,
+    PatternType,
     ScoredSignal,
     clamp_score,
 )
@@ -92,6 +93,46 @@ def _check_macd_divergence(iset: IndicatorSet, result: ValidationResult) -> None
             confidence_penalty=0.05,
         )
 
+def _check_pattern_type_context(
+    iset: IndicatorSet,
+    result: ValidationResult,
+) -> None:
+    """
+    [UPGRADE] Aktifkan primary_pattern — field paling informatif di
+    PatternIndicators yang sebelumnya 100% idle di luar indicators/patterns.py.
+    Sebelumnya hanya pattern_score (angka komposit) yang mengalir ke sini;
+    JENIS pattern aktual (bullish_engulfing vs gravestone_doji dst) hilang.
+
+    validate_signal() di codebase ini cuma pernah dipakai untuk validasi
+    sinyal BUY/long (intelligence/scorer.py tidak pernah menghasilkan
+    signal_type="sell" — itu murni jalur exit terpisah di main.py), jadi
+    konvensi yang dipakai konsisten dengan check lain di file ini
+    (_check_macd_divergence dkk): bullish = bukti mendukung entry,
+    bearish = bukti melawan. Pattern netral (doji/spinning_top/squeeze/
+    climax/none) tidak punya arah, sengaja di-skip.
+    """
+    pattern = iset.patterns.primary_pattern
+    if pattern is None or pattern == PatternType.NONE:
+        return
+
+    is_bullish = pattern.is_bullish
+    if is_bullish is None:
+        return
+
+    pattern_label = pattern.value.replace("_", " ")
+
+    if is_bullish:
+        result.add_note(
+            f"✅ Pattern bullish '{pattern_label}' terdeteksi di candle terakhir"
+        )
+        result.confidence_adjustment += 0.04
+    else:
+        result.add_warning(
+            f"Pattern bearish '{pattern_label}' terdeteksi di candle terakhir — "
+            f"melawan arah entry long",
+            confidence_penalty=0.06,
+        )
+
 def _check_support_resistance_context(
     iset: IndicatorSet,
     result: ValidationResult,
@@ -99,7 +140,15 @@ def _check_support_resistance_context(
     context = iset.patterns.pattern_context
 
     if context == PatternContext.NEAR_SUPPORT:
-        result.add_note("✅ Harga dekat support — risk/reward favorable untuk entry")
+        # [UPGRADE] Aktifkan distance_to_support — sebelumnya idle, padahal
+        # pasangannya (distance_to_resistance) sudah ditampilkan di cabang
+        # NEAR_RESISTANCE. Sekadar info display, tidak mengubah besaran bonus
+        # (sama seperti pola yang dipakai di cabang resistance).
+        dist_to_sup = iset.patterns.distance_to_support
+        dist_str = f"{dist_to_sup:.2f}%" if dist_to_sup else "unknown"
+        result.add_note(
+            f"✅ Harga dekat support ({dist_str}) — risk/reward favorable untuk entry"
+        )
         result.confidence_adjustment += 0.04
 
     elif context == PatternContext.NEAR_RESISTANCE:
@@ -1592,14 +1641,17 @@ def _check_strength_context(
             )
 
     # -- Volume ratio + spike --
+    # [BUG-FIX v2.1] volume_climax SENGAJA tidak dicek di sini lagi — sebelumnya
+    # ada double-penalty: _check_volume_climax() (dipanggil terpisah di
+    # validate_signal, baris ~1659) SUDAH menghitung penalty -0.10 untuk
+    # st.volume_climax. Cabang ini dulu menambahkan -0.05 lagi untuk field yang
+    # SAMA, jadi total penalty diam-diam jadi -0.15 setiap kali volume climax
+    # terdeteksi. _check_volume_climax() tetap satu-satunya pemilik logic ini
+    # (juga sudah cover secondary_pattern == VOLUME_CLIMAX dari patterns.py).
     if st.volume_ratio is not None:
         from constants import VOLUME_RATIO_ELEVATED, VOLUME_RATIO_SPIKE
         if st.volume_climax:
-            result.add_warning(
-                f"Volume climax ({st.volume_ratio:.1f}x) — "
-                f"volume ekstrem sering menandai exhaustion/reversal, bukan continuation",
-                confidence_penalty=0.05,
-            )
+            pass  # ditangani oleh _check_volume_climax(), jangan duplikasi penalty
         elif st.volume_spike:
             result.add_note(
                 f"✅ Volume spike ({st.volume_ratio:.1f}x) — "
@@ -1653,6 +1705,8 @@ def validate_signal(
     _check_macd_divergence(iset, result)
 
     _check_support_resistance_context(iset, result)
+
+    _check_pattern_type_context(iset, result)
 
     _check_higher_tf_alignment(observation, result)
 
