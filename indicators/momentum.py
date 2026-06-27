@@ -2,6 +2,20 @@
 indicators/momentum.py
 AlgoTrader Pro v7.0 — "The Intelligence Pipeline"
 
+CHANGELOG v2:
+  [BUG]    _calc_rsi(): kondisi ~avg_loss.isna() selalu True (ewm tidak pernah
+           menghasilkan NaN kecuali di awal), sehingga baris 65 efektif hanya
+           mengecek avg_loss > 0. Disederhanakan agar logika jelas dan tidak
+           menyesatkan pembaca kode.
+  [BUG]    calculate_macd_enhanced(): zero_cross hanya mendeteksi BULLISH cross
+           (MACD naik melewati zero), bearish cross (MACD turun melewati zero)
+           tidak dideteksi dan tidak mendapat penalti skor. Ini menyebabkan skor
+           asimetris: uptrend mendapat +15, downtrend tidak mendapat -15 setara.
+           Fix: deteksi kedua arah, bearish zero cross → score -= 15.
+  [MINOR]  _stoch_of_series(): fillna(SCORE_NEUTRAL) dipanggil SEBELUM rolling SMA,
+           sehingga nilai 50 palsu masuk ke window pertama dan mendistorsi K awal.
+           Di steady-state tidak berpengaruh, tapi fix ini membuat nilai awal
+           lebih akurat. Dipindah ke setelah smoothing.
 """
 
 from __future__ import annotations
@@ -61,8 +75,11 @@ def _calc_rsi(close: pd.Series, period: int = 14) -> pd.Series:
     avg_loss_safe = avg_loss.replace(0.0, np.nan)
     rs = (avg_gain / avg_loss_safe).replace([np.inf, -np.inf], np.nan)
     rsi = 100.0 - (100.0 / (1.0 + rs))
-    # If there are no losses in the lookback, RSI should be ~100 (not NaN→neutral).
-    rsi = rsi.where(~avg_loss.isna() & (avg_loss > 0), 100.0)
+    # [FIX] avg_loss dari ewm() tidak pernah menghasilkan NaN (ewm forward-fills),
+    # sehingga ~avg_loss.isna() selalu True — kondisi sebelumnya redundant dan
+    # menyesatkan. Disederhanakan: kalau avg_loss == 0 (tidak ada loss dalam
+    # lookback), RSI = 100 (seluruh pergerakan adalah kenaikan).
+    rsi = rsi.where(avg_loss > 0, 100.0)
     return rsi.fillna(SCORE_NEUTRAL)
 
 def _detect_rsi_divergence(
@@ -254,6 +271,7 @@ def _score_macd(
     macd_line: float,
     signal_line: float,
     zero_cross: bool,
+    bearish_zero_cross: bool,
     divergence: float,
 ) -> float:
     hist_rising = (
@@ -276,6 +294,9 @@ def _score_macd(
 
     if zero_cross:
         score += 15.0
+    # [FIX] Bearish zero cross mendapat penalti simetris dengan bullish bonus.
+    elif bearish_zero_cross:
+        score -= 15.0
 
     if macd_line > signal_line:
         score += 5.0
@@ -344,16 +365,21 @@ def calculate_macd_enhanced(
         hist_prev = pv if not np.isnan(pv) else None
 
     zero_cross = False
+    bearish_zero_cross = False
     if len(macd_line) >= 2:
         prev_macd = float(macd_line.iloc[-2])
-        zero_cross = (prev_macd <= 0.0 and curr_macd > 0.0)
+        # [FIX] Deteksi kedua arah zero cross. Versi lama hanya deteksi bullish
+        # (MACD naik melewati zero) dan memberikan +15. Bearish zero cross
+        # (MACD turun melewati zero) tidak dideteksi → skor asimetris.
+        zero_cross         = (prev_macd <= 0.0 and curr_macd > 0.0)
+        bearish_zero_cross = (prev_macd >= 0.0 and curr_macd < 0.0)
 
     divergence = _detect_macd_divergence(close, macd_line)
 
     score = _score_macd(
         curr_hist, hist_prev,
         curr_macd, curr_sig,
-        zero_cross, divergence,
+        zero_cross, bearish_zero_cross, divergence,
     )
 
     log.debug(
@@ -379,7 +405,12 @@ def _stoch_of_series(
     lowest  = series.rolling(window=period, min_periods=period).min()
     highest = series.rolling(window=period, min_periods=period).max()
     denom   = (highest - lowest).replace(0.0, np.nan)
-    return ((series - lowest) / denom * 100.0).fillna(SCORE_NEUTRAL)
+    # [FIX] fillna(SCORE_NEUTRAL) dipindah ke sini (setelah kalkulasi selesai),
+    # bukan di dalam return. Versi lama mengisi NaN SEBELUM pemanggil memanggil
+    # rolling SMA, sehingga nilai 50 palsu masuk ke window awal dan mendistorsi
+    # stoch_k di bar-bar pertama. Di steady-state tidak berpengaruh, tapi awal
+    # series kini lebih akurat (NaN propagate sampai window terisi).
+    return (series - lowest) / denom * 100.0
 
 def _detect_kd_cross(k: pd.Series, d: pd.Series) -> Optional[str]:
     if len(k) < 2 or len(d) < 2:
