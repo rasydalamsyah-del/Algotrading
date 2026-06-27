@@ -183,6 +183,10 @@ class MomentumIndicators:
     stoch_kd_cross:    Optional[str]   = None
     stoch_zone:        Optional[str]   = None
     stoch_score:       float           = 50.0
+    # [UPGRADE] VWMA — Volume Weighted MA dari ta_compat.vwma(), sebelumnya idle
+    vwma:              Optional[float] = None   # nilai VWMA_20
+    vwma_vs_sma:       Optional[float] = None   # VWMA - SMA: positif = vol berat di atas avg
+    vwma_score:        float           = 50.0
     composite_score: float = 50.0
 
     def is_valid(self) -> bool:
