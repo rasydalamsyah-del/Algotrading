@@ -175,7 +175,16 @@ def calculate_rsi_enhanced(
     df: pd.DataFrame,
     period: int = 14,
     errors: Optional[List[str]] = None,
+    rsi_series: Optional[pd.Series] = None,
 ) -> MomentumIndicators:
+    """
+    [PERF v2.2] Parameter rsi_series opsional — kalau caller (observer.py)
+    sudah menghitung RSI(14) di tempat lain dengan period yang sama, series
+    itu bisa di-pass langsung ke sini supaya tidak dihitung ulang dari nol.
+    Kalau None (default) atau panjangnya tidak cocok dengan df, dihitung
+    sendiri seperti biasa — tetap backward-compatible untuk pemanggilan
+    mandiri/self-test dengan period custom.
+    """
     if errors is None:
         errors = []
 
@@ -204,8 +213,9 @@ def calculate_rsi_enhanced(
             composite_score=SCORE_NEUTRAL,
         )
 
-    close     = df["close"]
-    rsi_series = _calc_rsi(close, period)
+    close = df["close"]
+    use_external = rsi_series is not None and len(rsi_series) == len(df)
+    rsi_series = rsi_series if use_external else _calc_rsi(close, period)
     rsi_val = float(rsi_series.iloc[-1])
 
     half = max(1, period // 2)
@@ -553,13 +563,14 @@ def calculate_stochastic_rsi(
 def score_momentum(
     df: pd.DataFrame,
     errors: Optional[List[str]] = None,
+    rsi_series: Optional[pd.Series] = None,
 ) -> MomentumIndicators:
     if errors is None:
         errors = []
 
     result = MomentumIndicators()
 
-    rsi_res = calculate_rsi_enhanced(df, errors=errors)
+    rsi_res = calculate_rsi_enhanced(df, errors=errors, rsi_series=rsi_series)
     result.rsi            = rsi_res.rsi
     result.rsi_slope      = rsi_res.rsi_slope
     result.rsi_divergence = rsi_res.rsi_divergence
