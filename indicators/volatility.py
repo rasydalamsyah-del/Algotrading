@@ -683,4 +683,3 @@ def calculate_all(
     errors: Optional[List[str]] = None,
 ) -> VolatilityIndicators:
     return score_volatility(df, errors=errors)
-   
