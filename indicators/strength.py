@@ -12,6 +12,25 @@ CHANGELOG v2:
   [UPGRADE] intelligence/validator.py: 3 check baru yang mengaktifkan field
            obv, obv_trend, mfi_divergence yang sebelumnya idle:
            _check_strength_context() → adx/di/volume/obv/mfi terintegrasi penuh.
+
+CHANGELOG v3 (audit kualitas internal + potensi cross-file):
+  [BUG-FIX] intelligence/validator.py _check_strength_context(): volume_climax
+           double-penalty — _check_volume_climax() (existing) dan
+           _check_strength_context() (baru) keduanya menghitung penalty untuk
+           field st.volume_climax yang sama (-0.10 dan -0.05), total diam-diam
+           jadi -0.15. Dihapus dari _check_strength_context(), satu-satunya
+           pemilik logic sekarang _check_volume_climax().
+  [PERF]   calculate_money_flow()/score_strength(): parameter rsi_series
+           opsional — sebelumnya _calc_rsi() dihitung ulang dari nol di sini
+           hanya untuk deteksi MFI-RSI divergence, padahal score_momentum()
+           (dipanggil tepat sebelum score_strength() di observer.py) baru saja
+           menghitung RSI(14) identik dari close yang sama. Benchmark: ~19%
+           dari total waktu score_strength() (1.39ms dari 7.31ms). Sekarang
+           observer.py menghitung RSI sekali dan membaginya ke kedua fungsi;
+           tetap backward-compatible (fallback hitung sendiri kalau None).
+  [CLEANUP] calculate_volume_analysis() & _calc_mfi(): hapus
+           df["volume"].replace(0.0, 0.0) — no-op (replace 0.0 dengan 0.0),
+           sisa refactor yang membingungkan, tidak ada dampak numerik.
 """
 
 from __future__ import annotations
@@ -337,7 +356,10 @@ def calculate_volume_analysis(
     ratio  = last_vol / last_ma
     spike  = ratio >= VOLUME_RATIO_SPIKE
     climax = ratio >= VOLUME_RATIO_CLIMAX
-    raw_volume = df["volume"].replace(0.0, 0.0)
+    # [CLEANUP v2.1] Sebelumnya: df["volume"].replace(0.0, 0.0) — no-op (replace
+    # 0.0 dengan 0.0 = tidak melakukan apapun), sisa refactor yang membingungkan.
+    # OBV aman terima volume=0.0 mentah karena tidak ada divisi di sini.
+    raw_volume = df["volume"]
     obv_series  = _calc_obv(close, raw_volume)
     obv_val     = float(obv_series.iloc[-1])
     obv_trend_str = _obv_trend(obv_series)
@@ -362,7 +384,10 @@ def _calc_mfi(df: pd.DataFrame, period: int) -> pd.Series:
     high   = df["high"]
     low    = df["low"]
     close  = df["close"]
-    volume = df["volume"].replace(0.0, 0.0)
+    # [CLEANUP v2.1] Sebelumnya: df["volume"].replace(0.0, 0.0) — no-op, sama
+    # seperti di calculate_volume_analysis(). raw_mf = typical_price * volume
+    # aman terima 0.0 mentah (tidak ada divisi pada volume di sini).
+    volume = df["volume"]
     typical_price = (high + low + close) / 3.0
     raw_mf        = typical_price * volume
     tp_change    = typical_price.diff()
@@ -428,7 +453,19 @@ def calculate_money_flow(
     df: pd.DataFrame,
     period: int = _MFI_PERIOD,
     errors: Optional[List[str]] = None,
+    rsi_series: Optional[pd.Series] = None,
 ) -> StrengthIndicators:
+    """
+    [PERF v2.1] Parameter rsi_series opsional — RSI(14) dipakai di sini hanya
+    untuk deteksi divergence MFI-vs-RSI, dan period-nya (_MFI_PERIOD=14) sama
+    persis dengan RSI default di momentum.py. Sebelumnya _calc_rsi() dihitung
+    ulang dari nol di sini meskipun score_momentum() baru saja menghitung RSI
+    yang identik dari close yang sama — benchmark menunjukkan ini ~19% dari
+    total waktu score_strength(). Kalau observer.py meneruskan rsi_series
+    yang sudah dihitung, dipakai langsung. Kalau None/panjang tidak cocok
+    (misal dipanggil mandiri dengan period custom), dihitung sendiri seperti
+    biasa — tetap backward-compatible.
+    """
     if errors is None:
         errors = []
 
@@ -457,7 +494,8 @@ def calculate_money_flow(
     from indicators.momentum import _calc_rsi
     mfi_series = _calc_mfi(df, period)
     mfi_val    = float(mfi_series.iloc[-1])
-    rsi_series = _calc_rsi(df["close"], period)
+    use_external = rsi_series is not None and len(rsi_series) == len(df)
+    rsi_series = rsi_series if use_external else _calc_rsi(df["close"], period)
     mfi_div = _detect_mfi_rsi_divergence(mfi_series, rsi_series)
     score = _score_mfi(mfi_val, mfi_div)
 
@@ -476,6 +514,7 @@ def calculate_money_flow(
 def score_strength(
     df: pd.DataFrame,
     errors: Optional[List[str]] = None,
+    rsi_series: Optional[pd.Series] = None,
 ) -> StrengthIndicators:
     if errors is None:
         errors = []
@@ -500,7 +539,7 @@ def score_strength(
     result.volume_score  = vol_res.volume_score
     vol_ok = result.volume_ratio is not None
 
-    mfi_res = calculate_money_flow(df, errors=errors)
+    mfi_res = calculate_money_flow(df, errors=errors, rsi_series=rsi_series)
     result.mfi           = mfi_res.mfi
     result.mfi_divergence = mfi_res.mfi_divergence
     result.mfi_score     = mfi_res.mfi_score
