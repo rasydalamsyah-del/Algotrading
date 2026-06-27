@@ -462,7 +462,28 @@ def _check_macd_context(
         )
         result.confidence_adjustment += 0.06
 
-    # macd_hist_prev: cek apakah histogram membaik (hist > hist_prev)
+    # -- vwma_vs_sma: konfirmasi volume mendukung momentum --
+    # [UPGRADE] field vwma dan vwma_vs_sma dari ta_compat.vwma()
+    if mom.vwma is not None and mom.vwma_vs_sma is not None:
+        diff = mom.vwma_vs_sma
+        if diff > 1.5:
+            result.add_note(
+                f"✅ VWMA > SMA (+{diff:.2f}%) — volume lebih berat di bar bullish: "
+                f"momentum dikonfirmasi oleh volume"
+            )
+            result.confidence_adjustment += 0.04
+        elif diff > 0.5:
+            result.add_note(
+                f"✅ VWMA sedikit di atas SMA (+{diff:.2f}%) — "
+                f"volume support moderat"
+            )
+            result.confidence_adjustment += 0.02
+        elif diff < -1.5:
+            result.add_warning(
+                f"VWMA < SMA ({diff:.2f}%) — volume lebih berat di bar bearish: "
+                f"momentum kurang dikonfirmasi volume, potensi fake breakout",
+                confidence_penalty=0.05,
+            )
     if mom.macd_histogram is not None and mom.macd_hist_prev is not None:
         improving = mom.macd_histogram > mom.macd_hist_prev
         if mom.macd_histogram < 0 and not improving:
@@ -1483,6 +1504,122 @@ def _check_donchian_context(
         result.confidence_adjustment += 0.02
 
 
+def _check_strength_context(
+    iset: IndicatorSet,
+    result: ValidationResult,
+) -> None:
+    """[UPGRADE] Aktifkan obv, obv_trend, mfi_divergence yang sebelumnya idle.
+
+    Strength indicators mengukur KEKUATAN trend, bukan arahnya:
+    - ADX/DI: sudah dipakai di _check_oscillator_context
+    - obv + obv_trend: konfirmasi volume flow searah price action
+    - mfi_divergence:  divergence antara MFI dan RSI = early warning reversal
+    """
+    st = iset.strength
+    if st is None or st.composite_score is None:
+        return
+
+    # -- OBV trend: apakah volume flow searah price? --
+    obv_trend = st.obv_trend
+    if obv_trend == "rising":
+        result.add_note(
+            f"✅ OBV rising — volume flow mengonfirmasi uptrend: "
+            f"tekanan akumulasi lebih besar dari distribusi"
+        )
+        result.confidence_adjustment += 0.04
+    elif obv_trend == "falling":
+        result.add_warning(
+            "OBV falling — volume flow berlawanan dengan price: "
+            "distribusi lebih dominan, potensi weakness tersembunyi",
+            confidence_penalty=0.06,
+        )
+
+    # -- OBV nilai absolut: konteks apakah OBV di puncak historis atau tidak --
+    if st.obv is not None:
+        # Informasi OBV absolut penting untuk divergence manual
+        # Tapi tanpa historical series kita tidak bisa hitung puncak
+        # Cukup log sebagai informatif — nilai disediakan untuk konsumen
+        pass
+
+    # -- MFI divergence: MFI dan RSI bergerak berbeda = peringatan --
+    mfi_div = st.mfi_divergence
+    if mfi_div is not None and mfi_div != 0.0:
+        from constants import RSI_DIVERGENCE_THRESHOLD
+        if mfi_div > RSI_DIVERGENCE_THRESHOLD:
+            result.add_note(
+                f"✅ MFI-RSI divergence bullish ({mfi_div:+.1f}) — "
+                f"money flow (MFI) naik lebih cepat dari RSI: "
+                f"tekanan beli berbasis volume lebih kuat dari momentum harga"
+            )
+            result.confidence_adjustment += 0.05
+        elif mfi_div < -RSI_DIVERGENCE_THRESHOLD:
+            result.add_warning(
+                f"MFI-RSI divergence bearish ({mfi_div:+.1f}) — "
+                f"money flow turun lebih cepat dari RSI: "
+                f"volume selling pressure lebih besar dari yang terlihat di harga",
+                confidence_penalty=0.06,
+            )
+
+    # -- ADX kekuatan trend: ADX < 20 = sideways = sinyal trend lebih berisiko --
+    if st.adx is not None:
+        from constants import ADX_WEAK_TREND, ADX_STRONG_TREND
+        if st.adx < ADX_WEAK_TREND:
+            result.add_warning(
+                f"ADX rendah ({st.adx:.1f} < {ADX_WEAK_TREND}) — "
+                f"trend sangat lemah/sideways: sinyal trend-following lebih berisiko",
+                confidence_penalty=0.05,
+            )
+        elif st.adx >= ADX_STRONG_TREND:
+            result.add_note(
+                f"✅ ADX kuat ({st.adx:.1f}) — "
+                f"trend established: sinyal trend-following lebih reliable"
+            )
+            result.confidence_adjustment += 0.03
+
+    # -- DI alignment: +DI > -DI = directional bias bullish --
+    if st.plus_di is not None and st.minus_di is not None:
+        if st.plus_di > st.minus_di * 1.5:
+            result.add_note(
+                f"✅ DI+ ({st.plus_di:.1f}) jauh di atas DI- ({st.minus_di:.1f}) — "
+                f"directional pressure bullish dominan"
+            )
+            result.confidence_adjustment += 0.03
+        elif st.minus_di > st.plus_di * 1.5:
+            result.add_warning(
+                f"DI- ({st.minus_di:.1f}) jauh di atas DI+ ({st.plus_di:.1f}) — "
+                f"directional pressure bearish dominan",
+                confidence_penalty=0.05,
+            )
+
+    # -- Volume ratio + spike --
+    if st.volume_ratio is not None:
+        from constants import VOLUME_RATIO_ELEVATED, VOLUME_RATIO_SPIKE
+        if st.volume_climax:
+            result.add_warning(
+                f"Volume climax ({st.volume_ratio:.1f}x) — "
+                f"volume ekstrem sering menandai exhaustion/reversal, bukan continuation",
+                confidence_penalty=0.05,
+            )
+        elif st.volume_spike:
+            result.add_note(
+                f"✅ Volume spike ({st.volume_ratio:.1f}x) — "
+                f"volume tinggi mengonfirmasi momentum breakout"
+            )
+            result.confidence_adjustment += 0.04
+        elif st.volume_ratio >= VOLUME_RATIO_ELEVATED:
+            result.add_note(
+                f"✅ Volume elevated ({st.volume_ratio:.1f}x rata-rata) — "
+                f"partisipasi pasar meningkat"
+            )
+            result.confidence_adjustment += 0.02
+        elif st.volume_ratio < 0.7:
+            result.add_warning(
+                f"Volume rendah ({st.volume_ratio:.1f}x rata-rata) — "
+                f"breakout tanpa volume berisiko false breakout",
+                confidence_penalty=0.04,
+            )
+
+
 def validate_signal(
     signal: ScoredSignal,
     db_manager=None,
@@ -1528,6 +1665,7 @@ def validate_signal(
     _check_kc_context(iset, result)
     _check_macd_context(iset, result)
     _check_stoch_context(iset, result)
+    _check_strength_context(iset, result)
 
     _check_oscillator_context(iset, result)
 
