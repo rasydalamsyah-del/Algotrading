@@ -47,9 +47,10 @@ from core.models import MomentumIndicators, clamp_score
 
 log = logging.getLogger("indicators.momentum")
 
-_RSI_WEIGHT      = 0.40
-_MACD_WEIGHT     = 0.35
-_STOCH_WEIGHT    = 0.25
+_RSI_WEIGHT      = 0.35
+_MACD_WEIGHT     = 0.30
+_STOCH_WEIGHT    = 0.22
+_VWMA_WEIGHT     = 0.13   # [UPGRADE] VWMA dari ta_compat, konfirmasi volume-momentum
 _DIVERGENCE_LOOKBACK = 20
 _STOCH_RSI_PERIOD  = 14
 _STOCH_PERIOD      = 14
@@ -584,10 +585,49 @@ def score_momentum(
     result.stoch_score    = stoch_res.stoch_score
     stoch_ok = result.stoch_k is not None
 
+    # [UPGRADE] VWMA dari ta_compat — konfirmasi volume-weighted momentum
+    # VWMA > SMA: volume lebih berat di bar-bar bullish → momentum valid
+    # VWMA < SMA: volume lebih berat di bar-bar bearish → momentum lemah/fake
+    vwma_ok = False
+    try:
+        if "close" in df.columns and "volume" in df.columns and len(df) >= 20:
+            period   = 20
+            pv       = df["close"] * df["volume"]
+            vwma_val = float(
+                pv.rolling(period, min_periods=period).sum().iloc[-1]
+                / df["volume"].rolling(period, min_periods=period).sum().replace(0, np.nan).iloc[-1]
+            )
+            sma_val  = float(df["close"].rolling(period, min_periods=period).mean().iloc[-1])
+
+            if not (np.isnan(vwma_val) or np.isnan(sma_val)):
+                diff = vwma_val - sma_val
+                diff_pct = diff / sma_val * 100 if sma_val > 0 else 0.0
+
+                result.vwma        = vwma_val
+                result.vwma_vs_sma = diff_pct
+
+                # Scoring: VWMA > SMA = bullish volume support
+                if diff_pct > 1.5:
+                    vwma_score = 78.0
+                elif diff_pct > 0.5:
+                    vwma_score = 65.0
+                elif diff_pct > -0.5:
+                    vwma_score = 52.0
+                elif diff_pct > -1.5:
+                    vwma_score = 38.0
+                else:
+                    vwma_score = 25.0
+
+                result.vwma_score = clamp_score(vwma_score)
+                vwma_ok = True
+    except Exception as exc:
+        errors.append(f"vwma: {exc}")
+
     sub_indicators = [
         (_RSI_WEIGHT,   rsi_ok,   result.rsi_score),
         (_MACD_WEIGHT,  macd_ok,  result.macd_score),
         (_STOCH_WEIGHT, stoch_ok, result.stoch_score),
+        (_VWMA_WEIGHT,  vwma_ok,  result.vwma_score),
     ]
 
     total_weight_available = sum(w for w, ok, _ in sub_indicators if ok)
@@ -607,8 +647,9 @@ def score_momentum(
     result.composite_score = clamp_score(composite)
 
     log.debug(
-        "momentum composite: rsi=%.1f macd=%.1f stoch=%.1f → composite=%.1f",
-        result.rsi_score, result.macd_score, result.stoch_score, result.composite_score,
+        "momentum composite: rsi=%.1f macd=%.1f stoch=%.1f vwma=%.1f → composite=%.1f",
+        result.rsi_score, result.macd_score, result.stoch_score,
+        result.vwma_score, result.composite_score,
     )
 
     return result
