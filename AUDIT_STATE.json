@@ -154,13 +154,17 @@
         "auto_scan_blocking_call_di_event_loop"
       ],
       "catatan": "Bug cross-file paling penting: WebSocketFeed tidak punya method get_orderbook() tapi api_server.py endpoint GET /api/orderbook/{symbol} memanggilnya — endpoint ini SELALU balas HTTP 502 sebelum fix ini. Ditambahkan [TAMBAHAN]. Bug lain: WebSocketFeed.__init__ pakai parameter symbols mentah (bukan self.symbols) di 4 dict comprehension, crash kalau symbols=None (default-nya). _retry() bisa 'raise None' kalau retries<=0 (belum pernah ke-trigger, tapi unsafe). scan_binance_universe() blocking call sinkron dipindah ke run_in_executor agar tidak freeze event loop saat startup — diverifikasi dengan test konkurensi nyata. TEMUAN UNTUK SESI BERIKUTNYA (intelligence/commander.py, Tier 1): di baris ~230, fallback getattr untuk cari method spread (get_current_spread_pct/get_spread_pct/get_spread) salah pakai exchange_connector.__dict__ (instance dict) untuk cek keberadaan method — method class TIDAK akan pernah muncul di situ, jadi spread_pct selalu None walau method-nya benar-benar ada & jalan (dibuktikan dipakai langsung di api_server.py). Perlu di-fix saat audit commander.py."
+    },
+    "execution.py": {
+      "status": "DONE",
+      "bug_fixed": [
+        "iceberg_chunk_tidak_cek_min_amount_min_cost",
+        "type_hint_max_slippage_override"
+      ],
+      "catatan": "Bug utama: _execute_iceberg() bagi total order jadi 4 chunk tetap tanpa cek min_amount/min_cost exchange per-chunk. Order besar yang lolos validasi total bisa berakhir 0/4 chunk filled kalau tiap chunk di bawah minimum exchange (silently caught di except generik). Fix: jumlah chunk diturunkan otomatis (minimal 1) sampai tiap chunk >= min_amount & min_cost. Diverifikasi dengan test: order kecil yang sebelumnya akan terbagi jadi 4x gagal, sekarang otomatis jadi 1 chunk yang valid. OBSERVASI (tidak diubah, sengaja): _check_slippage() REST-fallback fail OPEN — kalau fetch_ticker gagal total, order tetap diizinkan (slip_ok=True) bukan ditolak. Ada log eksplisit 'order diizinkan' jadi sepertinya disengaja, tapi worth flag ke user karena ini fungsi risk-guard."
     }
   },
   "file_belum_diaudit": {
-    "execution.py": {
-      "status": "PENDING",
-      "ukuran": "10 fungsi, 1 class"
-    },
     "risk.py": {
       "status": "PENDING",
       "ukuran": "37 fungsi, 4 class"

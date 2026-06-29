@@ -196,7 +196,7 @@ class OrderExecutionManager:
         signal_price: float,
         side:         str,
         amount:       float,
-        max_slippage_override: float = None,
+        max_slippage_override: Optional[float] = None,
     ) -> Tuple[bool, float, float]:
         effective_max = max_slippage_override if max_slippage_override is not None else self.max_slippage_pct
         if signal_price <= 0:
@@ -385,16 +385,40 @@ class OrderExecutionManager:
         side:       str,
     ) -> List[Trade]:
         total = assessment.approved_size
-        chunk = total / self.ICEBERG_CHUNK_COUNT
+
+        # [BUG-FIX] Chunk iceberg bisa di bawah min_amount/min_cost exchange.
+        # Sebelumnya: chunk = total / ICEBERG_CHUNK_COUNT (selalu 4), tanpa cek
+        # minimum order exchange sama sekali. execute_signal() memvalidasi
+        # min_amount/min_cost terhadap `total`, tapi begitu order dipecah jadi
+        # 4 chunk, tiap chunk bisa jatuh di bawah minimum walau total-nya lolos
+        # — exchange akan menolak create_order() tiap chunk, ditangkap except
+        # generik di bawah, log error tapi loop tetap lanjut ke chunk berikut
+        # (bisa berakhir 0/4 chunk filled tanpa sinyal jelas ke caller).
+        # Sekarang: turunkan jumlah chunk otomatis (minimal 1) sampai tiap
+        # chunk memenuhi min_amount & min_cost exchange.
+        chunk_count = self.ICEBERG_CHUNK_COUNT
+        if self.exchange:
+            mkt        = self.exchange.get_market_info(signal.symbol)
+            min_amount = mkt.get("min_amount") or 0
+            min_cost   = mkt.get("min_cost")   or 0
+            while chunk_count > 1:
+                test_chunk = total / chunk_count
+                test_cost  = test_chunk * signal.price
+                if (min_amount and test_chunk < min_amount) or (min_cost and test_cost < min_cost):
+                    chunk_count -= 1
+                    continue
+                break
+
+        chunk = total / chunk_count
         done: List[Trade] = []
         actual_filled = 0.0
     
         log.info(
             "Iceberg: total=%.8f × %d chunks = %.8f each",
-            total, self.ICEBERG_CHUNK_COUNT, chunk,
+            total, chunk_count, chunk,
         )
     
-        for i in range(self.ICEBERG_CHUNK_COUNT):
+        for i in range(chunk_count):
             slip_ok, _, _ = await self._check_slippage(
                 signal.symbol, signal.price, side, chunk
             )
@@ -405,8 +429,8 @@ class OrderExecutionManager:
                     log.warning(
                         "Iceberg chunk %d/%d diblokir slippage — "
                         "PARTIAL FILL: %d/%d chunk terisi (%.8f unit).",
-                        i + 1, self.ICEBERG_CHUNK_COUNT,
-                        filled_so_far, self.ICEBERG_CHUNK_COUNT, partial_amount
+                        i + 1, chunk_count,
+                        filled_so_far, chunk_count, partial_amount
                     )
                     await self.db.save_log(
                         "WARNING", "execution",
@@ -416,7 +440,7 @@ class OrderExecutionManager:
                 else:
                     log.warning(
                         "Iceberg chunk %d/%d diblokir slippage guard (0 filled).",
-                        i + 1, self.ICEBERG_CHUNK_COUNT
+                        i + 1, chunk_count
                     )
                 break
     
@@ -438,12 +462,12 @@ class OrderExecutionManager:
                 )
                 if trade:
                     done.append(trade)
-                if i < self.ICEBERG_CHUNK_COUNT - 1:
+                if i < chunk_count - 1:
                     await asyncio.sleep(0.8)
             except Exception as e:
                 log.error(
                     "Iceberg chunk %d/%d GAGAL [%s]: %s",
-                    i + 1, self.ICEBERG_CHUNK_COUNT, signal.symbol, e
+                    i + 1, chunk_count, signal.symbol, e
                 )
 
         expected_max = total 
@@ -464,14 +488,14 @@ class OrderExecutionManager:
 
         log.info(
             "Iceberg selesai: %d/%d chunks filled | actual=%.8f | %s",
-            len(done), self.ICEBERG_CHUNK_COUNT, actual_filled, signal.symbol
+            len(done), chunk_count, actual_filled, signal.symbol
         )
     
         if done:
             await self.db.append_trade_note(
                 done[0].id,
                 f"iceberg_actual_filled={actual_filled:.8f}"
-                f"|chunks={len(done)}/{self.ICEBERG_CHUNK_COUNT}"
+                f"|chunks={len(done)}/{chunk_count}"
             )
     
         return done
