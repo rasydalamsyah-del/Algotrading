@@ -14,6 +14,14 @@ Changelog v1:
   [MSL-7] OrderbookIndicators di models.py diperluas dengan sub-scores baru.
   [BUG-2] simulate_test.py import alias dan signature mismatch diperbaiki.
 
+Changelog v3.1:
+  [BUG-FIX] imbalance_score — diskontinuitas 10.2 poin di kedua boundary:
+            bull branch (imb>=0.62) mulai dari 65.0, tapi neutral branch berakhir
+            di 54.8 → lompatan 10.2 yang tidak wajar. Begitu pula di sisi bear.
+            Fix: anchor bull/bear branch ke nilai neutral branch di boundary-nya
+            (54.8 dan 45.2) sehingga scoring kontinu di seluruh range [0,1].
+            Range baru: 10→45.2→50→54.8→90 (monoton, tidak ada lompatan).
+
 Changelog v3:
   [BUG-A FIX] Spoofing penalty sebelumnya membandingkan current vs current karena
               state.prev_bid_walls sudah di-overwrite sebelum _spoofing_penalty
@@ -483,12 +491,21 @@ def calculate_orderbook(ob: dict, symbol: str = "_default") -> dict:
         imb = round(bid_vol_w / total_w, 4)
         result["bid_ask_imbalance"] = imb
 
+        # [BUG-FIX v3.1] Diskontinuitas 10.2 poin di kedua boundary imbalance:
+        # Neutral branch berakhir di 54.8 saat imb=0.62, tapi bull branch dimulai
+        # dari 65.0 — lompatan yang tidak masuk akal. Begitu pula di sisi bear.
+        # Fix: anchor bull/bear branch tepat di nilai yang dihasilkan neutral branch,
+        # sehingga scoring kontinu di seluruh range [0, 1].
+        # anchor_bull = 50 + (IMBALANCE_BULL - 0.5) * 40 = 54.8
+        # anchor_bear = 50 + (IMBALANCE_BEAR - 0.5) * 40 = 45.2
+        _anchor_bull = 50.0 + (IMBALANCE_BULL - 0.5) * 40.0  # ~54.8
+        _anchor_bear = 50.0 + (IMBALANCE_BEAR - 0.5) * 40.0  # ~45.2
         if imb >= IMBALANCE_BULL:
             t = (imb - IMBALANCE_BULL) / (1.0 - IMBALANCE_BULL)
-            result["imbalance_score"] = clamp_score(65.0 + t * 25.0)  # 65-90
+            result["imbalance_score"] = clamp_score(_anchor_bull + t * (90.0 - _anchor_bull))
         elif imb <= IMBALANCE_BEAR:
             t = (IMBALANCE_BEAR - imb) / IMBALANCE_BEAR
-            result["imbalance_score"] = clamp_score(35.0 - t * 25.0)  # 10-35
+            result["imbalance_score"] = clamp_score(_anchor_bear - t * (_anchor_bear - 10.0))
         else:
             result["imbalance_score"] = clamp_score(50.0 + (imb - 0.5) * 40.0)
 
