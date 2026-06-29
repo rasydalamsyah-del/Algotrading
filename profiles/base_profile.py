@@ -7,7 +7,6 @@ AlgoTrader Pro v7.0 — "The Intelligence Pipeline"
 from __future__ import annotations
 
 import logging
-from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Dict, List, Optional, Tuple
@@ -239,18 +238,26 @@ class CoinProfile:
                     f"Meta_learner tidak boleh melebihi batas keamanan."
                 )
 
+        # [BUG-FIX] Sebelumnya pakai dataclasses.asdict(self) yang REKURSIF —
+        # ini mengonversi semua nested dataclass (termasuk param_bounds, yang
+        # tipenya ParameterBounds) jadi dict biasa. Akibatnya new_profile.param_bounds
+        # jadi dict, bukan ParameterBounds lagi -> with_override() ke-2 kali
+        # (override berantai, misal dari meta_learner yang adjust parameter
+        # bertahap) CRASH: AttributeError 'dict' object has no attribute
+        # 'is_within_bounds'. Terbukti reproduksi nyata sebelum fix ini.
+        # Sekarang shallow-copy manual via dataclasses.fields() — param_bounds
+        # & allowed_regimes tetap objek/reference asli (sudah dicek: tidak ada
+        # mutasi in-place di mana pun, jadi shared reference ini aman).
         import dataclasses
-        current_dict = dataclasses.asdict(self)
+        current_dict = {
+            f.name: getattr(self, f.name)
+            for f in dataclasses.fields(self)
+            if not f.name.startswith("_")
+        }
 
         current_dict.update(kwargs)
-        current_dict["_is_overridden"]       = True
-        current_dict["_override_source"]     = source
-        current_dict["_override_timestamp"]  = timestamp
 
-        new_profile = CoinProfile(**{
-            k: v for k, v in current_dict.items()
-            if not k.startswith("_")
-        })
+        new_profile = CoinProfile(**current_dict)
         new_profile._is_overridden      = True
         new_profile._override_source    = source
         new_profile._override_timestamp = timestamp
@@ -304,20 +311,6 @@ class CoinProfile:
             + (" [OVERRIDE]" if self._is_overridden else "")
         )
 
-class BaseProfileFactory(ABC):
-
-    @abstractmethod
-    def build(self, symbol: str) -> CoinProfile:
-        ...
-
-    @abstractmethod
-    def get_profile_type(self) -> StrategyProfile:
-        ...
-
-    def validate_build(self, symbol: str) -> Tuple[CoinProfile, List[str]]:
-        profile = self.build(symbol)
-        errors  = profile.validate()
-        return profile, errors
 
 
 class AdaptiveParams:
