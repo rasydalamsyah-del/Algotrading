@@ -588,12 +588,26 @@ class DatabaseManager:
 
         symbols_in_result = list({r["symbol"] for r in rows})
         async with self._session() as s:
+            # [BUG-FIX] Filter action_taken terlalu sempit — gagal korelasi regime/score
+            # untuk trade nyata.
+            # Sebelumnya: hanya cocok dengan literal "EXECUTE_CANDIDATE" (string yang
+            # ditulis intelligence/scorer.py). Tapi alur eksekusi nyata lewat
+            # intelligence/commander.py menyimpan action_taken sebagai "execute"/"EXECUTE"
+            # (dari DecisionAction enum, lihat core/models.py), bukan "EXECUTE_CANDIDATE".
+            # Akibatnya korelasi regime/score di sini selalu meleset ke default
+            # "undefined"/50.0 untuk hampir semua trade produksi — datanya dikonsumsi
+            # learning/analytics.py (multi-callsite) untuk evaluasi performa per-regime,
+            # jadi data pembelajaran jadi bias.
+            # Sekarang: cocokkan case-insensitive ke varian "EXECUTE_CANDIDATE"/"EXECUTE"
+            # yang benar-benar dipakai di codebase (lihat scorer.py & commander.py).
             score_q = (
                 select(SignalScore)
                 .where(
                     SignalScore.symbol.in_(symbols_in_result),
                     SignalScore.timestamp >= since,
-                    SignalScore.action_taken == "EXECUTE_CANDIDATE",
+                    func.upper(SignalScore.action_taken).in_(
+                        ["EXECUTE_CANDIDATE", "EXECUTE"]
+                    ),
                 )
                 .order_by(SignalScore.symbol, desc(SignalScore.timestamp))
             )
@@ -1233,7 +1247,11 @@ class DatabaseManager:
                 "sample_size": len(rows),
                 "note": "Gunakan endpoint /api/analytics/indicator_effectiveness untuk report lengkap.",
             }
-        except Exception:
+        except Exception as e:
+            # [BUG-FIX] except Exception: pass tanpa log — error asli (misal bug di
+            # get_score_vs_outcome) tertutup oleh dict kosong, terlihat sama dengan
+            # "memang belum ada data". Sekarang: di-log agar bisa dibedakan.
+            log.debug("get_indicator_effectiveness error: %s", e)
             return {}
 
     async def get_pending_suggestions(self, limit: int = 100) -> List[Dict[str, Any]]:
@@ -1562,7 +1580,20 @@ class DatabaseManager:
         self,
         min_trades_threshold: int = 30,
     ) -> List[Dict[str, Any]]:
-
+        # [BUG-FIX] Parameter `min_trades_threshold` diterima tapi tidak pernah
+        # dipakai untuk memfilter — tampak seolah-olah fungsi ini hanya
+        # mengembalikan record yang sudah punya >= N trade sejak diterapkan.
+        # Sebelumnya: tidak ada filter berbasis threshold sama sekali di query.
+        # Sekarang: TIDAK diubah jadi filter `trades_after_apply >= min_trades_threshold`
+        # karena kolom `trades_after_apply` baru terisi setelah evaluasi selesai
+        # (lihat update_parameter_outcome) — defaultnya 0 selagi PENDING, jadi
+        # memfilter di sini justru akan membuat fungsi ini selalu kosong.
+        # Pemanggil (learning/meta_learner.py: check_pending_outcomes →
+        # _evaluate_outcome) sudah melakukan pengecekan jumlah trade sendiri
+        # secara terpisah (query ulang trade sejak parameter diubah). Parameter
+        # ini sengaja dibiarkan tidak terpakai di sini untuk sekarang — cek ulang
+        # saat audit learning/meta_learner.py (Tier 2) apakah dua mekanisme ini
+        # harus disatukan.
         async with self._session() as s:
             result = await s.execute(
                 select(ParameterHistory).where(
@@ -1637,8 +1668,13 @@ class DatabaseManager:
                     else:
                         result = await s.execute(select(func.count(model.id)))
                     counts[name] = result.scalar_one() or 0
-                except Exception:
+                except Exception as e:
+                    # [BUG-FIX] except Exception: pass — kegagalan count tabel (misal
+                    # tabel belum ter-migrasi) tertutup jadi -1 tanpa jejak log,
+                    # padahal endpoint ini dipakai untuk health-check produksi.
+                    # Sekarang: di-log agar operator tahu tabel mana yang gagal & kenapa.
                     counts[name] = -1
+                    log.warning("get_db_health: gagal hitung tabel '%s': %s", name, e)
 
         return {
             "status":  "ok",
