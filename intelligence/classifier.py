@@ -285,8 +285,17 @@ def is_tradeable_regime(
                 f"Allowed: {allowed_regimes}"
             )
 
-    if regime == MarketRegime.TRENDING_BEAR:
-        return False, "TRENDING_BEAR regime — tidak ada BUY signal yang diizinkan."
+    # [BUG-FIX] Sebelumnya hardcode "if regime == TRENDING_BEAR" di sini —
+    # padahal MarketRegime.allows_long property sudah ada persis untuk
+    # tujuan ini (dan sudah lama jadi dead code karena tak dipakai siapa pun).
+    # Pakai allows_long sebagai satu sumber kebenaran: otomatis ikut kalau
+    # daftar regime yang diizinkan long berubah di masa depan, tidak perlu
+    # sinkronkan manual di 2 tempat berbeda.
+    if not regime.allows_long:
+        return False, (
+            f"Regime '{regime.value}' tidak mengizinkan posisi long "
+            f"(allows_long=False)."
+        )
 
     return True, f"Regime {regime.value} OK (confidence={confidence:.2f})"
 
