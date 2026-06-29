@@ -38,6 +38,38 @@ v1 — SUPERPOWER UPGRADE:
   [NEW] GET /api/candles/{symbol}/indicators — OHLCV + semua 60 kolom indikator.
   [NEW] GET /api/stream — Server-Sent Events untuk posisi + ticker real-time.
   [NEW] Landing page / menampilkan semua 30+ endpoint beserta deskripsi.
+
+v9 — TIER-A SECURITY AUDIT (full line-by-line read, 2156 → 2210 baris):
+  [SEC-FIX KRITIS] Rate limiter (_RateLimiter/_check_rate_limit) sebelumnya
+    didefinisikan lengkap tapi TIDAK PERNAH dipasang ke endpoint manapun —
+    dead code, nol rate-limiting nyata walau changelog v1 mengklaim aktif.
+    Dipasang sekarang sebagai dependency level-app (dependencies=[Depends(
+    _check_rate_limit)] di create_app()) — berlaku ke semua 49 endpoint,
+    termasuk yang ditambah di masa depan, bukan per-endpoint manual.
+  [SEC-FIX KRITIS] 11 endpoint sebelumnya tanpa X-API-Key meski bocorkan data
+    trading sensitif (SL/TP, score, regime, narrative, analytics, parameter
+    auto-tuning) — beberapa di antaranya landing page SUDAH lama mengklaim 🔑
+    tapi implementasinya tidak pernah ditambahkan: /api/candles/{symbol},
+    /api/diagnosa, /api/intelligence/scores(+/{symbol}), /api/intelligence/
+    regime, /api/analytics/attribution, /api/analytics/indicator_effectiveness,
+    /api/analytics/regime_performance, /api/meta_learner/suggestions,
+    /api/meta_learner/history. Semua sekarang wajib Depends(verify_api_key).
+    Endpoint yang TETAP tanpa-auth (deliberate, market-data publik / health
+    check): /, /health, /api/status, /api/tickers, /api/market_info/{symbol}.
+  [DOC-FIX] Landing page (GET /) drift dari kode aktual — 5 entry phantom
+    (/api/bot/config GET+POST, /api/bot/close/{symbol}, /api/profiles/
+    thresholds, /api/profiles/weights — 404 kalau dipanggil, sudah lama
+    direfactor jadi /api/config/current+update dan /api/positions/{symbol}/
+    close tapi dokumentasi tidak diupdate) dihapus; 13 endpoint nyata yang
+    tidak terdaftar (analytics/refresh, analytics/regime_performance,
+    config/current+update, forecast, meta_learner approve/reject/history/
+    suggestions, positions/{symbol}/close, universe/detail, bot/pause_strategy
+    +resume_strategy) ditambahkan. Sekarang 100% match (diverifikasi via diff
+    regex actual-routes vs documented-routes, hasil kosong di kedua arah).
+  Diverifikasi end-to-end via FastAPI TestClient: 401 tanpa key di endpoint
+    yang baru diproteksi, 200 dengan key yang benar (auth tidak false-positive
+    blokir akses legit), 429 muncul setelah >120 req/menit per IP (rate
+    limiter benar-benar trigger, bukan cuma terpasang tapi diam).
 """
 
 from __future__ import annotations
@@ -339,6 +371,13 @@ def create_app(bot_getter) -> FastAPI:
         version="8.0.0",
         description="Real-time dashboard API for AlgoTrader Pro — Intelligence Pipeline v8 SUPERPOWER",
         default_response_class=SafeJSONResponse,
+        # [BUG-FIX v9] _check_rate_limit() sebelumnya didefinisikan lengkap
+        # (class _RateLimiter + fungsi dependency-nya) tapi TIDAK PERNAH dipasang
+        # ke endpoint manapun — dead code, nol rate-limiting nyata di seluruh API
+        # walau changelog v1 mengklaim sudah aktif. Dipasang di level app (semua
+        # route, termasuk yang ditambah di masa depan) bukan per-endpoint manual,
+        # supaya tidak ada yang lolos lagi.
+        dependencies=[Depends(_check_rate_limit)],
     )
 
     # ── Timing middleware ──────────────────────────────────────────────────────
@@ -390,6 +429,7 @@ def create_app(bot_getter) -> FastAPI:
             ("GET",    "/api/balance",                         "Saldo exchange 🔑"),
             ("GET",    "/api/positions",                       "Semua posisi terbuka 🔑"),
             ("GET",    "/api/positions/{symbol}",              "Detail posisi per coin 🔑"),
+            ("POST",   "/api/positions/{symbol}/close",        "Close posisi manual 🔑"),
             ("GET",    "/api/trades",                          "Trade history (limit, offset) 🔑"),
             ("GET",    "/api/trades/{symbol}",                 "Trade history per coin 🔑"),
             ("GET",    "/api/equity_curve",                    "Equity curve snapshots 🔑"),
@@ -401,17 +441,20 @@ def create_app(bot_getter) -> FastAPI:
             ("GET",    "/api/market_info/{symbol}",            "Info market + volume 🔑"),
             ("GET",    "/api/orderbook/{symbol}",              "Live orderbook + danger level 🔑"),
             ("GET",    "/api/shadow_trades",                   "Paper/shadow trades aktif 🔑"),
+            ("GET",    "/api/forecast",                        "Forecast SL/TP/probabilitas per coin 🔑"),
             ("GET",    "/api/system_health",                   "CPU/Mem/disk + latency 🔑"),
             ("GET",    "/api/dashboard_snapshot",              "Semua data dashboard (parallel) 🔑"),
             ("GET",    "/api/diagnosa",                        "Diagnosa per-coin + sinyal 🔑"),
             ("POST",   "/api/bot/halt",                        "Halt trading 🔑"),
             ("POST",   "/api/bot/resume",                      "Resume trading 🔑"),
+            ("POST",   "/api/bot/pause_strategy",              "Pause strategy (tanpa halt) 🔑"),
+            ("POST",   "/api/bot/resume_strategy",              "Resume strategy 🔑"),
             ("POST",   "/api/bot/panic",                       "Panic close all 🔑"),
-            ("POST",   "/api/bot/close/{symbol}",              "Close posisi manual 🔑"),
             ("POST",   "/api/bot/force_analyze/{symbol}",      "Trigger analisis ulang 🔑"),
-            ("GET",    "/api/bot/config",                      "Baca config bot 🔑"),
-            ("POST",   "/api/bot/config",                      "Patch config bot 🔑"),
+            ("GET",    "/api/config/current",                  "Baca config bot (safe, tanpa secret) 🔑"),
+            ("POST",   "/api/config/update",                   "Patch config bot (whitelist field) 🔑"),
             ("GET",    "/api/universe/overrides",              "List universe overrides 🔑"),
+            ("GET",    "/api/universe/detail",                 "Detail universe + regime + score 🔑"),
             ("POST",   "/api/universe/add",                    "Tambah coin ke universe 🔑"),
             ("POST",   "/api/universe/remove",                 "Hapus coin dari universe 🔑"),
             ("GET",    "/api/executor/stats",                  "Fill rate, retry, queue 🔑"),
@@ -420,10 +463,14 @@ def create_app(bot_getter) -> FastAPI:
             ("GET",    "/api/intelligence/regime",             "Market regime terkini 🔑"),
             ("GET",    "/api/analytics/attribution",           "Atribusi PnL per profil 🔑"),
             ("GET",    "/api/analytics/indicator_effectiveness","Efektivitas indikator 🔑"),
+            ("GET",    "/api/analytics/regime_performance",    "Performa per regime 🔑"),
+            ("POST",   "/api/analytics/refresh",               "Trigger refresh analytics 🔑"),
+            ("GET",    "/api/meta_learner/suggestions",        "Saran auto-tuning pending 🔑"),
+            ("POST",   "/api/meta_learner/approve/{id}",       "Approve saran auto-tuning 🔑"),
+            ("POST",   "/api/meta_learner/reject/{id}",        "Reject saran auto-tuning 🔑"),
+            ("GET",    "/api/meta_learner/history",            "History perubahan parameter 🔑"),
             ("GET",    "/api/crosslearn/status",               "Status cross-learn 🔑"),
             ("GET",    "/api/crosslearn/swap_history",         "History coin swap 🔑"),
-            ("GET",    "/api/profiles/thresholds",             "Threshold entry/exit 🔑"),
-            ("GET",    "/api/profiles/weights",                "Bobot indikator 🔑"),
             ("GET",    "/api/stream",                          "SSE stream posisi + ticker 🔑"),
         ]
 
@@ -695,7 +742,14 @@ def create_app(bot_getter) -> FastAPI:
         }
 
     @app.get("/api/candles/{symbol:path}")
-    async def get_candles(symbol: str, timeframe: str = "15m", limit: int = 100):
+    async def get_candles(
+        symbol: str,
+        timeframe: str = "15m",
+        limit: int = 100,
+        # [SEC-FIX v9] Sebelumnya tanpa auth — landing page sudah lama
+        # mengklaim 🔑 tapi implementasi tidak pernah menambahkannya.
+        _: str = Depends(verify_api_key),
+    ):
         b = bot()
 
         if not b.exchange or not b.exchange.is_connected:
@@ -852,7 +906,12 @@ def create_app(bot_getter) -> FastAPI:
         }
 
     @app.get("/api/diagnosa")
-    async def get_diagnosa():
+    async def get_diagnosa(
+        # [SEC-FIX v9] Sebelumnya tanpa auth — endpoint ini bocorkan SL/TP,
+        # total_score, regime, threshold, dan narrative trading per-coin,
+        # padahal landing page sudah mengklaim 🔑.
+        _: str = Depends(verify_api_key),
+    ):
         b          = bot()
         universe  = b.config.get("universe_watchlist", [])
         is_testnet = b.config.get("testnet", True)
@@ -1140,7 +1199,10 @@ def create_app(bot_getter) -> FastAPI:
         }
 
     @app.get("/api/intelligence/scores")
-    async def get_intelligence_scores():
+    async def get_intelligence_scores(
+        # [SEC-FIX v9] Sebelumnya tanpa auth meski landing page klaim 🔑.
+        _: str = Depends(verify_api_key),
+    ):
         b         = bot()
         universe = b.config.get("universe_watchlist", [])
 
@@ -1187,7 +1249,11 @@ def create_app(bot_getter) -> FastAPI:
         }
 
     @app.get("/api/intelligence/scores/{symbol:path}")
-    async def get_intelligence_score_detail(symbol: str):
+    async def get_intelligence_score_detail(
+        symbol: str,
+        # [SEC-FIX v9] Sebelumnya tanpa auth meski landing page klaim 🔑.
+        _: str = Depends(verify_api_key),
+    ):
         b = bot()
 
         latest = await b.db.get_latest_signal_score(symbol)
@@ -1242,7 +1308,10 @@ def create_app(bot_getter) -> FastAPI:
         }
 
     @app.get("/api/intelligence/regime")
-    async def get_intelligence_regime():
+    async def get_intelligence_regime(
+        # [SEC-FIX v9] Sebelumnya tanpa auth meski landing page klaim 🔑.
+        _: str = Depends(verify_api_key),
+    ):
         b         = bot()
         universe = b.config.get("universe_watchlist", [])
 
@@ -1289,6 +1358,8 @@ def create_app(bot_getter) -> FastAPI:
         lookback_days: int = 30,
         profile: Optional[str] = None,
         symbol: Optional[str] = None,
+        # [SEC-FIX v9] Sebelumnya tanpa auth meski landing page klaim 🔑.
+        _: str = Depends(verify_api_key),
     ):
         b = bot()
 
@@ -1321,7 +1392,11 @@ def create_app(bot_getter) -> FastAPI:
         }
 
     @app.get("/api/analytics/indicator_effectiveness")
-    async def get_indicator_effectiveness(lookback_days: int = 30):
+    async def get_indicator_effectiveness(
+        lookback_days: int = 30,
+        # [SEC-FIX v9] Sebelumnya tanpa auth meski landing page klaim 🔑.
+        _: str = Depends(verify_api_key),
+    ):
         b = bot()
 
         if not hasattr(b, "analytics") or not b.analytics:
@@ -1345,7 +1420,12 @@ def create_app(bot_getter) -> FastAPI:
         }
 
     @app.get("/api/analytics/regime_performance")
-    async def get_regime_performance(lookback_days: int = 30):
+    async def get_regime_performance(
+        lookback_days: int = 30,
+        # [SEC-FIX v9] Sebelumnya tanpa auth, konsisten dgn 2 endpoint
+        # analytics/* lain yang sudah pakai verify_api_key.
+        _: str = Depends(verify_api_key),
+    ):
         b = bot()
 
         if not hasattr(b, "analytics") or not b.analytics:
@@ -1390,7 +1470,11 @@ def create_app(bot_getter) -> FastAPI:
             raise HTTPException(status_code=500, detail=f"Refresh error: {e}")
 
     @app.get("/api/meta_learner/suggestions")
-    async def get_meta_learner_suggestions():
+    async def get_meta_learner_suggestions(
+        # [SEC-FIX v9] Sebelumnya tanpa auth, padahal approve/reject-nya
+        # sendiri sudah diproteksi — inkonsisten kalau suggestion list-nya bocor.
+        _: str = Depends(verify_api_key),
+    ):
         b = bot()
         try:
             rows = await b.db.get_pending_suggestions(limit=200)
@@ -1489,6 +1573,8 @@ def create_app(bot_getter) -> FastAPI:
         symbol: Optional[str] = None,
         profile: Optional[str] = None,
         limit: int = 50,
+        # [SEC-FIX v9] Sebelumnya tanpa auth, sama alasan dgn /suggestions.
+        _: str = Depends(verify_api_key),
     ):
         b = bot()
         try:
