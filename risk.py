@@ -152,6 +152,25 @@ class RiskManager:
         log.debug("Dynamic daily limit: %.2f%% (atr_pct=%.2f%%)", adjusted, atr_pct)
         return round(adjusted, 2)
 
+    def _compute_low_balance_threshold(self) -> float:
+        """Ambang LOW_BALANCE — sepenuhnya dihitung dari parameter risk yang
+        sudah dikonfigurasi, tidak ada angka tetap (hardcoded). Otomatis
+        ikut berubah kalau min_order_value_usdt, max_open_positions,
+        initial_equity, atau risk_per_trade_pct diubah.
+
+        Komponen 1: cukup untuk isi semua slot max_open_positions dengan
+        order minimum — di bawah ini bot tidak bisa lagi diversifikasi
+        sesuai target jumlah posisi.
+        Komponen 2: cukup untuk menahan minimal 3x kerugian sebesar
+        risk_per_trade_pct dari modal awal — di bawah ini daya tahan modal
+        terhadap rangkaian rugi berturut-turut sudah sangat tipis.
+        Dipakai yang LEBIH BESAR dari keduanya (kondisi mana saja yang
+        lebih dulu jadi masalah).
+        """
+        slot_based = self._min_order_value_usdt * self._max_open_positions
+        risk_based = self._initial_equity * (self._risk_per_trade_pct / 100) * 3
+        return max(slot_based, risk_based)
+
     def update_portfolio_state(
         self,
         equity:               float,
@@ -214,6 +233,37 @@ class RiskManager:
                 HaltReason.DAILY_LOSS,
                 f"daily loss {self._daily_loss_pct:.3f}% >= limit "
                 f"{self._daily_loss_limit_pct}%. Auto-resumes at UTC midnight.",
+            )
+
+        # [TAMBAHAN] LOW_BALANCE halt — ambang dihitung otomatis dari
+        # config (min_order_value_usdt × max_open_positions, atau
+        # initial_equity × risk_per_trade_pct × 3, dipakai yang lebih
+        # besar). Tidak ada angka tetap; ikut berubah kalau config diubah.
+        # Auto-resume otomatis kalau free_balance naik lagi di atas ambang
+        # + buffer 10% (mencegah halt/resume bolak-balik / flapping saat
+        # saldo bergerak tipis di sekitar garis ambang).
+        low_balance_threshold = self._compute_low_balance_threshold()
+        if (
+            low_balance_threshold > 0
+            and self._free_balance < low_balance_threshold
+            and not self._halted
+        ):
+            self.halt_trading(
+                HaltReason.LOW_BALANCE,
+                f"free balance ${self._free_balance:.2f} < ambang otomatis "
+                f"${low_balance_threshold:.2f}. Auto-resume jika saldo naik "
+                f"di atas ${low_balance_threshold * 1.1:.2f}.",
+            )
+        elif (
+            self._halted
+            and self._halt_reason == HaltReason.LOW_BALANCE
+            and self._free_balance >= low_balance_threshold * 1.1
+        ):
+            self._resume()
+            log.info(
+                "Auto-resumed after LOW_BALANCE: free_balance $%.2f >= "
+                "threshold*1.1 $%.2f",
+                self._free_balance, low_balance_threshold * 1.1,
             )
 
     def halt_trading(
@@ -735,4 +785,6 @@ class RiskManager:
             "risk_per_trade_pct":    self._risk_per_trade_pct,
             "trailing_stop_enabled": self._use_trailing_stop,
             "trailing_atr_mult":     self._trailing_atr_mult,
+            # [TAMBAHAN] visibility ambang LOW_BALANCE otomatis
+            "low_balance_threshold": round(self._compute_low_balance_threshold(), 4),
         }
