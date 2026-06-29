@@ -1,0 +1,55 @@
+{
+  "repo": "https://github.com/rasydalamsyah-del/algotrader",
+  "last_commit_saat_ini": "c363949",
+  "sesi_terakhir_update": "2026-06-30",
+
+  "file_sudah_diaudit_dan_fix": {
+    "api_server.py":             {"status": "DONE", "bug_fixed": ["rate_limiter_dead_code", "11_endpoint_tanpa_auth", "landing_page_drift", "open_tanpa_with", "reset_regime_terhubung"], "catatan": "Bug classifier #16b (reset_regime) diperbaiki di sesi hari ini"},
+    "core/models.py":            {"status": "DONE", "bug_fixed": ["signal_quality_stale_to_property", "StrengthIndicators_is_valid_hanya_cek_volume_ratio"], "catatan": "Bug #16a diperbaiki di sesi hari ini"},
+    "indicators/momentum.py":    {"status": "DONE", "bug_fixed": ["rsi_dihitung_2x", "vwma_upgrade"]},
+    "indicators/orderbook.py":   {"status": "DONE", "bug_fixed": ["diskontinuitas_imbalance_score", "spoofing_snapshot_salah", "wall_first_seen_dead_field"]},
+    "indicators/oscillators.py": {"status": "DONE", "bug_fixed": ["diskontinuitas_score_roc_anchor"]},
+    "indicators/patterns.py":    {"status": "DONE", "bug_fixed": ["iloc_minus1_ke_minus2", "dead_param_require_volume_confirmation"]},
+    "indicators/strength.py":    {"status": "DONE", "bug_fixed": ["double_penalty_volume_climax", "noop_replace_0_0"]},
+    "indicators/structure.py":   {"status": "DONE", "bug_fixed": ["ichimoku_pivot_pandas3x"]},
+    "indicators/trend.py":       {"status": "DONE", "bug_fixed": ["diskontinuitas_golden_dead_cross"]},
+    "indicators/volatility.py":  {"status": "DONE", "bug_fixed": ["kc_squeeze_ok_always_true"]},
+    "intelligence/classifier.py":{"status": "DONE", "bug_fixed": ["is_tradeable_regime_hardcode"], "catatan": "Sub-fix is_valid dan reset_regime sudah diselesaikan via models.py dan api_server.py"},
+    "intelligence/observer.py":  {"status": "DONE", "bug_fixed": ["zip_misalignment_tf_score", "rsi_thread"]},
+    "intelligence/scorer.py":    {"status": "DONE", "bug_fixed": ["fstring_format_spec", "narrative_5_dari_8_kategori"]},
+    "intelligence/validator.py": {"status": "DONE", "bug_fixed": ["double_penalty_volume_climax_duplicate", "primary_pattern_idle"]},
+    "main.py":                   {"status": "DONE", "bug_fixed": ["kelly_sizing_tidak_dieksekusi"]},
+    "profiles/base_profile.py":  {"status": "DONE", "bug_fixed": ["with_override_crash_second_call"]},
+    "profiles/weights.py":       {"status": "DONE", "bug_fixed": ["mean_revert_5_dari_8_kategori"]},
+    "ta_compat.py":              {"status": "DONE", "bug_fixed": ["ols_slope_v5_fix", "loc_vs_iloc_datetimeindex"]},
+    "simulate_test.py":          {"status": "DONE", "bug_fixed": []},
+    "constants.py":              {"status": "DONE", "bug_fixed": []}
+  },
+
+  "file_belum_diaudit": {
+    "database.py":                      {"status": "PENDING", "ukuran": "65 fungsi, 14 class"},
+    "exchange.py":                      {"status": "PENDING", "ukuran": "49 fungsi, 2 class"},
+    "execution.py":                     {"status": "PENDING", "ukuran": "10 fungsi, 1 class"},
+    "risk.py":                          {"status": "PENDING", "ukuran": "37 fungsi, 4 class"},
+    "strategy.py":                      {"status": "PENDING", "ukuran": "42 fungsi, 6 class"},
+    "notifications.py":                 {"status": "PENDING", "ukuran": "30 fungsi, 2 class"},
+    "intelligence/commander.py":        {"status": "PENDING", "ukuran": "27 fungsi, 2 class"},
+    "intelligence/position_sync.py":    {"status": "PENDING", "ukuran": "5 fungsi"},
+    "intelligence/trade_guardian.py":   {"status": "PENDING", "ukuran": "6 fungsi, 1 class"},
+    "learning/analytics.py":            {"status": "PENDING", "ukuran": "37 fungsi, 2 class"},
+    "learning/coin_swap.py":            {"status": "PENDING", "ukuran": "13 fungsi, 1 class"},
+    "learning/cross_learn.py":          {"status": "PENDING", "ukuran": "13 fungsi, 1 class"},
+    "learning/meta_learner.py":         {"status": "PENDING", "ukuran": "38 fungsi, 1 class"},
+    "profiles/registry.py":             {"status": "PENDING", "ukuran": "19 fungsi"},
+    "profiles/thresholds.py":           {"status": "PENDING", "ukuran": "12 fungsi, 1 class"},
+    "telegram_bot.py":                  {"status": "PENDING", "ukuran": "56 fungsi"},
+    "smoke_api.py":                     {"status": "PENDING", "ukuran": "1 fungsi"}
+  },
+
+  "catatan_penting": [
+    "Setiap kali satu file selesai diaudit dan diperbaiki, update status file ini dari PENDING ke DONE",
+    "Jika ada bug baru yang ditemukan di file DONE saat audit file PENDING, tambahkan ke bug_fixed file DONE tersebut",
+    "File ini adalah sumber kebenaran tunggal tentang progress audit",
+    "Selalu commit perubahan ke git sebelum tutup sesi"
+  ]
+}
