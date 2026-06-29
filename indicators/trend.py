@@ -22,6 +22,19 @@ CHANGELOG v2:
   [PERF] calculate_vwap_multiday(): hapus cumvol2 — duplikat identik dari
     cumvol (volume.groupby().cumsum() dihitung 2× tanpa alasan). Hemat 1
     groupby pass per panggilan.
+
+CHANGELOG v3 (full re-audit baris-per-baris, Tier A verification):
+  [BUG-FIX] calculate_golden_dead_cross(): cabang "tidak ada cross dalam
+    lookback" anchor di 55.0 (gap positif) vs 45.0 (gap negatif) —
+    menyebabkan lompatan skor 10 poin persis di gap_pct=0 (gap_pct=+0.0001
+    -> 55.0005, gap_pct=0.0/-0.0001 -> ~45.0). Anchor diganti jadi 50.0 di
+    kedua cabang (gap_pct=0 = tidak ada info arah sama sekali, netral murni
+    adalah anchor yang benar); slope (5/%) & cap (±15) dipertahankan sama.
+  [VERIFIED] _calculate_supertrend_raw, calculate_golden_dead_cross (sisanya),
+    calculate_vwap_multiday, score_trend: dibaca penuh baris-per-baris, tidak
+    ada bug lain ditemukan. Field utilization ke validator.py terkonfirmasi
+    lengkap via _check_trend_cross_context (golden/dead_cross_bars_ago,
+    supertrend_value/direction, vwap semua sudah aktif).
 """
 
 from __future__ import annotations
@@ -306,10 +319,16 @@ def calculate_golden_dead_cross(
     gap_pct = (current_diff / current_close) * 100
 
     if golden_bars_ago is None and dead_bars_ago is None:
+        # [BUG-FIX] Sebelumnya anchor 55.0 (positif) vs 45.0 (negatif) —
+        # menyebabkan lompatan skor 10 poin persis di gap_pct=0 (terbukti:
+        # gap_pct=+0.0001 -> 55.0005, gap_pct=0.0/-0.0001 -> ~45.0). Anchor
+        # sekarang 50.0 (netral murni) di kedua cabang, slope (5/%) dan cap
+        # (±15) dipertahankan sama — gap_pct=0 = tidak ada info arah sama
+        # sekali, jadi netral persis adalah anchor yang benar.
         if gap_pct > 0:
-            score = clamp_score(55.0 + min(15.0, gap_pct * 5))
+            score = clamp_score(50.0 + min(15.0, gap_pct * 5))
         else:
-            score = clamp_score(45.0 + max(-15.0, gap_pct * 5))
+            score = clamp_score(50.0 + max(-15.0, gap_pct * 5))
         return None, None, score
 
     gc = golden_bars_ago if golden_bars_ago is not None else lookback + 1
