@@ -338,7 +338,9 @@ def score_signal(
 
     signal.total_score     = round(total_score, 2)
     signal.score_breakdown = breakdown
-    signal.threshold_gap   = round(total_score - dynamic_threshold, 2)
+    # [BUG-FIX v2] threshold_gap sekarang @property di core/models.py (otomatis
+    # dihitung dari total_score & threshold_used terkini) — assignment manual
+    # dihapus karena sekarang read-only & sudah selalu konsisten tanpa ini.
 
     score_confidence = max(0.0, (total_score - 50.0) / 50.0) 
     regime_factor    = min(1.0, regime_confidence * 1.2)
