@@ -293,11 +293,13 @@ class RiskManager:
         stop_loss:   Optional[float] = None,
         take_profit: Optional[float] = None,
         atr:         Optional[float] = None,
+        free_coin_balance: Optional[float] = None,
     ) -> RiskAssessment:
         async with self._evaluate_lock:
             return await self._evaluate_order_locked(
                 symbol=symbol, side=side, price=price, quantity=quantity,
                 stop_loss=stop_loss, take_profit=take_profit, atr=atr,
+                free_coin_balance=free_coin_balance,
             )
 
     async def _evaluate_order_locked(
@@ -309,6 +311,7 @@ class RiskManager:
         stop_loss:   Optional[float] = None,
         take_profit: Optional[float] = None,
         atr:         Optional[float] = None,
+        free_coin_balance: Optional[float] = None,
     ) -> RiskAssessment:
 
         if self._halted:
@@ -353,18 +356,29 @@ class RiskManager:
             return RiskAssessment(RiskDecision.REJECTED, f"Invalid price: {price}")
 
         if side == "sell":
-            free_coin = self._exchange.fetch_balance().get(symbol.split('/')[0], {}).get('free', 0)
-            if quantity > free_coin:
-                safe_amount = round(free_coin * 0.999, 8)
+            # [BUG-FIX] Sebelumnya: kode memanggil self._exchange.fetch_balance(),
+            # tapi RiskManager TIDAK PERNAH menerima/menyimpan referensi
+            # exchange (constructor hanya terima config & db) — ini akan
+            # AttributeError kalau cabang ini tereksekusi. Tidak ada caller
+            # yang memanggil evaluate_order(side="sell", ...) saat ini
+            # (main.py membuat RiskAssessment manual untuk close, lihat
+            # _do_close_position), jadi ini dead code yang belum pernah
+            # ter-trigger — tapi tetap bug laten kalau ada caller baru.
+            # Sekarang: terima saldo riil lewat parameter free_coin_balance
+            # (di-fetch oleh caller, bukan RiskManager pegang object
+            # exchange). Kalau caller tidak mengisi parameter ini, guard
+            # di-skip — tidak ada perubahan behavior untuk caller lama.
+            if free_coin_balance is not None and quantity > free_coin_balance:
+                safe_amount = round(free_coin_balance * 0.999, 8)
                 log.warning(
                     "%s SELL amount adjusted: %.8f → %.8f (free balance: %.8f)",
-                    symbol, quantity, safe_amount, free_coin
+                    symbol, quantity, safe_amount, free_coin_balance
                 )
                 quantity = safe_amount
-            if quantity <= 0:
+            if free_coin_balance is not None and quantity <= 0:
                 return RiskAssessment(
                     RiskDecision.REJECTED,
-                    f"Insufficient coin balance to sell {symbol}: free={free_coin:.8f}"
+                    f"Insufficient coin balance to sell {symbol}: free={free_coin_balance:.8f}"
                 )
 
         if side == "buy":

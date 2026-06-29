@@ -2688,13 +2688,55 @@ class TradingBot:
             strategy=pos.strategy_name or "risk_monitor",
             metadata={"exit_reason": reason},
         )
-        close_assessment = RiskAssessment(
-            decision=RiskDecision.APPROVED,
-            reason=reason,
-            approved_size=pos.amount,
-            stop_loss=None,
-            take_profit=None,
-        )
+
+        # [BUG-FIX] Sebelumnya: close_assessment dibuat manual dengan
+        # approved_size=pos.amount tanpa cek apakah saldo riil koin di
+        # exchange benar-benar cukup untuk dijual sebanyak itu (selisih
+        # kecil bisa muncul dari fee entry yang dipotong dalam bentuk
+        # koin, dll). evaluate_order(side="sell") di risk.py punya guard
+        # untuk ini tapi tidak pernah dipanggil dari sini.
+        # Sekarang: fetch saldo riil dan lewatkan ke evaluate_order supaya
+        # guard itu benar-benar terpakai. Kalau fetch gagal (network dll),
+        # fallback ke approved_size=pos.amount seperti sebelumnya — tidak
+        # membuat close flow lebih rapuh dari sebelumnya.
+        free_coin_balance: Optional[float] = None
+        try:
+            base_asset = pos.symbol.split('/')[0]
+            balance = await self.exchange.fetch_balance()
+            free_coin_balance = float(balance.get(base_asset, {}).get('free', 0) or 0)
+        except Exception as e:
+            log.warning(
+                "Gagal fetch saldo %s untuk close guard — pakai pos.amount: %s",
+                pos.symbol, e,
+            )
+
+        if free_coin_balance is not None:
+            sell_assessment = await self.risk_manager.evaluate_order(
+                symbol=pos.symbol,
+                side="sell",
+                price=exit_price,
+                quantity=pos.amount,
+                free_coin_balance=free_coin_balance,
+            )
+            close_assessment = RiskAssessment(
+                decision=RiskDecision.APPROVED,
+                reason=reason,
+                approved_size=(
+                    sell_assessment.approved_size
+                    if sell_assessment.is_approved and sell_assessment.approved_size
+                    else pos.amount
+                ),
+                stop_loss=None,
+                take_profit=None,
+            )
+        else:
+            close_assessment = RiskAssessment(
+                decision=RiskDecision.APPROVED,
+                reason=reason,
+                approved_size=pos.amount,
+                stop_loss=None,
+                take_profit=None,
+            )
 
         trade = await self.executor.execute_signal(close_signal, close_assessment)
 
@@ -2738,17 +2780,47 @@ class TradingBot:
 
         taker_fee = self.exchange.get_taker_fee(pos.symbol)
 
-        if pos.entry_price and pos.amount:
+        # [BUG-FIX] PnL dihitung pakai pos.amount (catatan DB) & exit_price
+        # (harga sinyal saat keputusan close dibuat) — bukan jumlah & harga
+        # yang BENAR-BENAR tereksekusi di exchange.
+        # Sebelumnya: gross_pnl/entry_fee/exit_fee semua pakai pos.amount dan
+        # exit_price parameter. trade.filled & trade.executed_price (hasil
+        # riil dari _process_fill di execution.py, lebih akurat karena
+        # berasal langsung dari respons order exchange) tidak pernah dipakai.
+        # Akibatnya kalau ada selisih (fee dalam koin, partial fill,
+        # slippage harga), PnL yang tercatat di DB salah secara diam-diam,
+        # terus-menerus, dan terakumulasi.
+        # Sekarang: pakai trade.filled & trade.executed_price sebagai sumber
+        # utama, dengan fallback ke pos.amount/exit_price kalau trade tidak
+        # menyediakannya (misal trade lama / field None) — supaya tidak
+        # crash dan tetap backward-compatible.
+        actual_amount = (
+            float(trade.filled)
+            if trade.filled is not None and float(trade.filled) > 0
+            else pos.amount
+        )
+        actual_exit_price = (
+            float(trade.executed_price)
+            if trade.executed_price is not None and float(trade.executed_price) > 0
+            else exit_price
+        )
+        if actual_amount != pos.amount or actual_exit_price != exit_price:
+            log.info(
+                "PnL pakai nilai riil eksekusi %s | amount: %.8f→%.8f price: %.6f→%.6f",
+                pos.symbol, pos.amount, actual_amount, exit_price, actual_exit_price,
+            )
+
+        if pos.entry_price and actual_amount:
             gross_pnl = (
-                (exit_price - pos.entry_price) * pos.amount
+                (actual_exit_price - pos.entry_price) * actual_amount
                 if pos.side == "long"
-                else (pos.entry_price - exit_price) * pos.amount
+                else (pos.entry_price - actual_exit_price) * actual_amount
             )
 
             if pos.entry_fee_actual is not None and pos.entry_fee_actual > 0:
                 entry_fee = pos.entry_fee_actual
             else:
-                entry_fee = pos.entry_price * pos.amount * taker_fee
+                entry_fee = pos.entry_price * actual_amount * taker_fee
                 log.warning(
                     "PnL calc %s: entry_fee_actual tidak ada — fallback estimasi=%.8f",
                     pos.symbol, entry_fee,
@@ -2757,7 +2829,7 @@ class TradingBot:
             exit_fee = float(
                 trade.fee_cost
                 if trade.fee_cost is not None and float(trade.fee_cost) > 0
-                else exit_price * pos.amount * taker_fee
+                else actual_exit_price * actual_amount * taker_fee
             )
 
             realized_pnl = gross_pnl - entry_fee - exit_fee
@@ -2767,7 +2839,11 @@ class TradingBot:
         if realized_pnl < 0:
             self.risk_manager.record_symbol_loss(pos.symbol, realized_pnl)
 
-        await self.db.close_position(pos.symbol, exit_price, realized_pnl)
+        # [BUG-FIX] simpan actual_exit_price (harga eksekusi riil) ke DB,
+        # bukan exit_price (harga sinyal/parameter saat keputusan close
+        # dibuat) — konsisten dengan realized_pnl yang sudah dihitung
+        # dari actual_exit_price di atas.
+        await self.db.close_position(pos.symbol, actual_exit_price, realized_pnl)
 
         async with self._equity_lock:
             current_eq = self.portfolio_state.get("total_equity", 0.0)
@@ -2779,23 +2855,27 @@ class TradingBot:
 
         log.info(
             "POSISI DITUTUP: %s | entry=%.6f exit=%.6f pnl=%+.4f | reason=%s",
-            pos.symbol, pos.entry_price, exit_price, realized_pnl, reason,
+            pos.symbol, pos.entry_price, actual_exit_price, realized_pnl, reason,
         )
         await self.db.save_log(
             "INFO", "main",
-            f"Posisi ditutup: {pos.symbol} @ {exit_price:.6f} "
+            f"Posisi ditutup: {pos.symbol} @ {actual_exit_price:.6f} "
             f"PnL={realized_pnl:+.4f} | {reason}",
         )
 
         if self.strategy:
             self.strategy.unregister_position(pos.symbol)
 
+        # [BUG-FIX] notifikasi pakai actual_exit_price & actual_amount
+        # (nilai riil tereksekusi) — sebelumnya pakai exit_price & pos.amount
+        # sehingga notifikasi Telegram bisa menampilkan jumlah/harga yang
+        # sedikit berbeda dari yang sebenarnya terjadi di exchange.
         await self.notifier.notify_trade_closed(
             symbol=pos.symbol,
             side=pos.side,
             entry_price=float(pos.entry_price),
-            exit_price=float(exit_price),
-            amount=float(pos.amount),
+            exit_price=float(actual_exit_price),
+            amount=float(actual_amount),
             realized_pnl=realized_pnl,
             reason=reason,
         )
