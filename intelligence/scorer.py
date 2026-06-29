@@ -229,6 +229,9 @@ def _generate_narrative(
         "Strength":   breakdown.strength_raw,
         "Volatility": breakdown.volatility_raw,
         "Pattern":    breakdown.pattern_raw,
+        "Oscillator": breakdown.oscillator_raw,
+        "Structure":  breakdown.structure_raw,
+        "Orderbook":  breakdown.orderbook_raw,
     }
     sorted_cats = sorted(categories.items(), key=lambda x: x[1], reverse=True)
     strengths   = [(k, v) for k, v in sorted_cats if v >= 65.0][:2]
@@ -251,7 +254,7 @@ def _generate_narrative(
     if breakdown.regime_modifier < 1.0:
         lines.append(
             f"🔧 Regime modifier: ×{breakdown.regime_modifier:.2f} "
-            f"(raw score sebelum modifier: {breakdown.total() / breakdown.regime_modifier if breakdown.regime_modifier > 0 else 'N/A':.1f})"
+            f"(raw score sebelum modifier: {f'{breakdown.total() / breakdown.regime_modifier:.1f}' if breakdown.regime_modifier > 0 else 'N/A'})"
         )
 
     rsi = iset.momentum.rsi
