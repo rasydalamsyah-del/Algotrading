@@ -277,7 +277,17 @@ class ExchangeConnector:
         **kwargs,
     ) -> Any:
         clean_kw   = {k: v for k, v in kwargs.items() if not k.startswith("_")}
-        last_exc: Optional[Exception] = None
+        # [BUG-FIX] raise None kalau retries<=0.
+        # Sebelumnya: last_exc diinisialisasi None, dan kalau `retries` <= 0,
+        # loop `for attempt in range(1, retries+1)` tidak pernah jalan sama
+        # sekali, jadi `raise last_exc` di akhir fungsi me-raise None →
+        # "TypeError: exceptions must derive from BaseException", menutupi
+        # error aslinya. Tidak ada caller saat ini yang pakai retries=0, tapi
+        # signature mengizinkannya jadi tetap dijaga.
+        # Sekarang: fallback ke RuntimeError yang jelas kalau itu terjadi.
+        last_exc: Exception = RuntimeError(
+            f"_retry({_ep}): retries={retries} — tidak ada percobaan dijalankan"
+        )
         for attempt in range(1, retries + 1):
             try:
                 return await fn(*args, **clean_kw)
@@ -357,10 +367,16 @@ class WebSocketFeed:
 
         self._last_ticker_upd: Dict[str, float] = {}
         self._last_ob_upd:     Dict[str, float] = {}
-        self._ticker_dead:     Dict[str, bool]  = {s: False for s in symbols}
-        self._ob_dead:         Dict[str, bool]  = {s: False for s in symbols}
-        self._poll_error_count: Dict[str, int] = {s: 0 for s in symbols}
-        self._feed_mode: Dict[str, str] = {s: "REST_FALLBACK" for s in symbols}
+        # [BUG-FIX] Crash kalau symbols=None (default parameter).
+        # Sebelumnya: dict comprehension di sini pakai parameter `symbols` mentah,
+        # bukan `self.symbols` (yang sudah di-guard `symbols or []` di atas) —
+        # kalau caller tidak mengisi `symbols`, baris ini raise
+        # "TypeError: 'NoneType' object is not iterable" karena None bukan iterable.
+        # Sekarang: konsisten pakai `self.symbols`.
+        self._ticker_dead:     Dict[str, bool]  = {s: False for s in self.symbols}
+        self._ob_dead:         Dict[str, bool]  = {s: False for s in self.symbols}
+        self._poll_error_count: Dict[str, int] = {s: 0 for s in self.symbols}
+        self._feed_mode: Dict[str, str] = {s: "REST_FALLBACK" for s in self.symbols}
 
         self._running = False
         self._tasks:  List[asyncio.Task] = []
@@ -684,6 +700,16 @@ class WebSocketFeed:
     def get_price(self, symbol: str) -> Optional[float]:
         return self.live_tickers.get(symbol, {}).get("last")
 
+    # [TAMBAHAN] get_orderbook() belum ada — api_server.py endpoint
+    # GET /api/orderbook/{symbol} memanggil `b.ws_feed.get_orderbook(sym)` tapi
+    # method ini tidak pernah didefinisikan di WebSocketFeed, jadi endpoint itu
+    # selalu raise AttributeError → ditangkap try/except generik → selalu balas
+    # HTTP 502 ke client, tidak peduli data orderbook-nya sebenarnya ada atau
+    # tidak di self.live_orderbooks. Ditambahkan mengikuti pola get_price/
+    # get_mid_price yang sudah ada (lookup langsung ke dict live, default {}).
+    def get_orderbook(self, symbol: str) -> Dict:
+        return self.live_orderbooks.get(symbol, {})
+
     def get_mid_price(self, symbol: str) -> Optional[float]:
         t   = self.live_tickers.get(symbol, {})
         bid = t.get("bid")
@@ -953,7 +979,17 @@ async def auto_scan_and_populate(db) -> list:
 
     if should_scan:
         log.info("auto_scan_universe=true — mulai scan Binance...")
-        coins = scan_binance_universe(min_volume_usdt=100_000, max_coins=500)
+        # [BUG-FIX] scan_binance_universe() pakai urllib.request sinkron (blocking)
+        # tapi dipanggil langsung dari fungsi async — selama panggilan HTTP
+        # berjalan (bisa sampai ~15s x 3 fallback URL), seluruh event loop
+        # asyncio nge-freeze, termasuk request lain yang sedang dilayani
+        # api_server.py kalau startup & web server jalan di proses yang sama.
+        # Sekarang: dijalankan di thread pool lewat run_in_executor agar event
+        # loop tidak terblokir.
+        loop = asyncio.get_running_loop()
+        coins = await loop.run_in_executor(
+            None, scan_binance_universe, 100_000, 500,
+        )
 
         if coins:
             # Simpan ke universe.json

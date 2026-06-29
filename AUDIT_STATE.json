@@ -144,13 +144,19 @@
         "silent_except_get_db_health"
       ],
       "catatan": "Bug utama: get_trades_with_regime() hardcode filter action_taken=='EXECUTE_CANDIDATE' (string milik scorer.py), padahal eksekusi nyata via intelligence/commander.py menyimpan 'execute'/'EXECUTE' (DecisionAction enum) — korelasi regime/score untuk trade produksi selalu meleset ke default, berdampak ke learning/analytics.py (5 callsite). Diperbaiki jadi case-insensitive match. Param min_trades_threshold di get_pending_outcomes() TIDAK diubah (tetap unused) — sengaja didokumentasikan, perlu dicek ulang saat audit learning/meta_learner.py (Tier 2) apakah perlu disatukan dengan pengecekan trade count di _evaluate_outcome. Observasi non-bug: main.py 2x mengakses db._session() (private) langsung untuk raw update yang belum ada public method-nya — dicatat untuk dipertimbangkan saat audit intelligence/position_sync.py atau learning/coin_swap.py."
+    },
+    "exchange.py": {
+      "status": "DONE",
+      "bug_fixed": [
+        "websocketfeed_init_symbols_none_crash",
+        "websocketfeed_missing_get_orderbook_tambahan",
+        "retry_raise_none_kalau_retries_0",
+        "auto_scan_blocking_call_di_event_loop"
+      ],
+      "catatan": "Bug cross-file paling penting: WebSocketFeed tidak punya method get_orderbook() tapi api_server.py endpoint GET /api/orderbook/{symbol} memanggilnya — endpoint ini SELALU balas HTTP 502 sebelum fix ini. Ditambahkan [TAMBAHAN]. Bug lain: WebSocketFeed.__init__ pakai parameter symbols mentah (bukan self.symbols) di 4 dict comprehension, crash kalau symbols=None (default-nya). _retry() bisa 'raise None' kalau retries<=0 (belum pernah ke-trigger, tapi unsafe). scan_binance_universe() blocking call sinkron dipindah ke run_in_executor agar tidak freeze event loop saat startup — diverifikasi dengan test konkurensi nyata. TEMUAN UNTUK SESI BERIKUTNYA (intelligence/commander.py, Tier 1): di baris ~230, fallback getattr untuk cari method spread (get_current_spread_pct/get_spread_pct/get_spread) salah pakai exchange_connector.__dict__ (instance dict) untuk cek keberadaan method — method class TIDAK akan pernah muncul di situ, jadi spread_pct selalu None walau method-nya benar-benar ada & jalan (dibuktikan dipakai langsung di api_server.py). Perlu di-fix saat audit commander.py."
     }
   },
   "file_belum_diaudit": {
-    "exchange.py": {
-      "status": "PENDING",
-      "ukuran": "49 fungsi, 2 class"
-    },
     "execution.py": {
       "status": "PENDING",
       "ukuran": "10 fungsi, 1 class"
