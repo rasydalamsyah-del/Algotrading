@@ -2,6 +2,20 @@
 core/models.py
 AlgoTrader Pro v7.0 — "The Intelligence Pipeline"
 
+CHANGELOG v2 (final sweep — audit independen file backbone):
+  [BUG-FIX KRITIS] ScoredSignal.signal_quality & threshold_gap: sebelumnya
+           field statis yang dihitung SEKALI di __post_init__ pakai
+           total_score/threshold_used DEFAULT (0.0/70.0) saat construct.
+           intelligence/scorer.py construct ScoredSignal() dulu, baru MUTATE
+           total_score & threshold_used belakangan (bukan via constructor)
+           — __post_init__ tidak pernah jalan ulang, jadi signal_quality
+           HAMPIR SELALU "poor" walau skor akhir EXCELLENT. Dampak nyata:
+           intelligence/commander.py pakai signal.signal_quality utk
+           "Adaptive Sizing" (quality_mult 0.8x-1.3x) — SEMUA posisi selalu
+           kena multiplier 0.8x (POOR), under-sizing signal excellent sampai
+           ~38.5%. Sekarang signal_quality & threshold_gap jadi @property
+           yang dihitung live dari total_score/threshold_used terkini —
+           tidak bisa stale lagi, dan __post_init__ dihapus (tidak perlu lagi).
 """
 
 from __future__ import annotations
@@ -507,10 +521,8 @@ class ScoredSignal:
     total_score:    float         = 0.0
     score_breakdown: ScoreBreakdown = field(default_factory=ScoreBreakdown)
     confidence:     float         = 0.0
-    signal_quality: SignalQuality = SignalQuality.POOR
     trigger_met:    bool          = False
     threshold_used: float         = 70.0
-    threshold_gap:  float         = 0.0
     signal_type:    str           = "hold"
     suggested_sl:   Optional[float] = None
     suggested_tp:   Optional[float] = None
@@ -520,13 +532,32 @@ class ScoredSignal:
     validation_notes:  List[str] = field(default_factory=list)
     scored_at: datetime = field(default_factory=_utcnow)
 
-    def __post_init__(self) -> None:
-        self.threshold_gap = self.total_score - self.threshold_used
-        self.signal_quality = SignalQuality.from_score(self.total_score, self.threshold_used)
-
     @property
     def symbol(self) -> str:
         return self.observation.symbol
+
+    @property
+    def threshold_gap(self) -> float:
+        # [BUG-FIX v2] Sebelumnya field statis, dihitung SEKALI di __post_init__
+        # pakai total_score/threshold_used default (0.0/70.0) saat construct.
+        # scorer.py construct ScoredSignal() lalu MUTATE total_score &
+        # threshold_used belakangan (bukan lewat constructor) — __post_init__
+        # tidak pernah jalan ulang, jadi threshold_gap jadi properti yang
+        # selalu konsisten dengan nilai TERKINI, bukan snapshot construct-time.
+        return round(self.total_score - self.threshold_used, 2)
+
+    @property
+    def signal_quality(self) -> SignalQuality:
+        # [BUG-FIX v2] Sebelumnya field statis SignalQuality.POOR yang di-set
+        # sekali di __post_init__ dgn total_score=0.0 (default placeholder) —
+        # HAMPIR SELALU berakhir "poor" walau skor akhir EXCELLENT, karena
+        # scorer.py assign signal.total_score SETELAH constructor selesai.
+        # Dampak nyata: intelligence/commander.py pakai signal.signal_quality
+        # untuk "Adaptive Sizing" (quality_mult 0.8x-1.3x) — sebelum fix ini,
+        # SEMUA posisi selalu kena multiplier 0.8x (POOR) terlepas dari skor
+        # asli, under-sizing signal excellent sampai ~38.5%. Sekarang dihitung
+        # live dari total_score/threshold_used terkini, tidak bisa stale lagi.
+        return SignalQuality.from_score(self.total_score, self.threshold_used)
 
     @property
     def is_actionable(self) -> bool:
@@ -534,6 +565,7 @@ class ScoredSignal:
 
     def add_validation_note(self, note: str) -> None:
         self.validation_notes.append(note)
+
 
     def to_dict(self) -> Dict[str, Any]:
         return {
