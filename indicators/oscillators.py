@@ -23,6 +23,22 @@ Changelog v2 (upgrade):
   [MSL-5]     OscillatorIndicators model diperluas (dilakukan di models.py).
   [MSL-6]     CCI divergence: bandingkan arah CCI vs arah harga untuk deteksi
               early reversal (bull_div = harga turun tapi CCI naik; bear sebaliknya).
+
+Changelog v3 (full re-audit baris-per-baris, Tier A verification):
+  [BUG-FIX] score_roc(): cabang "elif roc > -5.0" pakai (roc + 5.0) -- salah
+            anchor, harusnya (roc + 2.0). Menyebabkan diskontinuitas ~10 poin
+            persis di roc=-2.0 (f(-2.0001)=50.0 vs f(-1.9999)=40.0) DAN di
+            roc=-5.0 (f(-5.0001)=30.0 vs f(-4.9999)=40.0). Slope formula sudah
+            benar (10/3 per unit), cuma offset additive yg salah anchor.
+            Dibuktikan dgn scan numerik di semua 5 boundary; sekarang semua
+            kontinu (selisih <0.001 di kedua sisi tiap boundary).
+  [CATATAN] iset.oscillators.* (cci_divergence, cci_trend, willr_trend,
+            roc_crossover, roc_slope) TIDAK PERNAH dicek di
+            intelligence/validator.py -- berbeda dgn trend/momentum/strength/
+            volatility/structure/patterns yg semua sudah punya
+            _check_*_context() sendiri. Hanya composite_score yg dipakai
+            (via _compute_tf_score & scorer.py). Belum diupgrade -- perlu
+            keputusan eksplisit krn ini penambahan fitur, bukan bug fix.
 """
 
 from __future__ import annotations
@@ -328,7 +344,14 @@ def score_roc(roc: Optional[float], roc_slope: Optional[float] = None,
     elif roc > -2.0:
         base = clamp_score(50.0 + roc * (10.0 / 2.0))
     elif roc > -5.0:
-        base = clamp_score(40.0 + (roc + 5.0) * (10.0 / 3.0))
+        # [BUG-FIX] Sebelumnya (roc + 5.0) -- salah anchor, menyebabkan
+        # diskontinuitas ~10 poin persis di roc=-2.0 DAN roc=-5.0 (terbukti:
+        # f(-2.0001)=50.0 vs f(-1.9999)=40.0, lompat 10 poin di titik yg
+        # SAMA). Formula ini harus anchor ke titik -2.0 (di mana branch
+        # tetangga "roc > -2.0" berakhir di nilai 40.0), bukan ke -5.0.
+        # (roc + 2.0) menjaga slope sama (10/3 per unit) tapi anchor benar:
+        # f(-2)=40 (match branch atasnya), f(-5)=30 (match branch bawahnya).
+        base = clamp_score(40.0 + (roc + 2.0) * (10.0 / 3.0))
     else:
         base = clamp_score(30.0 - min(abs(roc) - 5.0, 10.0) * 2.0)
 
