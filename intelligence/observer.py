@@ -2,6 +2,22 @@
 intelligence/observer.py
 AlgoTrader Pro v7.0 — "The Intelligence Pipeline"
 
+CHANGELOG v2:
+  [PERF] _build_indicator_set(): RSI(14) dihitung sekali, dibagi ke
+         score_momentum & score_strength (lihat indicators/strength.py v3).
+  [BUG-FIX KRITIS] _compute_tf_score(): patterns/oscillators/structure
+         sebelumnya scores.append() TANPA weights.append() pasangan —
+         zip(scores, weights) di akhir diam-diam: (a) BUANG TOTAL
+         composite_score oscillators & structure dari hasil akhir, (b)
+         salah-pasangkan composite_score patterns dgn weight milik
+         orderbook (0.10). Dibuktikan dgn skenario sintetis: structure
+         100->0 tadinya TIDAK mengubah hasil sama sekali (terbuang),
+         sekarang composite ikut bergerak proporsional. Dampak nyata:
+         primary_tf_score/confirmation_tf_score dipakai utk hard MTF gate
+         di strategy.py (bisa blokir sinyal) dan confidence di scorer.py
+         — bukan cuma estimasi kosmetik. Fix: tambah weights.append()
+         utk ketiganya (0.10/0.07/0.07, representatif dari rata-rata
+         LEVEL1_WEIGHTS lintas profile di profiles/weights.py).
 """
 
 from __future__ import annotations
@@ -242,14 +258,32 @@ def _compute_tf_score(iset: IndicatorSet) -> float:
         scores.append(iset.volatility.composite_score)
         weights.append(0.10)
 
+    # [BUG-FIX v2] Sebelumnya 3 baris di bawah ini TIDAK punya weights.append()
+    # pasangan, sementara di akhir fungsi scores & weights di-zip(). zip()
+    # berhenti diam-diam di larik TERPENDEK tanpa error — akibatnya:
+    #  - composite_score oscillators & structure 100% DIBUANG dari hasil akhir
+    #    (terbukti dgn skenario nyata: composite jadi 55.0 padahal seharusnya
+    #    jauh berbeda kalau structure=100/oscillators=0 betul2 ikut terhitung)
+    #  - composite_score patterns malah ke-pasang dgn weight milik orderbook
+    #    (0.10), bukan weight pattern sendiri.
+    # Dampak nyata: report.primary_tf_score & confirmation_tf_score dipakai
+    # utk hard MTF gate di strategy.py (bisa blokir sinyal kalau conf_score
+    # < threshold) dan komponen confidence di scorer.py — jadi bukan cuma
+    # estimasi kosmetik. Bobot di bawah ini representatif dari rata-rata
+    # LEVEL1_WEIGHTS lintas profile di profiles/weights.py (pattern~0.07-0.10,
+    # oscillator~0.07, structure~0.06-0.08); fungsi ini tetap normalisasi via
+    # total_weight di akhir jadi tidak perlu pas sama dgn LEVEL1_WEIGHTS persis.
     if iset.patterns.is_valid():
         scores.append(iset.patterns.composite_score)
+        weights.append(0.10)
 
     if iset.oscillators.is_valid():
         scores.append(iset.oscillators.composite_score)
+        weights.append(0.07)
 
     if iset.structure.is_valid():
         scores.append(iset.structure.composite_score)
+        weights.append(0.07)
 
     if iset.orderbook.is_valid():
         scores.append(iset.orderbook.composite_score)
