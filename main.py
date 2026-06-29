@@ -2,6 +2,21 @@
 main.py
 AlgoTrader Pro v7.0 — "The Intelligence Pipeline"
 
+CHANGELOG v2 (final sweep — sambungkan Kelly sizing ke eksekusi nyata):
+  [BUG-FIX KRITIS] Gate 4.5 (commander.py) menghitung position_size_pct
+           penuh (Kelly criterion + quality_mult + consec_mult + correlation
+           penalty) tapi hasilnya HANYA pernah dibaca untuk log — tidak
+           pernah disambungkan ke SignalEvent/eksekusi. _handle_buy() selalu
+           pakai max_position_size_pct flat dari config; risk.py menghitung
+           size final via ATR fixed-fractional risk, sama sekali lepas dari
+           Kelly. Sekarang _kelly_size_pct ditangkap di Gate 4.5 (hanya saat
+           commander BENAR2 approve, bukan di jalur fallback Entry 2),
+           diteruskan via SignalEvent.metadata, dan diterapkan di
+           _handle_buy() sebagai CEILING TAMBAHAN setelah risk_manager
+           approve — Kelly cuma bisa MENGURANGI assessment.approved_size,
+           tidak pernah menaikkannya di atas ATR-sizing/max_pct yang sudah
+           ada. Kalau Kelly unavailable (commander None/error), behavior
+           identik dgn sebelum fix (tidak ada perubahan default).
 """
 
 from __future__ import annotations
@@ -1316,6 +1331,16 @@ class TradingBot:
                 # GATE 4.5 — IntelligenceCommander Full Decision
                 # (Kelly Sizing, Correlation Penalty, Spread Check, Regime)
                 # ════════════════════════════════════════════
+                # [BUG-FIX v2] _kelly_size_pct sebelumnya dihitung penuh
+                # (Kelly criterion + quality_mult + consec_mult + correlation
+                # penalty) tapi position_size_pct hasilnya HANYA dipakai utk
+                # log — tidak pernah disambungkan ke SignalEvent/eksekusi nyata.
+                # _handle_buy() selalu pakai max_position_size_pct flat dari
+                # config, terlepas dari hasil Kelly. Sekarang ditangkap di sini
+                # dan diteruskan via metadata, dipakai _handle_buy() sebagai
+                # CEILING TAMBAHAN (cuma bisa mengurangi size, tidak pernah
+                # menambah di atas ATR-sizing/max_pct yang sudah ada).
+                _kelly_size_pct: Optional[float] = None
                 if self._commander is not None:
                     try:
                         from intelligence.commander import decide as _cmd_decide
@@ -1335,6 +1360,8 @@ class TradingBot:
                             risk_manager     = self.risk_manager,
                             db_manager       = self.db,
                         )
+                        if _cmd_decision.is_executable:
+                            _kelly_size_pct = _cmd_decision.position_size_pct
                         if not _cmd_decision.is_executable:
                             log.info(
                                 "[Gate4.5] Commander reject %s: %s | gates_failed=%s",
@@ -1417,6 +1444,7 @@ class TradingBot:
                         "coin_profile":  getattr(profile, "profile", "universal"),
                         "pipeline_mode": "combined_stream",
                         "total_score":   total_score,
+                        "kelly_size_pct": _kelly_size_pct,
                     },
                     total_score      = total_score,
                     regime           = getattr(scored, "regime", "undefined"),
@@ -2421,6 +2449,29 @@ class TradingBot:
                 await self._try_shadow_trade(signal)
             _reset_position_flag()
             return
+
+        # [BUG-FIX v2] Kelly sizing dari Gate 4.5 (commander.py) sebelumnya
+        # dihitung lengkap (Kelly criterion + quality_mult + consec_mult +
+        # correlation penalty) tapi position_size_pct hasilnya tidak pernah
+        # disambungkan ke eksekusi nyata — assessment.approved_size SELALU
+        # murni dari ATR-sizing/max_pct di risk.py, terlepas dari hasil Kelly.
+        # Diterapkan di sini sbg CEILING TAMBAHAN saja (bukan pengganti
+        # ATR-sizing) — Kelly cuma bisa MENGURANGI approved_size, tidak
+        # pernah menaikkannya di atas yang sudah disetujui risk_manager.
+        _kelly_size_pct = signal.metadata.get("kelly_size_pct") if signal.metadata else None
+        if (
+            _kelly_size_pct
+            and _kelly_size_pct > 0
+            and assessment.approved_size
+            and price > 0
+        ):
+            _kelly_max_qty = (equity * _kelly_size_pct / 100) / price
+            if _kelly_max_qty < assessment.approved_size:
+                log.info(
+                    "[Kelly Ceiling] %s: approved_size %.8f -> %.8f (Kelly cap %.2f%% equity)",
+                    symbol, assessment.approved_size, _kelly_max_qty, _kelly_size_pct,
+                )
+                assessment.approved_size = _kelly_max_qty
 
         trade = await self.executor.execute_signal(signal, assessment)
 
