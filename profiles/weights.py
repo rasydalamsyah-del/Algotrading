@@ -51,6 +51,34 @@ def validate_all_weight_tables() -> None:
         for cat_name, w2 in cats.items():
             _validate_weights(w2, f"L2/{profile_name}/{cat_name}")
 
+    # [BUG-FIX KRITIS] Cross-check L1 vs L2 category coverage. Sebelumnya
+    # validasi di atas cuma cek sum=1.0 PER TABEL YANG ADA — tidak pernah
+    # cek apakah SEMUA kategori L1 punya pasangan L2. Inilah yang membuat
+    # bug "mean_revert hilang 3 kategori L2 (oscillator/structure/orderbook)"
+    # lolos tanpa terdeteksi sampai crash nyata di runtime (KeyError di
+    # compute_category_score, tertangkap diam-diam oleh except umum di
+    # strategy.py — mean_revert jadi tidak pernah bisa menghasilkan sinyal).
+    # Sekarang validasi ini fail-fast di import time, bukan diam-diam di
+    # runtime produksi.
+    for profile_name, l1_cats in LEVEL1_WEIGHTS.items():
+        l2_cats = LEVEL2_WEIGHTS.get(profile_name)
+        if l2_cats is None:
+            raise ValueError(
+                f"Profile '{profile_name}' ada di LEVEL1_WEIGHTS tapi TIDAK "
+                f"ADA SAMA SEKALI di LEVEL2_WEIGHTS. "
+                f"SISTEM TIDAK BISA DIMULAI — ini bug kritis konfigurasi."
+            )
+        missing = set(l1_cats.keys()) - set(l2_cats.keys())
+        if missing:
+            raise ValueError(
+                f"Profile '{profile_name}': kategori L1 {sorted(missing)} "
+                f"TIDAK ADA pasangannya di LEVEL2_WEIGHTS. "
+                f"compute_category_score() akan crash KeyError untuk kategori "
+                f"ini kalau profile sedang dipakai trading. "
+                f"SISTEM TIDAK BISA DIMULAI dengan weight table yang tidak "
+                f"lengkap — ini adalah bug kritis dalam konfigurasi."
+            )
+
     log.debug(
         "Semua weight table valid: %d profile × %d kategori.",
         len(LEVEL1_WEIGHTS),
@@ -306,6 +334,26 @@ LEVEL2_WEIGHTS: Dict[str, Dict[str, Level2Weights]] = {
         "pattern": {
             "pattern_score": 0.55,
             "context_score": 0.45,
+        },
+        # [BUG-FIX KRITIS] 3 kategori ini sebelumnya HILANG dari mean_revert,
+        # padahal LEVEL1_WEIGHTS["mean_revert"] punya semua 8 kategori dan
+        # _calc_weighted_breakdown() di scorer.py hardcode loop ke 8 kategori
+        # utk SEMUA profil tanpa kecuali. Akibatnya setiap kali primary
+        # trigger mean_revert terpenuhi -> compute_category_score() crash
+        # KeyError di kategori 'oscillator' -> tertangkap diam-diam oleh
+        # except umum di strategy.py -> mean_revert TIDAK PERNAH menghasilkan
+        # sinyal trading sama sekali, tanpa ada yang sadar (cuma log ERROR).
+        # Bobot di bawah disesuaikan filosofi mean-reversion: oscillator
+        # overbought/oversold seimbang, structure berat ke pivot/fibonacci
+        # (bukan ichimoku/supertrend yang trend-following).
+        "oscillator": {
+            "cci": 0.35, "williams": 0.30, "roc": 0.35,
+        },
+        "structure": {
+            "ichimoku": 0.15, "sar": 0.20, "pivot": 0.45, "fibonacci": 0.20,
+        },
+        "orderbook": {
+            "ob_score": 1.00,
         },
     },
 
