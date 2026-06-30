@@ -10,9 +10,10 @@
         "11_endpoint_tanpa_auth",
         "landing_page_drift",
         "open_tanpa_with",
-        "reset_regime_terhubung"
+        "reset_regime_terhubung",
+        "get_intelligence_score_detail_history_attributeerror_dict_as_object"
       ],
-      "catatan": "Bug classifier #16b (reset_regime) diperbaiki di sesi hari ini"
+      "catatan": "Bug classifier #16b (reset_regime) diperbaiki di sesi hari ini [TEMUAN BARU dari audit database.py] Endpoint GET /api/intelligence/scores/{symbol}: history_rows dari get_signal_scores() diakses dengan sintaks atribut (r.timestamp dll) padahal return type adalah List[Dict] bukan SQLAlchemy object — AttributeError/HTTP500 setiap kali endpoint dipanggil. Dikonfirmasi via simulasi. Fix: ubah ke akses dict (r['timestamp'] dll). Catatan: 'latest' dari get_latest_signal_score() mengembalikan SQLAlchemy object langsung sehingga latest.xxx di bawahnya tetap benar dan tidak diubah."
     },
     "core/models.py": {
       "status": "DONE",

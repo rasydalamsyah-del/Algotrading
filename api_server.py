@@ -1264,13 +1264,22 @@ def create_app(bot_getter) -> FastAPI:
             )
 
         history_rows = await b.db.get_signal_scores(symbol=symbol, limit=96)
+        # [BUG-FIX] get_signal_scores() mengembalikan List[Dict], BUKAN list
+        # of SQLAlchemy object — tapi kode sebelumnya akses dengan sintaks
+        # atribut (r.timestamp, r.total_score, dll) yang valid hanya untuk
+        # SQLAlchemy object. Ini menyebabkan AttributeError/'dict' object
+        # has no attribute 'timestamp' setiap kali endpoint ini dipanggil.
+        # Dikonfirmasi via simulasi langsung. Fix: ubah ke akses dict.
+        # Catatan: get_latest_signal_score() (dipakai di 'latest' di atas)
+        # BERBEDA — ia mengembalikan SQLAlchemy object langsung, jadi akses
+        # atribut di 'latest.xxx' di bawah tetap benar dan tidak diubah.
         history = [
             {
-                "timestamp":   _iso(r.timestamp),
-                "total_score": r.total_score,
-                "regime":      r.regime,
-                "trigger_met": r.trigger_met,
-                "action":      r.action_taken,
+                "timestamp":   _iso(r["timestamp"]),
+                "total_score": r["total_score"],
+                "regime":      r["regime"],
+                "trigger_met": r["trigger_met"],
+                "action":      r["action_taken"],
             }
             for r in history_rows
         ]
