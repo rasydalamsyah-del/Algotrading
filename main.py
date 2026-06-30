@@ -2427,6 +2427,33 @@ class TradingBot:
                 "[Entry2] %s transition size: %.1f%% x %.1f = %.1f%%",
                 symbol, self.config["max_position_size_pct"], _trans_mult, _effective_size_pct,
             )
+
+        # [TAMBAHAN] Confidence-based sizing — KHUSUS mode legacy.
+        # Sebelumnya: signal.confidence (dihitung _compute_confidence di
+        # strategy.py, 4 komponen tertimbang: breakout strength, volume,
+        # RSI, trend) dihasilkan dengan cermat tapi HANYA dipakai untuk
+        # notifikasi/log — sama sekali tidak memengaruhi ukuran posisi.
+        # Sinyal confidence 0.95 dan confidence 0.35 mendapat ukuran posisi
+        # identik (flat max_position_size_pct). Mode pipeline v7 sudah
+        # punya Kelly sizing sendiri berbasis score (lihat Kelly Ceiling di
+        # bawah) — jadi confidence sizing ini HANYA diterapkan kalau sinyal
+        # berasal dari mode legacy (fallback, pipeline_mode="legacy" di
+        # metadata), supaya tidak tumpang tindih/dobel-kurangi dengan Kelly.
+        # Formula floor 50%: size = max_pct x (0.5 + 0.5 x confidence).
+        # confidence=1.0 -> 100% dari max_pct. confidence=0.0 -> 50% dari
+        # max_pct (floor, bukan nol — confidence belum divalidasi terhadap
+        # data trading nyata, jadi pengaruhnya dibatasi, bukan drastis).
+        if signal.metadata and signal.metadata.get("pipeline_mode") == "legacy":
+            _conf = max(0.0, min(1.0, float(signal.confidence or 0.0)))
+            _conf_mult = 0.5 + 0.5 * _conf
+            _before_conf = _effective_size_pct
+            _effective_size_pct = _effective_size_pct * _conf_mult
+            log.info(
+                "[ConfidenceSizing] %s legacy mode: %.1f%% x conf_mult(%.3f, "
+                "confidence=%.3f) = %.1f%%",
+                symbol, _before_conf, _conf_mult, _conf, _effective_size_pct,
+            )
+
         rough_qty = (
             (equity * _effective_size_pct / 100) / price
             if price > 0 else 0
