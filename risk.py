@@ -166,10 +166,30 @@ class RiskManager:
         terhadap rangkaian rugi berturut-turut sudah sangat tipis.
         Dipakai yang LEBIH BESAR dari keduanya (kondisi mana saja yang
         lebih dulu jadi masalah).
+
+        [BUG-FIX] Sebelumnya: tidak ada cap atas. Pada config dengan
+        risk_per_trade_pct sangat tinggi relatif modal kecil (misal modal
+        $33, risk_per_trade_pct=35% — ditemukan dari config contoh di
+        simulate_test.py), hasil kalkulasi bisa MELEBIHI initial_equity
+        itu sendiri (cth: threshold $34.65 > modal $33). Ini membuat bot
+        langsung halt LOW_BALANCE sejak awal, bahkan sebelum buka posisi
+        apapun — kondisi yang tidak masuk akal untuk halt "saldo terlalu
+        rendah". Sekarang: ambang di-cap maksimal 50% dari initial_equity,
+        supaya threshold tidak pernah lebih besar dari separuh modal awal.
         """
         slot_based = self._min_order_value_usdt * self._max_open_positions
         risk_based = self._initial_equity * (self._risk_per_trade_pct / 100) * 3
-        return max(slot_based, risk_based)
+        raw = max(slot_based, risk_based)
+
+        if self._initial_equity > 0:
+            cap = self._initial_equity * 0.5
+            if raw > cap:
+                log.debug(
+                    "LOW_BALANCE threshold di-cap: %.4f → %.4f (50%% dari initial_equity %.4f)",
+                    raw, cap, self._initial_equity,
+                )
+                return cap
+        return raw
 
     def update_portfolio_state(
         self,
@@ -508,6 +528,16 @@ class RiskManager:
         requested: float,
         atr:       Optional[float],
     ) -> Tuple[Optional[float], str]:
+        # [BUG-FIX] Sebelumnya: fungsi ini langsung membagi dengan price
+        # tanpa validasi sendiri — ZeroDivisionError kalau price<=0.
+        # Saat ini AMAN karena satu-satunya caller (_evaluate_order_locked)
+        # sudah cek price<=0 sebelum memanggil fungsi ini. Tapi fungsi ini
+        # rapuh terhadap perubahan di masa depan (caller baru, refactor,
+        # test langsung) yang tidak melalui guard itu. Tambah validasi
+        # sendiri agar fungsi ini aman dipanggil independen.
+        if price is None or price <= 0:
+            return None, f"Invalid price: {price}"
+
         equity = self._current_equity
 
         if atr and atr > 0 and price > 0:
