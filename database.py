@@ -213,6 +213,15 @@ class SignalScore(Base):
     fib_support        = Column(Float,   nullable=True)
     fib_resistance     = Column(Float,   nullable=True)
     signal_confidence  = Column(Float,   nullable=True)
+    # [TAMBAHAN] Logging pasif sentiment_score (Fear & Greed Index) untuk
+    # sinyal dari pipeline v7. Sebelumnya sentiment HANYA dipakai sebagai
+    # gate biner di mode legacy (_generate_signals_legacy) -- pipeline v7
+    # sama sekali tidak mempertimbangkan sentiment makro. Kolom ini TIDAK
+    # memengaruhi keputusan apapun (logging murni) -- tujuannya kumpulkan
+    # data dulu untuk lihat apakah ada korelasi nyata antara sentiment
+    # saat entry dan win rate, sebelum (kalau memang terbukti berguna)
+    # disambungkan ke scoring/gate yang sesungguhnya.
+    sentiment_score    = Column(Float,   nullable=True)
 
     __table_args__ = (
         Index("ix_scores_symbol_ts",      "symbol", "timestamp"),
@@ -366,6 +375,7 @@ class DatabaseManager:
                     "fib_support REAL",
                     "fib_resistance REAL",
                     "signal_confidence REAL",
+                    "sentiment_score REAL",
                 ]
                 for col in new_cols:
                     try:
@@ -1110,6 +1120,7 @@ class DatabaseManager:
         fib_support:        Optional[float] = None,
         fib_resistance:     Optional[float] = None,
         signal_confidence:  Optional[float] = None,
+        sentiment_score:    Optional[float] = None,
     ) -> Optional[int]:
         try:
             async with self._session() as s:
@@ -1141,6 +1152,7 @@ class DatabaseManager:
                     fib_support=round(fib_support, 8) if fib_support else None,
                     fib_resistance=round(fib_resistance, 8) if fib_resistance else None,
                     signal_confidence=round(signal_confidence, 4) if signal_confidence else None,
+                    sentiment_score=round(sentiment_score, 4) if sentiment_score is not None else None,
                 )
                 s.add(rec)
                 await s.commit()
@@ -1203,6 +1215,32 @@ class DatabaseManager:
                 "strength_score":    rec.strength_score,
                 "volatility_score":  rec.volatility_score,
                 "pattern_score":     rec.pattern_score,
+                # [BUG-FIX] Sebelumnya: oscillator_score, structure_score,
+                # orderbook_score, current_price, suggested_sl,
+                # suggested_tp, nearest_support, nearest_resistance,
+                # fib_support, fib_resistance, signal_confidence SUDAH ADA
+                # di skema tabel (kolom + parameter save_signal_score) dan
+                # BISA disimpan, tapi dict yang dikembalikan fungsi ini
+                # tidak pernah menyertakannya — siapapun yang membaca lewat
+                # get_signal_scores() (misal api_server.py/dashboard)
+                # selalu mendapat KeyError/data hilang untuk kolom ini,
+                # walau datanya sebenarnya ada di database. Ditemukan saat
+                # menambah sentiment_score (lihat di bawah) -- gap ini
+                # independen, sudah ada sebelum sentiment_score ditambah.
+                "oscillator_score":  rec.oscillator_score,
+                "structure_score":   rec.structure_score,
+                "orderbook_score":   rec.orderbook_score,
+                "current_price":     rec.current_price,
+                "suggested_sl":      rec.suggested_sl,
+                "suggested_tp":      rec.suggested_tp,
+                "nearest_support":   rec.nearest_support,
+                "nearest_resistance": rec.nearest_resistance,
+                "fib_support":       rec.fib_support,
+                "fib_resistance":    rec.fib_resistance,
+                "signal_confidence": rec.signal_confidence,
+                # [TAMBAHAN] sentiment_score — logging pasif Fear & Greed
+                # Index untuk pipeline v7, lihat strategy.py get_scored_signal.
+                "sentiment_score":   rec.sentiment_score,
                 "threshold_used":    rec.threshold_used,
                 "regime":            rec.regime,
                 "regime_confidence": rec.regime_confidence,

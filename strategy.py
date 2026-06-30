@@ -991,6 +991,30 @@ class VolumetricBreakoutStrategy(BaseStrategy):
                 scored,
             )
 
+            # [TAMBAHAN] Logging pasif sentiment_score untuk pipeline v7.
+            # Sebelumnya: sentiment (Fear & Greed Index) HANYA dipakai
+            # sebagai gate biner di mode legacy — pipeline v7 (jalur utama)
+            # sama sekali tidak mempertimbangkan sentiment makro dalam
+            # keputusan apapun. Setelah analisis (resolusi data F&G adalah
+            # harian-makro vs 8 kategori scoring v7 yang granular per-candle,
+            # berisiko jadi noise; juga kemungkinan redundan dengan regime
+            # classifier yang sudah menangkap kondisi bearish/bullish dari
+            # indikator teknikal sendiri), keputusan SAAT INI adalah TIDAK
+            # menyambungkan sentiment ke scoring/gate — risiko mengencerkan
+            # sistem yang sudah dikalibrasi cermat tanpa bukti manfaat.
+            # Sebagai gantinya: kumpulkan data dulu (logging murni, TIDAK
+            # memengaruhi total_score/trigger_met/keputusan apapun) supaya
+            # nanti bisa dianalisis apakah ada korelasi nyata antara
+            # sentiment saat entry dan win rate, sebelum keputusan lebih
+            # jauh diambil berdasarkan data, bukan asumsi.
+            _sentiment_for_log: Optional[float] = None
+            try:
+                _sentiment_for_log = await asyncio.wait_for(
+                    check_market_sentiment(symbol), timeout=3.0
+                )
+            except Exception as _sent_err:
+                log.debug("[%s] Sentiment fetch utk logging gagal: %s", symbol, _sent_err)
+
             # Simpan ke signal_scores dari event loop utama (bukan dari thread)
             if self._db is not None and scored is not None:
                 try:
@@ -1016,6 +1040,7 @@ class VolumetricBreakoutStrategy(BaseStrategy):
                         suggested_sl=scored.suggested_sl,
                         suggested_tp=scored.suggested_tp,
                         signal_confidence=getattr(scored, "confidence", None),
+                        sentiment_score=_sentiment_for_log,
                     )
                 except Exception as _se:
                     log.debug("Gagal save signal_score dari strategy: %s", _se)
