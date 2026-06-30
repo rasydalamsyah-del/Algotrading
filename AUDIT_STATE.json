@@ -173,13 +173,18 @@
         "low_balance_threshold_cap_50pct_initial_equity"
       ],
       "catatan": "Bug self._exchange di evaluate_order(side=sell) — dead code, tidak pernah dipanggil sebelumnya (main.py buat RiskAssessment manual untuk close). Diganti param free_coin_balance opsional, backward compatible. Disambungkan ke main.py _do_close_position. Sekaligus ditemukan & diperbaiki bug independen di main.py: PnL (gross_pnl/entry_fee/exit_fee) pakai pos.amount/exit_price bukan trade.filled/trade.executed_price (nilai riil eksekusi exchange). Tambahan: HaltReason.LOW_BALANCE (sebelumnya dead enum, tidak pernah dipakai) sekarang diimplementasikan sebagai halt otomatis. Ambang dihitung otomatis dari config (max(min_order_value_usdt x max_open_positions, initial_equity x risk_per_trade_pct% x 3)) — tidak ada angka hardcode. Auto-resume otomatis dengan buffer 10% untuk cegah flapping. Field low_balance_threshold ditambahkan ke get_system_health(). Audit menyeluruh fase 2 (semua fungsi ditest satu per satu): ditemukan 2 hal tambahan — (1) _compute_position_size rapuh terhadap price<=0 (ZeroDivisionError), aman lewat jalur normal tapi tidak defensif sendiri, ditambah guard. (2) cap LOW_BALANCE threshold yang dibuat sebelumnya bisa melebihi initial_equity pada config ekstrem (contoh dari simulate_test.py: risk_per_trade_pct=35%, modal $33 -> threshold $34.65 > modal), ditambah cap maksimal 50% initial_equity. Semua fungsi publik/privat risk.py sudah ditest individual dengan ~30 skenario termasuk edge case."
+    },
+    "strategy.py": {
+      "status": "DONE",
+      "bug_fixed": [
+        "regime_transition_sl_relax_asimetri_menyusut_progresif",
+        "dead_variable_pending_di_generate_signals_v7",
+        "get_symbol_timeframe_race_condition_tanpa_lock"
+      ],
+      "catatan": "Bug utama: HOLD_RELAX_SL melipatgandakan quick_sl_pct dari nilai SAAT INI dengan (1+relax_pct), sementara HOLD_TIGHTEN_SL memakai (1-tighten_pct). Hasil kali kedua faktor (cth 0.7x1.2=0.84) tidak pernah persis 1.0, jadi siklus tighten-relax bergantian (realistis terjadi, cooldown cuma 120 detik) membuat SL menyusut progresif sampai floor 0.30% walau kondisi terakhir RELAX (regime mendukung posisi). Fix: tambah field original_quick_sl_pct di PositionTracker (__post_init__ auto-isi dari quick_sl_pct, backward compatible), relax SELALU kembali persis ke nilai itu. Minor: bersihkan dead variable 'pending' di _generate_signals_v7 (tidak relevan, fungsi ini cuma generate CLOSE_LONG); tambah lock di get_symbol_timeframe untuk konsisten dengan get_profile/_resolve_params. Cross-check: _pending_entry tidak terisi di jalur pipeline v7 TAPI proteksi anti-duplicate-entry setara sudah ada di main.py via _pipeline_active/_queued_symbols - bukan bug nyata. Test: ~10 skenario termasuk simulasi siklus tighten-relax berulang, semua fungsi (_compute_sl_tp_quick/wave, _compute_confidence, check_trailing_exit) ditest edge case, tidak ada bug lain."
     }
   },
   "file_belum_diaudit": {
-    "strategy.py": {
-      "status": "PENDING",
-      "ukuran": "42 fungsi, 6 class"
-    },
     "notifications.py": {
       "status": "PENDING",
       "ukuran": "30 fungsi, 2 class"

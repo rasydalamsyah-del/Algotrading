@@ -128,6 +128,19 @@ class PositionTracker:
     regime_stability_count:  int              = 0
     last_seen_regime:        str              = ""
     regime_action_log:       list             = field(default_factory=list)
+    # [TAMBAHAN] Referensi tetap quick_sl_pct SAAT POSISI DIBUKA (sebelum
+    # ada modifikasi tighten/relax apapun). Dipakai oleh HOLD_RELAX_SL agar
+    # selalu kembali persis ke nilai ini — bukan melipatgandakan dari nilai
+    # saat ini, yang sebelumnya menyebabkan SL menyusut progresif kalau
+    # tighten/relax terjadi berulang (lihat _handle_regime_transition).
+    # __post_init__ mengisi ini otomatis dari quick_sl_pct kalau tidak
+    # diisi manual saat construct, supaya semua caller existing tidak perlu
+    # diubah satu per satu.
+    original_quick_sl_pct: Optional[float] = None
+
+    def __post_init__(self) -> None:
+        if self.original_quick_sl_pct is None:
+            self.original_quick_sl_pct = self.quick_sl_pct
 
     def increment_hold(self) -> None:
         self.candles_held += 1
@@ -464,7 +477,14 @@ class VolumetricBreakoutStrategy(BaseStrategy):
             return self._profiles.get(symbol)
 
     def get_symbol_timeframe(self, symbol: str) -> str:
-        profile = self._profiles.get(symbol)
+        # [BUG-FIX] Sebelumnya: akses self._profiles tanpa self._lock,
+        # tidak konsisten dengan get_profile/_resolve_params yang selalu
+        # pakai lock untuk akses dict yang sama. Risiko race ringan (baca
+        # data usang sepersekian detik saat _profiles sedang ditulis oleh
+        # thread lain, misal _load_profiles/refresh_profiles). Tambah lock
+        # agar konsisten dan defensif.
+        with self._lock:
+            profile = self._profiles.get(symbol)
         if profile is not None:
             return profile.timeframe
         return self.timeframe
@@ -757,9 +777,23 @@ class VolumetricBreakoutStrategy(BaseStrategy):
                 tracker.sl_relaxed   = False
 
             elif action == "HOLD_RELAX_SL" and not tracker.sl_relaxed:
-                profile = self._profiles.get(symbol)
-                relax_pct = getattr(profile, "regime_transition_sl_relax_pct", 0.20) if profile else 0.20
-                tracker.quick_sl_pct = tracker.quick_sl_pct * (1.0 + relax_pct)
+                # [BUG-FIX] Sebelumnya: relax melipatgandakan quick_sl_pct
+                # SAAT INI dengan (1+relax_pct). Karena tighten memakai
+                # (1-tighten_pct) dan relax memakai (1+relax_pct), hasil
+                # kali kedua faktor itu (cth 0.7 x 1.2 = 0.84) TIDAK PERNAH
+                # persis 1.0 — jadi tiap siklus tighten→relax bergantian,
+                # quick_sl_pct menyusut progresif sampai mengenai floor
+                # 0.30%, walau kondisi terakhir adalah RELAX (regime sudah
+                # balik mendukung posisi). Ditemukan lewat simulasi: 7
+                # siklus tighten-relax bergantian sudah membuat SL mengenai
+                # floor — realistis terjadi karena cooldown cuma 120 detik.
+                # Sekarang: relax SELALU mengembalikan persis ke
+                # original_quick_sl_pct (SL saat posisi pertama dibuka),
+                # bukan menghitung ulang dari nilai saat ini. Predictable:
+                # "regime balik mendukung" = "SL balik ke rencana awal",
+                # tidak bergantung riwayat berapa kali tighten/relax sudah
+                # terjadi sebelumnya.
+                tracker.quick_sl_pct = tracker.original_quick_sl_pct
                 tracker.sl_relaxed   = True
                 tracker.sl_tightened = False
 
@@ -1032,7 +1066,14 @@ class VolumetricBreakoutStrategy(BaseStrategy):
         with self._lock:
             tracker_ref = self._pos_trackers.get(symbol)
             in_position = self._in_position.get(symbol, False)
-            pending     = symbol in self._pending_entry
+            # [BUG-FIX] Sebelumnya: variabel `pending` diisi di sini tapi
+            # tidak pernah dipakai — fungsi ini (_generate_signals_v7) HANYA
+            # menghasilkan sinyal CLOSE_LONG untuk posisi yang sudah terbuka
+            # (entry baru dibuat lewat get_scored_signal, dipanggil terpisah
+            # dari main.py). _pending_entry juga tidak relevan di jalur
+            # pipeline ini — proteksi anti-duplicate-entry yang setara sudah
+            # ada di main.py lewat _pipeline_active/_queued_symbols. Variabel
+            # dead code dihapus untuk hindari kebingungan audit berikutnya.
 
         if tracker_ref:
             tracker_ref.increment_hold()
