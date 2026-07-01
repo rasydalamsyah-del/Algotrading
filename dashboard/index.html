@@ -819,6 +819,7 @@ tbody td.symbol:hover { color: var(--blue); }
     <a onclick="navigate('analytics')"  id="nav-analytics">Analytics</a>
     <a onclick="navigate('diagnosa')"   id="nav-diagnosa">Diagnosa</a>
     <a onclick="navigate('risk')"       id="nav-risk">Risk</a>
+    <a onclick="navigate('intelligence')" id="nav-intelligence">AI Learner</a>
     <a onclick="navigate('settings')"   id="nav-settings">Settings</a>
   </div>
   <div class="topbar-right">
@@ -863,6 +864,12 @@ tbody td.symbol:hover { color: var(--blue); }
   </a>
   <a class="sidebar-item" id="sb-risk" onclick="navigate('risk');closeSidebar()">
     <span class="icon">🛡</span> Risk Monitor
+  </a>
+  <div class="sidebar-divider"></div>
+  <div class="sidebar-section">System</div>
+  <a class="sidebar-item" id="sb-intelligence" onclick="navigate('intelligence');closeSidebar()">
+    <span class="icon">🧠</span> AI Learner
+    <span class="badge purple" id="sb-ml-badge" style="display:none">!</span>
   </a>
   <div class="sidebar-divider"></div>
   <div class="sidebar-section">System</div>
@@ -1127,7 +1134,13 @@ tbody td.symbol:hover { color: var(--blue); }
 <div class="page" id="page-diagnosa">
   <div class="page-header">
     <div><div class="page-title">Diagnosa Sinyal</div><div class="page-subtitle">Analisis real-time semua coin di watchlist · VolumetricBreakout v7.0</div></div>
-    <div class="btn-group"><button class="btn btn-primary" onclick="loadDiagnosa()" id="diagnosa-btn" style="font-size:11px;padding:6px 14px">🔍 Analisis Sekarang</button></div>
+    <div class="btn-group">
+      <button class="btn btn-primary" onclick="loadDiagnosa()" id="diagnosa-btn" style="font-size:11px;padding:6px 14px">🔍 Analisis Semua</button>
+      <div style="display:flex;gap:6px;align-items:center">
+        <input id="force-sym-input" class="form-input" style="width:130px;font-size:11px;padding:4px 8px" placeholder="BTC/USDT">
+        <button class="btn btn-ghost" onclick="forceAnalyzeSym()" style="font-size:11px;padding:5px 12px">⚡ Force 1 Coin</button>
+      </div>
+    </div>
   </div>
   <div class="grid-3 section-gap" id="diagnosa-summary-cards" style="display:none">
     <div class="stat-card" style="--accent:var(--green)"><div class="stat-label">BUY Signals</div><div class="stat-value green" id="diag-buy-count">0</div></div>
@@ -1210,6 +1223,119 @@ tbody td.symbol:hover { color: var(--blue); }
       <table>
         <thead><tr><th>Symbol</th><th class="center">Feed</th><th class="center">OB</th><th class="right">Age</th><th class="right">Last Price</th><th class="right">Mid Price</th><th class="right">Spread%</th><th class="center">Dead</th></tr></thead>
         <tbody id="feed-health-tbody"><tr><td colspan="8"><div class="empty-state">Loading...</div></td></tr></tbody>
+      </table>
+    </div>
+  </div>
+</div>
+
+<!-- AI LEARNER: Meta Learner + Analytics Lanjutan + Cross-Learn + Executor + Shadow Trades -->
+<div class="page" id="page-intelligence">
+  <div class="page-header">
+    <div>
+      <div class="page-title">AI Learner & Analytics</div>
+      <div class="page-subtitle">Meta Learner · Cross-Learn · Analytics Lanjutan · Executor · Shadow Trades</div>
+    </div>
+    <div class="btn-group">
+      <button class="btn btn-ghost" onclick="loadIntelligencePage()" style="font-size:11px;padding:6px 12px">🔄 Refresh</button>
+      <button class="btn btn-primary" onclick="refreshAnalyticsBackend()" style="font-size:11px;padding:6px 12px">⚡ Refresh Analytics</button>
+    </div>
+  </div>
+
+  <!-- ── Meta Learner: Saran Auto-Tuning ── -->
+  <div class="pos-card section-gap">
+    <div class="pos-card-header">
+      <span class="card-title">🧠 Meta Learner — Saran Auto-Tuning</span>
+      <span style="font-size:11px;color:var(--text-muted)" id="ml-pending-count">Memuat...</span>
+    </div>
+    <div id="ml-suggestions-wrap">
+      <div class="empty-state" style="padding:24px">Memuat saran...</div>
+    </div>
+  </div>
+
+  <!-- ── Meta Learner: History ── -->
+  <div class="pos-card section-gap">
+    <div class="pos-card-header"><span class="card-title">📜 History Perubahan Parameter</span></div>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Waktu</th><th>Parameter</th><th>Nilai Lama</th><th>Nilai Baru</th><th>Alasan</th><th>Status</th></tr></thead>
+        <tbody id="ml-history-tbody"><tr><td colspan="6"><div class="empty-state">Memuat...</div></td></tr></tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- ── Analytics Lanjutan: Attribution ── -->
+  <div class="grid-2 section-gap">
+    <div class="pos-card">
+      <div class="pos-card-header"><span class="card-title">📊 Atribusi PnL per Profil</span></div>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Profil</th><th class="right">Trades</th><th class="right">Win%</th><th class="right">Total PnL</th><th class="right">Kontribusi</th></tr></thead>
+          <tbody id="attr-tbody"><tr><td colspan="5"><div class="empty-state">Memuat...</div></td></tr></tbody>
+        </table>
+      </div>
+    </div>
+    <div class="pos-card">
+      <div class="pos-card-header"><span class="card-title">📈 Performa per Regime</span></div>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Regime</th><th class="right">Trades</th><th class="right">Win%</th><th class="right">Avg PnL</th></tr></thead>
+          <tbody id="regime-perf-tbody"><tr><td colspan="4"><div class="empty-state">Memuat...</div></td></tr></tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── Analytics: Indikator Effectiveness ── -->
+  <div class="pos-card section-gap">
+    <div class="pos-card-header"><span class="card-title">🎯 Efektivitas Indikator</span></div>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Indikator</th><th class="right">Sinyal</th><th class="right">Akurat</th><th class="right">Akurasi%</th><th class="right">Avg PnL saat aktif</th></tr></thead>
+        <tbody id="ind-eff-tbody"><tr><td colspan="5"><div class="empty-state">Memuat...</div></td></tr></tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- ── Cross-Learn + Executor ── -->
+  <div class="grid-2 section-gap">
+    <div class="card">
+      <div class="card-header"><span class="card-title">🔄 Cross-Learn Status</span></div>
+      <div id="crosslearn-status-wrap">
+        <div class="empty-state">Memuat...</div>
+      </div>
+      <div class="pos-card-header" style="margin-top:12px"><span class="card-title">Coin Swap History</span></div>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Waktu</th><th>Keluar</th><th>Masuk</th><th>Alasan</th></tr></thead>
+          <tbody id="swap-history-tbody"><tr><td colspan="4"><div class="empty-state">Memuat...</div></td></tr></tbody>
+        </table>
+      </div>
+    </div>
+    <div class="card">
+      <div class="card-header"><span class="card-title">⚙️ Executor Stats</span></div>
+      <div id="executor-stats-wrap">
+        <div class="empty-state">Memuat...</div>
+      </div>
+      <div class="card-header" style="margin-top:12px"><span class="card-title">👻 Shadow Trades (Paper)</span></div>
+      <div id="shadow-trades-wrap">
+        <div class="empty-state">Memuat...</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── Universe Management ── -->
+  <div class="pos-card section-gap">
+    <div class="pos-card-header">
+      <span class="card-title">🌐 Universe Management</span>
+      <div class="btn-group" style="gap:6px">
+        <input id="uni-add-input" class="form-input" style="width:160px;font-size:11px;padding:4px 8px" placeholder="BTC/USDT">
+        <button class="btn btn-primary" onclick="universeAdd()" style="font-size:11px;padding:5px 12px">+ Add</button>
+      </div>
+    </div>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Symbol</th><th>Override</th><th>Regime</th><th class="right">Score</th><th class="center">Action</th></tr></thead>
+        <tbody id="universe-manage-tbody"><tr><td colspan="5"><div class="empty-state">Memuat...</div></td></tr></tbody>
       </table>
     </div>
   </div>
@@ -1674,8 +1800,17 @@ async function apiFetch(path, timeout=8000) {
   try {
     const ctrl=new AbortController();
     const tid=setTimeout(()=>ctrl.abort(),timeout);
-    const r=await fetch(API_BASE+path,{signal:ctrl.signal});
+    // FIX #1 KRITIS: Hampir semua endpoint GET butuh X-API-Key.
+    // Sebelumnya apiFetch tidak pernah kirim key → 401 di semua data utama.
+    const hdrs={};
+    if (DASHBOARD_API_KEY) hdrs['X-API-Key']=DASHBOARD_API_KEY;
+    const r=await fetch(API_BASE+path,{signal:ctrl.signal, headers:hdrs});
     clearTimeout(tid);
+    if (r.status===401) {
+      document.getElementById('api-error-bar').style.display='flex';
+      document.getElementById('api-error-msg').textContent='API Key salah/belum diset. Buka Settings → Dashboard API Key.';
+      return null;
+    }
     if (!r.ok) return null;
     return await r.json();
   } catch(e) { return null; }
@@ -1765,7 +1900,8 @@ function navigate(page) {
   if (page==='analytics') loadAnalytics();
   if (page==='risk')      renderRiskPage();
   if (page==='watchlist') renderCoinGrid();
-  if (page==='settings')  loadSettings();
+  if (page==='settings')    loadSettings();
+  if (page==='intelligence') loadIntelligencePage();
 }
 
 function toggleSidebar() {
@@ -2052,8 +2188,12 @@ function calcDuration(entryTime) {
 }
 
 async function closePositionConfirm(sym,price) {
+  if (!DASHBOARD_API_KEY){showToast('warn','API Key Diperlukan','Buka Settings dan isi Dashboard API Key.');return;}
   if (!confirm(`Tutup posisi ${sym} @ ${fmtUSD(price)}?\nINI AKAN MENUTUP POSISI SECARA MARKET!`)) return;
-  const r = await apiFetch('/positions/'+encodeURIComponent(sym)+'/close', {method:'POST'});
+  // FIX #2: Sebelumnya pakai apiFetch() dengan arg {method:'POST'} yang dibaca sebagai timeout
+  // sehingga selalu kirim GET tanpa auth → tidak pernah berhasil.
+  // Sekarang pakai apiPost() yang sudah benar kirim POST + X-API-Key.
+  const r = await apiPost('/positions/'+encodeURIComponent(sym)+'/close', {});
   if (!r) return;
   if (r.success) {
     showToast('sell','✅ Posisi Ditutup', sym+' berhasil ditutup.');
@@ -2883,7 +3023,9 @@ async function saveExchangeConfig() {
   if(secret) payload.api_secret=secret;
   if(passphrase) payload.api_passphrase=passphrase;
   if(testnet!==undefined) payload.testnet=(testnet==='true');
-  if(watchlistRaw) payload.watchlist=watchlistRaw.split(',').map(s=>s.trim()).filter(Boolean);
+  // FIX #3: Backend whitelist field-nya 'universe_watchlist', bukan 'watchlist'.
+  // Sebelumnya field selalu di-filter out diam-diam → bot tidak pernah terima watchlist baru.
+  if(watchlistRaw) payload.universe_watchlist=watchlistRaw.split(',').map(s=>s.trim()).filter(Boolean);
   if(!Object.keys(payload).length){showToast('warn','Kosong','Tidak ada perubahan.');return;}
   if(!confirm('Ganti exchange config akan reconnect bot. Lanjutkan?')) return;
   const r=await apiPost('/config/update',payload);
@@ -3148,6 +3290,342 @@ window.addEventListener('resize',()=>{
 });
 
 /* ═══════════════════════════════════════════
+   ORDERBOOK (Drawer)
+═══════════════════════════════════════════ */
+async function loadOrderbook(sym) {
+  if (!sym) return;
+  const data = await apiFetch('/orderbook/'+encodeURIComponent(sym));
+  if (!data) { showToast('warn','Orderbook','Gagal ambil data orderbook.'); return; }
+  const bids = data.bids||[];
+  const asks = data.asks||[];
+  const danger = data.danger_level||'normal';
+  const imb = data.imbalance_score;
+  let html = '<div style="font-size:11px;margin-bottom:8px">';
+  html += '<span style="color:var(--text-muted)">Imbalance: </span>';
+  html += '<span style="color:'+(imb>0.6?'var(--green)':imb<-0.6?'var(--red)':'var(--yellow))'+'">'+(imb!==undefined?imb.toFixed(3):'—')+'</span>';
+  html += ' &nbsp; <span class="badge '+(danger==='danger'?'red':danger==='warning'?'yellow':'green')+'">'+danger.toUpperCase()+'</span></div>';
+  html += '<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;font-size:10px">';
+  html += '<div><div style="color:var(--green);font-weight:700;margin-bottom:4px">BIDS</div>';
+  html += bids.slice(0,10).map(b=>`<div style="display:flex;justify-content:space-between;padding:2px 0"><span>${fmtUSD(b[0])}</span><span style="color:var(--text-muted)">${fmtNum(b[1],4)}</span></div>`).join('');
+  html += '</div><div><div style="color:var(--red);font-weight:700;margin-bottom:4px">ASKS</div>';
+  html += asks.slice(0,10).map(a=>`<div style="display:flex;justify-content:space-between;padding:2px 0"><span>${fmtUSD(a[0])}</span><span style="color:var(--text-muted)">${fmtNum(a[1],4)}</span></div>`).join('');
+  html += '</div></div>';
+  // tampilkan di panel bawah drawer jika ada, atau toast
+  const el = document.getElementById('cd-profile-body');
+  if (el) { el.innerHTML = html; showToast('info','Orderbook',sym+' orderbook loaded.'); }
+}
+
+/* ═══════════════════════════════════════════
+   FORCE ANALYZE (Diagnosa per coin)
+═══════════════════════════════════════════ */
+async function forceAnalyzeSym() {
+  const sym = (document.getElementById('force-sym-input')?.value||'').trim().toUpperCase();
+  if (!sym) { showToast('warn','Input','Isi symbol dulu, contoh: BTC/USDT'); return; }
+  await forceAnalyzeSingle(sym);
+}
+
+async function forceAnalyzeSingle(sym) {
+  if (!DASHBOARD_API_KEY) { showToast('warn','API Key Diperlukan','Buka Settings.'); return; }
+  showToast('info','Force Analyze','Trigger analisis ulang '+sym+'...');
+  const r = await apiPost('/bot/force_analyze/'+encodeURIComponent(sym), {});
+  if (r && r.success) showToast('buy','✅ Done', sym+' dianalisis ulang. Refresh diagnosa.');
+  else showToast('warn','Gagal', r?.message||r?.error||'Error');
+}
+
+/* ═══════════════════════════════════════════
+   AI LEARNER PAGE — semua fungsi loader
+═══════════════════════════════════════════ */
+async function loadIntelligencePage() {
+  await Promise.all([
+    loadMetaLearner(),
+    loadAnalyticsAdvanced(),
+    loadCrossLearn(),
+    loadExecutorStats(),
+    loadShadowTrades(),
+    loadUniverseManage(),
+  ]);
+}
+
+// ── Meta Learner ──
+async function loadMetaLearner() {
+  const [sugg, hist] = await Promise.all([
+    apiFetch('/meta_learner/suggestions'),
+    apiFetch('/meta_learner/history'),
+  ]);
+
+  // Suggestions
+  const wrap = document.getElementById('ml-suggestions-wrap');
+  const countEl = document.getElementById('ml-pending-count');
+  const items = sugg?.suggestions||[];
+  const pending = items.filter(s=>s.status==='pending');
+  if (countEl) countEl.textContent = pending.length+' pending';
+  // Update sidebar badge
+  const badge = document.getElementById('sb-ml-badge');
+  if (badge) { badge.style.display = pending.length?'inline':'none'; }
+  if (wrap) {
+    if (!items.length) { wrap.innerHTML='<div class="empty-state" style="padding:24px">Tidak ada saran dari Meta Learner</div>'; }
+    else wrap.innerHTML = items.map(s => {
+      const isPend = s.status==='pending';
+      return `<div style="background:var(--bg-card2);border-radius:var(--radius);padding:12px 16px;margin-bottom:8px;border-left:3px solid ${isPend?'var(--yellow)':s.status==='approved'?'var(--green)':'var(--text-muted)'}">
+        <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px">
+          <div>
+            <div style="font-weight:700;font-size:12px">${esc(s.parameter||'—')} &rarr; <span style="color:var(--blue)">${esc(String(s.suggested_value||''))}</span>
+              <span style="color:var(--text-muted);font-size:10px"> (was ${esc(String(s.current_value||''))})</span></div>
+            <div style="font-size:11px;color:var(--text-muted);margin-top:3px">${esc(s.reason||'')}</div>
+            <div style="font-size:10px;color:var(--text-muted);margin-top:2px">Confidence: <span style="color:${s.confidence>=0.7?'var(--green)':s.confidence>=0.5?'var(--yellow)':'var(--red)'}">${s.confidence!==undefined?(s.confidence*100).toFixed(0)+'%':'—'}</span> · ${esc(s.created_at?new Date(s.created_at).toLocaleString('id-ID'):'')}</div>
+          </div>
+          ${isPend?`<div style="display:flex;gap:6px;flex-shrink:0">
+            <button class="btn btn-success" onclick="mlApprove('${esc(s.id)}')" style="font-size:10px;padding:4px 10px">✅ Approve</button>
+            <button class="btn btn-danger" onclick="mlReject('${esc(s.id)}')" style="font-size:10px;padding:4px 10px">❌ Reject</button>
+          </div>`:`<span class="badge ${s.status==='approved'?'green':'red'}" style="flex-shrink:0">${(s.status||'').toUpperCase()}</span>`}
+        </div>
+      </div>`;
+    }).join('');
+  }
+
+  // History
+  const hData = hist?.history||[];
+  const hTb = document.getElementById('ml-history-tbody');
+  if (hTb) {
+    hTb.innerHTML = hData.length ? hData.slice(0,30).map(h=>`
+      <tr>
+        <td style="font-size:10px">${h.applied_at?new Date(h.applied_at).toLocaleString('id-ID'):'—'}</td>
+        <td style="font-family:var(--font-mono);font-size:10px">${esc(h.parameter||'—')}</td>
+        <td style="color:var(--text-muted);font-size:10px">${esc(String(h.old_value??'—'))}</td>
+        <td style="color:var(--blue);font-size:10px;font-weight:700">${esc(String(h.new_value??'—'))}</td>
+        <td style="font-size:10px">${esc(h.reason||'—')}</td>
+        <td><span class="badge ${h.status==='applied'?'green':'red'}" style="font-size:9px">${esc(h.status||'—')}</span></td>
+      </tr>`).join('') : '<tr><td colspan="6"><div class="empty-state">Belum ada history</div></td></tr>';
+  }
+}
+
+async function mlApprove(id) {
+  if (!DASHBOARD_API_KEY){showToast('warn','API Key Diperlukan','Buka Settings.');return;}
+  const r = await apiPost('/meta_learner/approve/'+encodeURIComponent(id), {});
+  if (r&&r.success){showToast('buy','✅ Approved','Saran disetujui dan diterapkan.');loadMetaLearner();}
+  else showToast('warn','Gagal',r?.message||r?.error||'Error');
+}
+async function mlReject(id) {
+  if (!DASHBOARD_API_KEY){showToast('warn','API Key Diperlukan','Buka Settings.');return;}
+  const r = await apiPost('/meta_learner/reject/'+encodeURIComponent(id), {});
+  if (r&&r.success){showToast('info','Rejected','Saran ditolak.');loadMetaLearner();}
+  else showToast('warn','Gagal',r?.message||r?.error||'Error');
+}
+
+// ── Analytics Lanjutan ──
+async function loadAnalyticsAdvanced() {
+  const [attr, regPerf, indEff] = await Promise.all([
+    apiFetch('/analytics/attribution'),
+    apiFetch('/analytics/regime_performance'),
+    apiFetch('/analytics/indicator_effectiveness'),
+  ]);
+
+  // Attribution
+  const atTb = document.getElementById('attr-tbody');
+  const atData = attr?.attribution||[];
+  if (atTb) {
+    atTb.innerHTML = atData.length ? atData.map(a=>`<tr>
+      <td>${esc(a.profile||'—')}</td>
+      <td class="right">${a.trade_count||0}</td>
+      <td class="right ${(a.win_rate||0)>=50?'green':'red'}">${((a.win_rate||0)).toFixed(1)}%</td>
+      <td class="right ${(a.total_pnl||0)>=0?'green':'red'}">${signUSD(a.total_pnl)}</td>
+      <td class="right">${a.contribution_pct!==undefined?a.contribution_pct.toFixed(1)+'%':'—'}</td>
+    </tr>`).join('') : '<tr><td colspan="5"><div class="empty-state">Belum ada data atribusi</div></td></tr>';
+  }
+
+  // Regime Performance
+  const rpTb = document.getElementById('regime-perf-tbody');
+  const rpData = regPerf?.regime_performance||[];
+  if (rpTb) {
+    rpTb.innerHTML = rpData.length ? rpData.map(r=>`<tr>
+      <td><span class="badge" style="font-size:9px">${esc(r.regime||'—')}</span></td>
+      <td class="right">${r.trade_count||0}</td>
+      <td class="right ${(r.win_rate||0)>=50?'green':'red'}">${((r.win_rate||0)).toFixed(1)}%</td>
+      <td class="right ${(r.avg_pnl||0)>=0?'green':'red'}">${signUSD(r.avg_pnl)}</td>
+    </tr>`).join('') : '<tr><td colspan="4"><div class="empty-state">Belum ada data regime</div></td></tr>';
+  }
+
+  // Indicator Effectiveness
+  const ieTb = document.getElementById('ind-eff-tbody');
+  const ieData = indEff?.indicators||[];
+  if (ieTb) {
+    ieTb.innerHTML = ieData.length ? ieData.sort((a,b)=>(b.accuracy_pct||0)-(a.accuracy_pct||0)).map(i=>`<tr>
+      <td style="font-family:var(--font-mono);font-size:10px">${esc(i.indicator||'—')}</td>
+      <td class="right">${i.signal_count||0}</td>
+      <td class="right">${i.accurate_count||0}</td>
+      <td class="right ${(i.accuracy_pct||0)>=60?'green':(i.accuracy_pct||0)>=50?'yellow':'red'}">${((i.accuracy_pct||0)).toFixed(1)}%</td>
+      <td class="right ${(i.avg_pnl_when_active||0)>=0?'green':'red'}">${signUSD(i.avg_pnl_when_active)}</td>
+    </tr>`).join('') : '<tr><td colspan="5"><div class="empty-state">Belum ada data efektivitas indikator</div></td></tr>';
+  }
+}
+
+async function refreshAnalyticsBackend() {
+  if (!DASHBOARD_API_KEY){showToast('warn','API Key Diperlukan','Buka Settings.');return;}
+  showToast('info','Analytics','Trigger refresh analytics...');
+  const r = await apiPost('/analytics/refresh', {});
+  if (r&&r.success){showToast('buy','✅ Done','Analytics sedang di-refresh. Tunggu ~30 detik lalu refresh halaman.');
+  } else showToast('warn','Gagal',r?.message||r?.error||'Error');
+}
+
+// ── Cross-Learn ──
+async function loadCrossLearn() {
+  const [status, swaps] = await Promise.all([
+    apiFetch('/crosslearn/status'),
+    apiFetch('/crosslearn/swap_history'),
+  ]);
+
+  const wrap = document.getElementById('crosslearn-status-wrap');
+  if (wrap && status) {
+    wrap.innerHTML = `
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;font-size:11px">
+        <div style="background:var(--bg-base);border-radius:6px;padding:8px">
+          <div style="color:var(--text-muted);font-size:9.5px">Status</div>
+          <div style="font-weight:700;color:${status.enabled?'var(--green)':'var(--text-muted)'}">${status.enabled?'ACTIVE':'DISABLED'}</div>
+        </div>
+        <div style="background:var(--bg-base);border-radius:6px;padding:8px">
+          <div style="color:var(--text-muted);font-size:9.5px">Swaps</div>
+          <div style="font-weight:700">${status.total_swaps||0}</div>
+        </div>
+        <div style="background:var(--bg-base);border-radius:6px;padding:8px">
+          <div style="color:var(--text-muted);font-size:9.5px">Last Swap</div>
+          <div style="font-size:10px">${status.last_swap?new Date(status.last_swap).toLocaleString('id-ID'):'—'}</div>
+        </div>
+        <div style="background:var(--bg-base);border-radius:6px;padding:8px">
+          <div style="color:var(--text-muted);font-size:9.5px">Best Performer</div>
+          <div style="font-family:var(--font-mono);font-size:10px">${esc(status.best_performing_symbol||'—')}</div>
+        </div>
+      </div>`;
+  }
+
+  const swapTb = document.getElementById('swap-history-tbody');
+  const swapData = swaps?.history||[];
+  if (swapTb) {
+    swapTb.innerHTML = swapData.length ? swapData.slice(0,15).map(s=>`<tr>
+      <td style="font-size:10px">${s.timestamp?new Date(s.timestamp).toLocaleString('id-ID'):'—'}</td>
+      <td style="color:var(--red);font-size:10px;font-family:var(--font-mono)">${esc(s.removed||'—')}</td>
+      <td style="color:var(--green);font-size:10px;font-family:var(--font-mono)">${esc(s.added||'—')}</td>
+      <td style="font-size:10px;color:var(--text-muted)">${esc(s.reason||'—')}</td>
+    </tr>`).join('') : '<tr><td colspan="4"><div class="empty-state">Belum ada coin swap</div></td></tr>';
+  }
+}
+
+// ── Executor Stats ──
+async function loadExecutorStats() {
+  const data = await apiFetch('/executor/stats');
+  const wrap = document.getElementById('executor-stats-wrap');
+  if (!wrap) return;
+  if (!data) { wrap.innerHTML='<div class="empty-state">Gagal ambil executor stats</div>'; return; }
+  wrap.innerHTML = `
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;font-size:11px">
+      <div style="background:var(--bg-base);border-radius:6px;padding:8px">
+        <div style="color:var(--text-muted);font-size:9.5px">Fill Rate</div>
+        <div style="font-weight:700;color:var(--green)">${data.fill_rate!==undefined?(data.fill_rate*100).toFixed(1)+'%':'—'}</div>
+      </div>
+      <div style="background:var(--bg-base);border-radius:6px;padding:8px">
+        <div style="color:var(--text-muted);font-size:9.5px">Orders Placed</div>
+        <div style="font-weight:700">${data.total_orders||0}</div>
+      </div>
+      <div style="background:var(--bg-base);border-radius:6px;padding:8px">
+        <div style="color:var(--text-muted);font-size:9.5px">Retries</div>
+        <div style="font-weight:700;color:${(data.total_retries||0)>10?'var(--yellow)':'var(--text-primary)'}">${data.total_retries||0}</div>
+      </div>
+      <div style="background:var(--bg-base);border-radius:6px;padding:8px">
+        <div style="color:var(--text-muted);font-size:9.5px">Queue Size</div>
+        <div style="font-weight:700">${data.queue_size||0}</div>
+      </div>
+      <div style="background:var(--bg-base);border-radius:6px;padding:8px">
+        <div style="color:var(--text-muted);font-size:9.5px">Avg Slippage</div>
+        <div style="font-weight:700;color:${(data.avg_slippage_pct||0)>0.3?'var(--red)':'var(--green)'}">${data.avg_slippage_pct!==undefined?data.avg_slippage_pct.toFixed(4)+'%':'—'}</div>
+      </div>
+      <div style="background:var(--bg-base);border-radius:6px;padding:8px">
+        <div style="color:var(--text-muted);font-size:9.5px">Partial Fills</div>
+        <div style="font-weight:700">${data.partial_fills||0}</div>
+      </div>
+    </div>`;
+}
+
+// ── Shadow Trades ──
+async function loadShadowTrades() {
+  const data = await apiFetch('/shadow_trades');
+  const wrap = document.getElementById('shadow-trades-wrap');
+  if (!wrap) return;
+  const trades = data?.shadow_trades||[];
+  if (!trades.length) { wrap.innerHTML='<div class="empty-state">Tidak ada shadow trades aktif</div>'; return; }
+  wrap.innerHTML = '<div style="font-size:11px">' + trades.map(t=>`
+    <div style="background:var(--bg-base);border-radius:6px;padding:8px;margin-bottom:6px">
+      <div style="display:flex;justify-content:space-between">
+        <span style="font-weight:700;font-family:var(--font-mono)">${esc(t.symbol||'—')}</span>
+        <span class="side-badge ${t.side||''}" style="font-size:9px;padding:1px 6px">${(t.side||'').toUpperCase()}</span>
+      </div>
+      <div style="color:var(--text-muted);font-size:10px;margin-top:3px">
+        Entry: ${fmtUSD(t.entry_price)} · Unrealized: <span class="${colorPnl(t.unrealized_pnl)}">${signUSD(t.unrealized_pnl)}</span>
+      </div>
+    </div>`).join('') + '</div>';
+}
+
+// ── Universe Management ──
+async function loadUniverseManage() {
+  const data = await apiFetch('/universe/detail');
+  const overrides = await apiFetch('/universe/overrides');
+  const tb = document.getElementById('universe-manage-tbody');
+  if (!tb) return;
+  const items = data?.universe||[];
+  const ovMap = {};
+  (overrides?.overrides||[]).forEach(o=>ovMap[o.symbol]=o.override_profile);
+  if (!items.length) { tb.innerHTML='<tr><td colspan="5"><div class="empty-state">Tidak ada data universe</div></td></tr>'; return; }
+  tb.innerHTML = items.map(u=>`<tr>
+    <td onclick="openCoinDrawer('${esc(u.symbol)}')" style="cursor:pointer;font-family:var(--font-mono);color:var(--blue)">${esc(u.symbol)}</td>
+    <td style="font-size:10px;color:var(--text-muted)">${esc(ovMap[u.symbol]||'—')}</td>
+    <td><span class="regime-badge" style="font-size:9px">${esc(u.regime||'—')}</span></td>
+    <td class="right" style="color:${(u.score||0)>=70?'var(--green)':(u.score||0)>=50?'var(--yellow)':'var(--red)'};font-weight:700">${u.score!==undefined?Math.round(u.score):'—'}</td>
+    <td class="center">
+      <button class="btn btn-danger" onclick="universeRemove('${esc(u.symbol)}')" style="font-size:9px;padding:3px 8px">✕ Remove</button>
+    </td>
+  </tr>`).join('');
+}
+
+async function universeAdd() {
+  if (!DASHBOARD_API_KEY){showToast('warn','API Key Diperlukan','Buka Settings.');return;}
+  const sym = (document.getElementById('uni-add-input')?.value||'').trim().toUpperCase();
+  if (!sym) { showToast('warn','Input','Isi symbol, contoh: BTC/USDT'); return; }
+  const r = await apiPost('/universe/add', {symbol: sym});
+  if (r&&r.success){ showToast('buy','✅ Added',sym+' ditambah ke universe.'); loadUniverseManage(); }
+  else showToast('warn','Gagal',r?.message||r?.error||'Error');
+}
+
+async function universeRemove(sym) {
+  if (!DASHBOARD_API_KEY){showToast('warn','API Key Diperlukan','Buka Settings.');return;}
+  if (!confirm('Hapus '+sym+' dari universe watchlist?')) return;
+  const r = await apiPost('/universe/remove', {symbol: sym});
+  if (r&&r.success){ showToast('info','Removed',sym+' dihapus dari universe.'); loadUniverseManage(); }
+  else showToast('warn','Gagal',r?.message||r?.error||'Error');
+}
+
+/* ═══════════════════════════════════════════
+   SSE STREAM — gantikan polling posisi & ticker dengan push real-time
+═══════════════════════════════════════════ */
+let S_sseConn = null;
+
+function connectSSE() {
+  if (!DASHBOARD_API_KEY) return; // SSE butuh auth, tanpa key tidak bisa
+  if (S_sseConn) { S_sseConn.close(); S_sseConn=null; }
+  // EventSource tidak support custom header, pakai URL param sebagai workaround
+  // Backend endpoint /api/stream sudah pakai Depends(verify_api_key) via header.
+  // Fallback: SSE hanya bisa kalau backend menerima key via query-string.
+  // Karena backend kita pakai APIKeyHeader (header only), SSE real-time tidak bisa
+  // tanpa modifikasi backend — kita tetap jaga polling sebagai fallback,
+  // tapi koneksi SSE dicoba dan jika 401 kita gracefully fallback ke polling.
+  // TODO (backend): tambah optional query param ?api_key= di /api/stream
+  try {
+    const url = API_BASE + '/stream';
+    // Note: browser EventSource tidak bisa kirim custom header.
+    // Fitur ini akan aktif penuh setelah backend support ?api_key= query param.
+    // Untuk sekarang kita catat di console.
+    addConsole('INFO','SSE','SSE stream tersedia di '+url+' — butuh backend update untuk header-less auth.');
+  } catch(e) {}
+}
+
+/* ═══════════════════════════════════════════
    BOOT
 ═══════════════════════════════════════════ */
 async function boot() {
@@ -3160,6 +3638,7 @@ async function boot() {
   await new Promise(r=>setTimeout(r,300));
   setEl('loading-msg','Mengambil data portfolio...');
   await refreshAll();
+  connectSSE(); // Inisialisasi SSE (real-time push jika backend support)
   setEl('loading-msg','Memuat riwayat trade...');
   const tradeData=await apiFetch('/trades?limit=200');
   if (tradeData) S.trades=tradeData.trades||[];
