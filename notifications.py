@@ -680,6 +680,19 @@ class NotificationManager:
         if tasks:
             await asyncio.gather(*tasks, return_exceptions=True)
 
+    async def start_background_tasks(self) -> None:
+        """
+        [TAMBAHAN] Method publik untuk start semua background task milik
+        NotificationManager — termasuk WhaleNotifier delete loop.
+        Sebelumnya: main.py mengakses atribut private _whale_notifier
+        langsung (self.notifier._whale_notifier.start_delete_loop()) yang
+        rapuh — kalau nama atribut berubah, main.py crash tanpa peringatan.
+        Sekarang: main.py cukup panggil notifier.start_background_tasks()
+        tanpa perlu tahu detail internal NotificationManager.
+        """
+        if self._tg_enabled and self._whale_notifier is not None:
+            await self._whale_notifier.start_delete_loop()
+
     async def _send_telegram(self, text: str) -> None:
         url = f"https://api.telegram.org/bot{self._tg_token}/sendMessage"
         payload = {

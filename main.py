@@ -2657,7 +2657,16 @@ class TradingBot:
                 atr=float(atr) if atr else None,
                 confidence=signal.confidence,
                 total_score=signal.total_score or 0.0,
-                score_breakdown=signal.score_breakdown or {},
+                # [BUG-FIX] Sebelumnya: signal.score_breakdown dikirim langsung
+                # sebagai ScoreBreakdown object (dataclass). notify_projection
+                # memanggil score_breakdown.items() yang hanya ada di dict —
+                # AttributeError setiap kali notify_projection dipanggil dengan
+                # score_breakdown terisi. Fix: konversi ke dict via .to_dict().
+                score_breakdown=(
+                    signal.score_breakdown.to_dict()
+                    if signal.score_breakdown is not None
+                    else {}
+                ),
                 regime=signal.regime or "",
                 narrative=signal.scoring_narrative or "",
             )
@@ -3147,20 +3156,19 @@ class TradingBot:
             asyncio.create_task(self.run_position_sync_loop(), name="task_position_sync"),
         ]
 
-        # Start WhaleNotifier delete loop kalau Telegram enabled
-        if (
-            self.notifier is not None
-            and hasattr(self.notifier, '_whale_notifier')
-            and self.notifier._whale_notifier is not None
-            and self.config.get('telegram_enabled', False)
-        ):
+        # [BUG-FIX] Sebelumnya: start WhaleNotifier delete loop dengan akses
+        # atribut private langsung (self.notifier._whale_notifier.start_delete_loop())
+        # — rapuh, kalau nama atribut internal berubah main.py crash.
+        # Sekarang: pakai method publik start_background_tasks() yang
+        # ditambahkan ke NotificationManager untuk enkapsulasi yang benar.
+        if self.notifier is not None and self.config.get('telegram_enabled', False):
             self._tasks.append(
                 asyncio.create_task(
-                    self.notifier._whale_notifier.start_delete_loop(),
-                    name="task_whale_delete_loop",
+                    self.notifier.start_background_tasks(),
+                    name="task_notifier_background",
                 )
             )
-            log.info("WhaleNotifier delete loop started")
+            log.info("Notifier background tasks started")
 
         try:
             await asyncio.gather(*self._tasks)
