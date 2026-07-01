@@ -1,7 +1,7 @@
 {
   "repo": "https://github.com/rasydalamsyah-del/algotrader",
   "last_commit_saat_ini": "c363949",
-  "sesi_terakhir_update": "2026-06-30",
+  "sesi_terakhir_update": "2026-07-01",
   "file_sudah_diaudit_dan_fix": {
     "api_server.py": {
       "status": "DONE",
@@ -13,7 +13,8 @@
         "reset_regime_terhubung",
         "get_intelligence_score_detail_history_attributeerror_dict_as_object"
       ],
-      "catatan": "Bug classifier #16b (reset_regime) diperbaiki di sesi hari ini [TEMUAN BARU dari audit database.py] Endpoint GET /api/intelligence/scores/{symbol}: history_rows dari get_signal_scores() diakses dengan sintaks atribut (r.timestamp dll) padahal return type adalah List[Dict] bukan SQLAlchemy object — AttributeError/HTTP500 setiap kali endpoint dipanggil. Dikonfirmasi via simulasi. Fix: ubah ke akses dict (r['timestamp'] dll). Catatan: 'latest' dari get_latest_signal_score() mengembalikan SQLAlchemy object langsung sehingga latest.xxx di bawahnya tetap benar dan tidak diubah."
+      "catatan": "Bug classifier #16b (reset_regime) diperbaiki di sesi hari ini [TEMUAN BARU dari audit database.py] Endpoint GET /api/intelligence/scores/{symbol}: history_rows dari get_signal_scores() diakses dengan sintaks atribut (r.timestamp dll) padahal return type adalah List[Dict] bukan SQLAlchemy object — AttributeError/HTTP500 setiap kali endpoint dipanggil. Dikonfirmasi via simulasi. Fix: ubah ke akses dict (r['timestamp'] dll). Catatan: 'latest' dari get_latest_signal_score() mengembalikan SQLAlchemy object langsung sehingga latest.xxx di bawahnya tetap benar dan tidak diubah.",
+      "audit_level": "SERIUS"
     },
     "core/models.py": {
       "status": "DONE",
@@ -21,14 +22,16 @@
         "signal_quality_stale_to_property",
         "StrengthIndicators_is_valid_hanya_cek_volume_ratio"
       ],
-      "catatan": "Bug #16a diperbaiki di sesi hari ini"
+      "catatan": "Bug #16a diperbaiki di sesi hari ini",
+      "audit_level": "SERIUS"
     },
     "indicators/momentum.py": {
       "status": "DONE",
       "bug_fixed": [
         "rsi_dihitung_2x",
         "vwma_upgrade"
-      ]
+      ],
+      "audit_level": "SERIUS"
     },
     "indicators/orderbook.py": {
       "status": "DONE",
@@ -36,106 +39,126 @@
         "diskontinuitas_imbalance_score",
         "spoofing_snapshot_salah",
         "wall_first_seen_dead_field"
-      ]
+      ],
+      "audit_level": "SERIUS"
     },
     "indicators/oscillators.py": {
       "status": "DONE",
       "bug_fixed": [
         "diskontinuitas_score_roc_anchor"
-      ]
+      ],
+      "audit_level": "SERIUS"
     },
     "indicators/patterns.py": {
       "status": "DONE",
       "bug_fixed": [
         "iloc_minus1_ke_minus2",
         "dead_param_require_volume_confirmation"
-      ]
+      ],
+      "audit_level": "SERIUS"
     },
     "indicators/strength.py": {
       "status": "DONE",
       "bug_fixed": [
         "double_penalty_volume_climax",
         "noop_replace_0_0"
-      ]
+      ],
+      "audit_level": "SERIUS"
     },
     "indicators/structure.py": {
       "status": "DONE",
       "bug_fixed": [
         "ichimoku_pivot_pandas3x"
-      ]
+      ],
+      "audit_level": "SERIUS"
     },
     "indicators/trend.py": {
       "status": "DONE",
       "bug_fixed": [
         "diskontinuitas_golden_dead_cross"
-      ]
+      ],
+      "audit_level": "SERIUS"
     },
     "indicators/volatility.py": {
       "status": "DONE",
       "bug_fixed": [
         "kc_squeeze_ok_always_true"
-      ]
+      ],
+      "audit_level": "SERIUS"
     },
     "intelligence/classifier.py": {
       "status": "DONE",
       "bug_fixed": [
         "is_tradeable_regime_hardcode"
       ],
-      "catatan": "Sub-fix is_valid dan reset_regime sudah diselesaikan via models.py dan api_server.py"
+      "catatan": "Sub-fix is_valid dan reset_regime sudah diselesaikan via models.py dan api_server.py",
+      "audit_level": "SERIUS"
     },
     "intelligence/observer.py": {
       "status": "DONE",
       "bug_fixed": [
         "zip_misalignment_tf_score",
         "rsi_thread"
-      ]
+      ],
+      "audit_level": "SERIUS"
     },
     "intelligence/scorer.py": {
       "status": "DONE",
       "bug_fixed": [
         "fstring_format_spec",
         "narrative_5_dari_8_kategori"
-      ]
+      ],
+      "audit_level": "SERIUS"
     },
     "intelligence/validator.py": {
       "status": "DONE",
       "bug_fixed": [
         "double_penalty_volume_climax_duplicate",
         "primary_pattern_idle"
-      ]
+      ],
+      "audit_level": "SERIUS"
     },
     "main.py": {
       "status": "DONE",
       "bug_fixed": [
         "kelly_sizing_tidak_dieksekusi"
-      ]
+      ],
+      "audit_level": "SENTUHAN_PERLU_REAUDIT",
+      "audit_level_keterangan": "PERLU RE-AUDIT SERIUS. File ini tidak pernah dibaca dari awal sampai akhir secara sistematis. Semua 4 perubahan berasal dari kebutuhan audit file lain, bukan dari audit mandiri main.py: (1) fix PnL → ditemukan saat audit risk.py, (2) sambungkan evaluate_order sell → ditemukan saat audit risk.py, (3) confidence sizing → upgrade dari strategy.py, (4) kelly_sizing_tidak_dieksekusi → ditemukan saat audit commander.py sesi sebelumnya. main.py adalah 4000+ baris orkestrator utama. Jadwal re-audit: TERAKHIR, setelah semua file PENDING selesai diaudit."
     },
     "profiles/base_profile.py": {
       "status": "DONE",
       "bug_fixed": [
         "with_override_crash_second_call"
-      ]
+      ],
+      "audit_level": "SERIUS"
     },
     "profiles/weights.py": {
       "status": "DONE",
       "bug_fixed": [
         "mean_revert_5_dari_8_kategori"
-      ]
+      ],
+      "audit_level": "SERIUS"
     },
     "ta_compat.py": {
       "status": "DONE",
       "bug_fixed": [
         "ols_slope_v5_fix",
         "loc_vs_iloc_datetimeindex"
-      ]
+      ],
+      "audit_level": "SERIUS"
     },
     "simulate_test.py": {
       "status": "DONE",
-      "bug_fixed": []
+      "bug_fixed": [],
+      "audit_level": "TIDAK_JELAS_LOW_PRIORITY",
+      "audit_level_keterangan": "0 bug ditemukan. Tidak ada keterangan audit mendalam. File test, bukan produksi. Low priority. Perlu dicek ulang minimal untuk memastikan test cases masih relevan setelah banyak perubahan di file lain."
     },
     "constants.py": {
       "status": "DONE",
-      "bug_fixed": []
+      "bug_fixed": [],
+      "audit_level": "TIDAK_JELAS_LOW_PRIORITY",
+      "audit_level_keterangan": "0 bug ditemukan. Tidak ada keterangan audit mendalam. File berisi konstanta saja — kemungkinan memang bersih. Perlu spot-check saat audit file yang memakainya."
     },
     "database.py": {
       "status": "DONE",
@@ -145,7 +168,8 @@
         "silent_except_get_db_health",
         "get_signal_scores_kolom_hilang_oscillator_structure_orderbook_dkk"
       ],
-      "catatan": "Bug utama: get_trades_with_regime() hardcode filter action_taken=='EXECUTE_CANDIDATE' (string milik scorer.py), padahal eksekusi nyata via intelligence/commander.py menyimpan 'execute'/'EXECUTE' (DecisionAction enum) — korelasi regime/score untuk trade produksi selalu meleset ke default, berdampak ke learning/analytics.py (5 callsite). Diperbaiki jadi case-insensitive match. Param min_trades_threshold di get_pending_outcomes() TIDAK diubah (tetap unused) — sengaja didokumentasikan, perlu dicek ulang saat audit learning/meta_learner.py (Tier 2) apakah perlu disatukan dengan pengecekan trade count di _evaluate_outcome. Observasi non-bug: main.py 2x mengakses db._session() (private) langsung untuk raw update yang belum ada public method-nya — dicatat untuk dipertimbangkan saat audit intelligence/position_sync.py atau learning/coin_swap.py. [TEMUAN BARU saat tambah sentiment logging] get_signal_scores() tidak mengembalikan banyak kolom yang sudah ada di skema (oscillator_score, structure_score, orderbook_score, current_price, suggested_sl/tp, fib_support/resistance, signal_confidence) -- data tersimpan tapi tidak ter-return. Sudah diperbaiki + tambah sentiment_score baru (kolom + parameter save_signal_score, logging pasif Fear&Greed Index untuk pipeline v7, TIDAK memengaruhi keputusan apapun). PERINGATAN BELUM DIPERBAIKI: api_server.py:1267-1273 mengakses hasil get_signal_scores() (list-of-dict) dengan sintaks atribut (r.timestamp) -- akan AttributeError/HTTP 500 tiap kali endpoint dipanggil. Dikonfirmasi via simulasi langsung. PRIORITAS untuk audit api_server.py berikutnya."
+      "catatan": "Bug utama: get_trades_with_regime() hardcode filter action_taken=='EXECUTE_CANDIDATE' (string milik scorer.py), padahal eksekusi nyata via intelligence/commander.py menyimpan 'execute'/'EXECUTE' (DecisionAction enum) — korelasi regime/score untuk trade produksi selalu meleset ke default, berdampak ke learning/analytics.py (5 callsite). Diperbaiki jadi case-insensitive match. Param min_trades_threshold di get_pending_outcomes() TIDAK diubah (tetap unused) — sengaja didokumentasikan, perlu dicek ulang saat audit learning/meta_learner.py (Tier 2) apakah perlu disatukan dengan pengecekan trade count di _evaluate_outcome. Observasi non-bug: main.py 2x mengakses db._session() (private) langsung untuk raw update yang belum ada public method-nya — dicatat untuk dipertimbangkan saat audit intelligence/position_sync.py atau learning/coin_swap.py. [TEMUAN BARU saat tambah sentiment logging] get_signal_scores() tidak mengembalikan banyak kolom yang sudah ada di skema (oscillator_score, structure_score, orderbook_score, current_price, suggested_sl/tp, fib_support/resistance, signal_confidence) -- data tersimpan tapi tidak ter-return. Sudah diperbaiki + tambah sentiment_score baru (kolom + parameter save_signal_score, logging pasif Fear&Greed Index untuk pipeline v7, TIDAK memengaruhi keputusan apapun). PERINGATAN BELUM DIPERBAIKI: api_server.py:1267-1273 mengakses hasil get_signal_scores() (list-of-dict) dengan sintaks atribut (r.timestamp) -- akan AttributeError/HTTP 500 tiap kali endpoint dipanggil. Dikonfirmasi via simulasi langsung. PRIORITAS untuk audit api_server.py berikutnya.",
+      "audit_level": "SERIUS"
     },
     "exchange.py": {
       "status": "DONE",
@@ -155,7 +179,8 @@
         "retry_raise_none_kalau_retries_0",
         "auto_scan_blocking_call_di_event_loop"
       ],
-      "catatan": "Bug cross-file paling penting: WebSocketFeed tidak punya method get_orderbook() tapi api_server.py endpoint GET /api/orderbook/{symbol} memanggilnya — endpoint ini SELALU balas HTTP 502 sebelum fix ini. Ditambahkan [TAMBAHAN]. Bug lain: WebSocketFeed.__init__ pakai parameter symbols mentah (bukan self.symbols) di 4 dict comprehension, crash kalau symbols=None (default-nya). _retry() bisa 'raise None' kalau retries<=0 (belum pernah ke-trigger, tapi unsafe). scan_binance_universe() blocking call sinkron dipindah ke run_in_executor agar tidak freeze event loop saat startup — diverifikasi dengan test konkurensi nyata. TEMUAN UNTUK SESI BERIKUTNYA (intelligence/commander.py, Tier 1): di baris ~230, fallback getattr untuk cari method spread (get_current_spread_pct/get_spread_pct/get_spread) salah pakai exchange_connector.__dict__ (instance dict) untuk cek keberadaan method — method class TIDAK akan pernah muncul di situ, jadi spread_pct selalu None walau method-nya benar-benar ada & jalan (dibuktikan dipakai langsung di api_server.py). Perlu di-fix saat audit commander.py."
+      "catatan": "Bug cross-file paling penting: WebSocketFeed tidak punya method get_orderbook() tapi api_server.py endpoint GET /api/orderbook/{symbol} memanggilnya — endpoint ini SELALU balas HTTP 502 sebelum fix ini. Ditambahkan [TAMBAHAN]. Bug lain: WebSocketFeed.__init__ pakai parameter symbols mentah (bukan self.symbols) di 4 dict comprehension, crash kalau symbols=None (default-nya). _retry() bisa 'raise None' kalau retries<=0 (belum pernah ke-trigger, tapi unsafe). scan_binance_universe() blocking call sinkron dipindah ke run_in_executor agar tidak freeze event loop saat startup — diverifikasi dengan test konkurensi nyata. TEMUAN UNTUK SESI BERIKUTNYA (intelligence/commander.py, Tier 1): di baris ~230, fallback getattr untuk cari method spread (get_current_spread_pct/get_spread_pct/get_spread) salah pakai exchange_connector.__dict__ (instance dict) untuk cek keberadaan method — method class TIDAK akan pernah muncul di situ, jadi spread_pct selalu None walau method-nya benar-benar ada & jalan (dibuktikan dipakai langsung di api_server.py). Perlu di-fix saat audit commander.py.",
+      "audit_level": "SERIUS"
     },
     "execution.py": {
       "status": "DONE",
@@ -163,7 +188,8 @@
         "iceberg_chunk_tidak_cek_min_amount_min_cost",
         "type_hint_max_slippage_override"
       ],
-      "catatan": "Bug utama: _execute_iceberg() bagi total order jadi 4 chunk tetap tanpa cek min_amount/min_cost exchange per-chunk. Order besar yang lolos validasi total bisa berakhir 0/4 chunk filled kalau tiap chunk di bawah minimum exchange (silently caught di except generik). Fix: jumlah chunk diturunkan otomatis (minimal 1) sampai tiap chunk >= min_amount & min_cost. Diverifikasi dengan test: order kecil yang sebelumnya akan terbagi jadi 4x gagal, sekarang otomatis jadi 1 chunk yang valid. OBSERVASI (tidak diubah, sengaja): _check_slippage() REST-fallback fail OPEN — kalau fetch_ticker gagal total, order tetap diizinkan (slip_ok=True) bukan ditolak. Ada log eksplisit 'order diizinkan' jadi sepertinya disengaja, tapi worth flag ke user karena ini fungsi risk-guard."
+      "catatan": "Bug utama: _execute_iceberg() bagi total order jadi 4 chunk tetap tanpa cek min_amount/min_cost exchange per-chunk. Order besar yang lolos validasi total bisa berakhir 0/4 chunk filled kalau tiap chunk di bawah minimum exchange (silently caught di except generik). Fix: jumlah chunk diturunkan otomatis (minimal 1) sampai tiap chunk >= min_amount & min_cost. Diverifikasi dengan test: order kecil yang sebelumnya akan terbagi jadi 4x gagal, sekarang otomatis jadi 1 chunk yang valid. OBSERVASI (tidak diubah, sengaja): _check_slippage() REST-fallback fail OPEN — kalau fetch_ticker gagal total, order tetap diizinkan (slip_ok=True) bukan ditolak. Ada log eksplisit 'order diizinkan' jadi sepertinya disengaja, tapi worth flag ke user karena ini fungsi risk-guard.",
+      "audit_level": "SERIUS"
     },
     "risk.py": {
       "status": "DONE",
@@ -174,7 +200,8 @@
         "compute_position_size_zerodivision_price_kurang_sama_nol",
         "low_balance_threshold_cap_50pct_initial_equity"
       ],
-      "catatan": "Bug self._exchange di evaluate_order(side=sell) — dead code, tidak pernah dipanggil sebelumnya (main.py buat RiskAssessment manual untuk close). Diganti param free_coin_balance opsional, backward compatible. Disambungkan ke main.py _do_close_position. Sekaligus ditemukan & diperbaiki bug independen di main.py: PnL (gross_pnl/entry_fee/exit_fee) pakai pos.amount/exit_price bukan trade.filled/trade.executed_price (nilai riil eksekusi exchange). Tambahan: HaltReason.LOW_BALANCE (sebelumnya dead enum, tidak pernah dipakai) sekarang diimplementasikan sebagai halt otomatis. Ambang dihitung otomatis dari config (max(min_order_value_usdt x max_open_positions, initial_equity x risk_per_trade_pct% x 3)) — tidak ada angka hardcode. Auto-resume otomatis dengan buffer 10% untuk cegah flapping. Field low_balance_threshold ditambahkan ke get_system_health(). Audit menyeluruh fase 2 (semua fungsi ditest satu per satu): ditemukan 2 hal tambahan — (1) _compute_position_size rapuh terhadap price<=0 (ZeroDivisionError), aman lewat jalur normal tapi tidak defensif sendiri, ditambah guard. (2) cap LOW_BALANCE threshold yang dibuat sebelumnya bisa melebihi initial_equity pada config ekstrem (contoh dari simulate_test.py: risk_per_trade_pct=35%, modal $33 -> threshold $34.65 > modal), ditambah cap maksimal 50% initial_equity. Semua fungsi publik/privat risk.py sudah ditest individual dengan ~30 skenario termasuk edge case."
+      "catatan": "Bug self._exchange di evaluate_order(side=sell) — dead code, tidak pernah dipanggil sebelumnya (main.py buat RiskAssessment manual untuk close). Diganti param free_coin_balance opsional, backward compatible. Disambungkan ke main.py _do_close_position. Sekaligus ditemukan & diperbaiki bug independen di main.py: PnL (gross_pnl/entry_fee/exit_fee) pakai pos.amount/exit_price bukan trade.filled/trade.executed_price (nilai riil eksekusi exchange). Tambahan: HaltReason.LOW_BALANCE (sebelumnya dead enum, tidak pernah dipakai) sekarang diimplementasikan sebagai halt otomatis. Ambang dihitung otomatis dari config (max(min_order_value_usdt x max_open_positions, initial_equity x risk_per_trade_pct% x 3)) — tidak ada angka hardcode. Auto-resume otomatis dengan buffer 10% untuk cegah flapping. Field low_balance_threshold ditambahkan ke get_system_health(). Audit menyeluruh fase 2 (semua fungsi ditest satu per satu): ditemukan 2 hal tambahan — (1) _compute_position_size rapuh terhadap price<=0 (ZeroDivisionError), aman lewat jalur normal tapi tidak defensif sendiri, ditambah guard. (2) cap LOW_BALANCE threshold yang dibuat sebelumnya bisa melebihi initial_equity pada config ekstrem (contoh dari simulate_test.py: risk_per_trade_pct=35%, modal $33 -> threshold $34.65 > modal), ditambah cap maksimal 50% initial_equity. Semua fungsi publik/privat risk.py sudah ditest individual dengan ~30 skenario termasuk edge case.",
+      "audit_level": "SERIUS"
     },
     "strategy.py": {
       "status": "DONE",
@@ -183,7 +210,8 @@
         "dead_variable_pending_di_generate_signals_v7",
         "get_symbol_timeframe_race_condition_tanpa_lock"
       ],
-      "catatan": "Bug utama: HOLD_RELAX_SL melipatgandakan quick_sl_pct dari nilai SAAT INI dengan (1+relax_pct), sementara HOLD_TIGHTEN_SL memakai (1-tighten_pct). Hasil kali kedua faktor (cth 0.7x1.2=0.84) tidak pernah persis 1.0, jadi siklus tighten-relax bergantian (realistis terjadi, cooldown cuma 120 detik) membuat SL menyusut progresif sampai floor 0.30% walau kondisi terakhir RELAX (regime mendukung posisi). Fix: tambah field original_quick_sl_pct di PositionTracker (__post_init__ auto-isi dari quick_sl_pct, backward compatible), relax SELALU kembali persis ke nilai itu. Minor: bersihkan dead variable 'pending' di _generate_signals_v7 (tidak relevan, fungsi ini cuma generate CLOSE_LONG); tambah lock di get_symbol_timeframe untuk konsisten dengan get_profile/_resolve_params. Cross-check: _pending_entry tidak terisi di jalur pipeline v7 TAPI proteksi anti-duplicate-entry setara sudah ada di main.py via _pipeline_active/_queued_symbols - bukan bug nyata. Test: ~10 skenario termasuk simulasi siklus tighten-relax berulang, semua fungsi (_compute_sl_tp_quick/wave, _compute_confidence, check_trailing_exit) ditest edge case, tidak ada bug lain. [UPGRADE, bukan bug-fix] Ditambah confidence-based sizing di main.py _handle_buy, KHUSUS mode legacy (pipeline_mode='legacy'). Sebelumnya signal.confidence dihitung cermat tapi cuma dipakai utk notifikasi, tidak pernah memengaruhi ukuran posisi. Formula floor 50%: size = max_pct x (0.5 + 0.5 x confidence). Mode pipeline v7 TIDAK terpengaruh (sudah punya Kelly sizing sendiri). Permintaan eksplisit user untuk eksplorasi upgrade, bukan ditemukan sbg bug."
+      "catatan": "Bug utama: HOLD_RELAX_SL melipatgandakan quick_sl_pct dari nilai SAAT INI dengan (1+relax_pct), sementara HOLD_TIGHTEN_SL memakai (1-tighten_pct). Hasil kali kedua faktor (cth 0.7x1.2=0.84) tidak pernah persis 1.0, jadi siklus tighten-relax bergantian (realistis terjadi, cooldown cuma 120 detik) membuat SL menyusut progresif sampai floor 0.30% walau kondisi terakhir RELAX (regime mendukung posisi). Fix: tambah field original_quick_sl_pct di PositionTracker (__post_init__ auto-isi dari quick_sl_pct, backward compatible), relax SELALU kembali persis ke nilai itu. Minor: bersihkan dead variable 'pending' di _generate_signals_v7 (tidak relevan, fungsi ini cuma generate CLOSE_LONG); tambah lock di get_symbol_timeframe untuk konsisten dengan get_profile/_resolve_params. Cross-check: _pending_entry tidak terisi di jalur pipeline v7 TAPI proteksi anti-duplicate-entry setara sudah ada di main.py via _pipeline_active/_queued_symbols - bukan bug nyata. Test: ~10 skenario termasuk simulasi siklus tighten-relax berulang, semua fungsi (_compute_sl_tp_quick/wave, _compute_confidence, check_trailing_exit) ditest edge case, tidak ada bug lain. [UPGRADE, bukan bug-fix] Ditambah confidence-based sizing di main.py _handle_buy, KHUSUS mode legacy (pipeline_mode='legacy'). Sebelumnya signal.confidence dihitung cermat tapi cuma dipakai utk notifikasi, tidak pernah memengaruhi ukuran posisi. Formula floor 50%: size = max_pct x (0.5 + 0.5 x confidence). Mode pipeline v7 TIDAK terpengaruh (sudah punya Kelly sizing sendiri). Permintaan eksplisit user untuk eksplorasi upgrade, bukan ditemukan sbg bug.",
+      "audit_level": "SERIUS"
     }
   },
   "file_belum_diaudit": {
@@ -241,5 +269,29 @@
     "Jika ada bug baru yang ditemukan di file DONE saat audit file PENDING, tambahkan ke bug_fixed file DONE tersebut",
     "File ini adalah sumber kebenaran tunggal tentang progress audit",
     "Selalu commit perubahan ke git sebelum tutup sesi"
-  ]
+  ],
+  "catatan_audit_level": {
+    "SERIUS": "File dibaca menyeluruh + test aktif + cross-check lengkap ke file lain",
+    "SENTUHAN_PERLU_REAUDIT": "File diubah karena kebutuhan audit file lain, BELUM diaudit mandiri — perlu re-audit serius",
+    "TIDAK_JELAS_LOW_PRIORITY": "0 bug ditemukan, tidak ada keterangan mendalam — kemungkinan bersih tapi perlu spot-check"
+  },
+  "urutan_audit_disepakati": {
+    "filosofi": "Audit dari dalam ke luar. File yang paling spesifik/independen dulu, orkestrator (main.py) terakhir.",
+    "pending_urutan": [
+      "1. notifications.py",
+      "2. smoke_api.py",
+      "3. intelligence/position_sync.py",
+      "4. intelligence/trade_guardian.py",
+      "5. profiles/thresholds.py",
+      "6. profiles/registry.py",
+      "7. learning/analytics.py",
+      "8. learning/coin_swap.py",
+      "9. learning/cross_learn.py",
+      "10. learning/meta_learner.py",
+      "11. telegram_bot.py",
+      "12. intelligence/commander.py",
+      "13. main.py (RE-AUDIT SERIUS — terakhir)"
+    ],
+    "alasan_main_terakhir": "main.py adalah orkestrator yang memanggil semua modul. Kalau diaudit duluan, banyak temuan akan berupa 'seharusnya ada fungsi X di modul Y' yang belum bisa diverifikasi karena modul Y belum diaudit. Dengan main.py terakhir, semua modul sudah dalam kondisi yang diketahui dan verified."
+  }
 }
