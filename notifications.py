@@ -269,12 +269,17 @@ class NotificationManager:
         realized_pnl: float,
         reason:       str,
     ) -> None:
-        pnl_pct = (
-            (exit_price - entry_price) / entry_price * 100
-            if entry_price > 0 else 0
-        )
-        if side == "short":
-            pnl_pct = -pnl_pct
+        # [BUG-FIX] Sebelumnya: pnl_pct dihitung dari (exit-entry)/entry*100 —
+        # yaitu persentase pergerakan HARGA mentah, tanpa fee. Ini tidak
+        # konsisten dengan realized_pnl yang sudah memperhitungkan fee (entry
+        # fee + exit fee). User bisa melihat pnl_pct positif tapi realized_pnl
+        # negatif (karena fee) atau sebaliknya — membingungkan dan menyesatkan.
+        # Sekarang: hitung pnl_pct dari realized_pnl dibagi position value
+        # (entry_price * amount), konsisten dengan angka PnL yang ditampilkan.
+        # Fallback ke 0.0 kalau position_value = 0 (entry_price atau amount = 0).
+        position_value = entry_price * amount
+        pnl_pct = (realized_pnl / position_value * 100) if position_value > 0 else 0.0
+
         emoji    = "✅" if realized_pnl >= 0 else "❌"
         pnl_sign = "+" if realized_pnl >= 0 else ""
 
@@ -457,8 +462,12 @@ class NotificationManager:
         mode:       str   = "LIVE",
     ) -> None:
         """Wrapper publik untuk WhaleNotifier.notify_whale()."""
-        if self._whale_notifier is None:
-            return
+        # [BUG-FIX] Sebelumnya: ada guard 'if self._whale_notifier is None: return'
+        # yang dead code — self._whale_notifier SELALU diinisialisasi di __init__
+        # dan _update_config, tidak pernah None. Guard ini hanya memberi kesan
+        # palsu bahwa ada kondisi di mana _whale_notifier bisa None, padahal tidak.
+        # Dihapus untuk kejelasan kode. Kalau telegram tidak enabled, WhaleNotifier
+        # tetap dibuat tapi _send_tg-nya akan gagal gracefully (silent).
         await self._whale_notifier.notify_whale(
             symbol     = symbol,
             direction  = direction,

@@ -212,13 +212,18 @@
       ],
       "catatan": "Bug utama: HOLD_RELAX_SL melipatgandakan quick_sl_pct dari nilai SAAT INI dengan (1+relax_pct), sementara HOLD_TIGHTEN_SL memakai (1-tighten_pct). Hasil kali kedua faktor (cth 0.7x1.2=0.84) tidak pernah persis 1.0, jadi siklus tighten-relax bergantian (realistis terjadi, cooldown cuma 120 detik) membuat SL menyusut progresif sampai floor 0.30% walau kondisi terakhir RELAX (regime mendukung posisi). Fix: tambah field original_quick_sl_pct di PositionTracker (__post_init__ auto-isi dari quick_sl_pct, backward compatible), relax SELALU kembali persis ke nilai itu. Minor: bersihkan dead variable 'pending' di _generate_signals_v7 (tidak relevan, fungsi ini cuma generate CLOSE_LONG); tambah lock di get_symbol_timeframe untuk konsisten dengan get_profile/_resolve_params. Cross-check: _pending_entry tidak terisi di jalur pipeline v7 TAPI proteksi anti-duplicate-entry setara sudah ada di main.py via _pipeline_active/_queued_symbols - bukan bug nyata. Test: ~10 skenario termasuk simulasi siklus tighten-relax berulang, semua fungsi (_compute_sl_tp_quick/wave, _compute_confidence, check_trailing_exit) ditest edge case, tidak ada bug lain. [UPGRADE, bukan bug-fix] Ditambah confidence-based sizing di main.py _handle_buy, KHUSUS mode legacy (pipeline_mode='legacy'). Sebelumnya signal.confidence dihitung cermat tapi cuma dipakai utk notifikasi, tidak pernah memengaruhi ukuran posisi. Formula floor 50%: size = max_pct x (0.5 + 0.5 x confidence). Mode pipeline v7 TIDAK terpengaruh (sudah punya Kelly sizing sendiri). Permintaan eksplisit user untuk eksplorasi upgrade, bukan ditemukan sbg bug.",
       "audit_level": "SERIUS"
+    },
+    "notifications.py": {
+      "status": "DONE",
+      "audit_level": "SERIUS",
+      "bug_fixed": [
+        "notify_trade_closed_pnl_pct_inkonsisten_dengan_realized_pnl",
+        "notify_whale_dead_guard_none_dihapus"
+      ],
+      "catatan": "Bug 1: notify_trade_closed menghitung pnl_pct dari pergerakan harga mentah ((exit-entry)/entry*100) tanpa fee, tidak konsisten dengan realized_pnl yang sudah memperhitungkan fee. User bisa lihat pnl_pct positif tapi realized_pnl negatif (karena fee) — membingungkan. Fix: hitung dari realized_pnl/position_value. Bug 2: notify_whale punya guard 'if self._whale_notifier is None: return' yang dead code — _whale_notifier SELALU diinit di __init__. Dihapus. Cross-check: semua signature notify_* cocok dengan caller di main.py, strategy.py, learning/coin_swap.py. File 878 baris, dibaca menyeluruh, semua method ditest."
     }
   },
   "file_belum_diaudit": {
-    "notifications.py": {
-      "status": "PENDING",
-      "ukuran": "30 fungsi, 2 class"
-    },
     "intelligence/commander.py": {
       "status": "PENDING",
       "ukuran": "27 fungsi, 2 class"
