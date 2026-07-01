@@ -437,6 +437,159 @@ body{
   .card-grid{grid-template-columns:repeat(auto-fill,minmax(380px,1fr))}
 }
 
+/* ═══════════════════════════════════════════
+   TOOLBAR (Filter + Search + Sort + TF)
+═══════════════════════════════════════════ */
+.toolbar{
+  display:flex;align-items:center;gap:8px;flex-wrap:wrap;
+  margin-bottom:20px;padding:12px 14px;
+  background:var(--bg2);border:1px solid var(--border);
+  border-radius:var(--r);
+}
+.tb-search{
+  flex:1;min-width:140px;max-width:240px;
+  background:var(--bg3);border:1px solid var(--border);
+  border-radius:8px;padding:7px 12px 7px 32px;
+  color:var(--text);font-size:12px;font-family:var(--font);
+  outline:none;transition:.15s;position:relative;
+}
+.tb-search:focus{border-color:var(--g4)}
+.search-wrap{position:relative;flex:1;min-width:140px;max-width:240px}
+.search-ico{position:absolute;left:10px;top:50%;transform:translateY(-50%);font-size:12px;pointer-events:none;color:var(--text3)}
+.tb-divider{width:1px;height:24px;background:var(--border);flex-shrink:0}
+.tb-label{font-size:10px;color:var(--text3);font-weight:600;letter-spacing:.04em;white-space:nowrap}
+.tb-btn-group{display:flex;gap:4px}
+.tb-btn{
+  background:var(--bg3);border:1px solid var(--border);
+  border-radius:6px;padding:5px 10px;font-size:11px;
+  color:var(--text2);cursor:pointer;transition:.15s;
+  font-family:var(--font);white-space:nowrap;
+}
+.tb-btn:hover{background:var(--card-hover);color:var(--text)}
+.tb-btn.active{background:var(--g4);border-color:var(--g4);color:#fff;font-weight:700}
+.tb-btn.active-sort{border-color:var(--g3);color:var(--g3)}
+.tb-select{
+  background:var(--bg3);border:1px solid var(--border);
+  border-radius:6px;padding:5px 10px;font-size:11px;
+  color:var(--text2);cursor:pointer;font-family:var(--font);
+  outline:none;
+}
+.tb-select:focus{border-color:var(--g4)}
+
+/* ── Bookmarks section ── */
+.bookmark-section{
+  margin-bottom:24px;
+  animation:fadeUp .3s ease both;
+}
+.bm-header{
+  display:flex;align-items:center;gap:8px;
+  padding:10px 14px;background:var(--bg2);
+  border:1px solid var(--border);border-radius:var(--r) var(--r) 0 0;
+  border-bottom:none;
+}
+.bm-title{font-size:13px;font-weight:700;color:var(--yellow)}
+.bm-count{font-size:10px;color:var(--text3)}
+.bm-clear{font-size:10px;color:var(--text3);cursor:pointer;margin-left:auto;text-decoration:underline}
+.bm-clear:hover{color:var(--red)}
+.bm-grid{
+  display:flex;gap:6px;flex-wrap:wrap;
+  padding:10px 14px;background:var(--bg2);
+  border:1px solid var(--border);border-radius:0 0 var(--r) var(--r);
+  min-height:42px;
+}
+.bm-chip{
+  display:inline-flex;align-items:center;gap:5px;
+  padding:4px 10px;border-radius:20px;font-size:11px;font-weight:700;
+  font-family:var(--font-mono);cursor:pointer;
+  background:var(--yellow-bg);border:1px solid rgba(245,158,11,.3);color:var(--yellow);
+  transition:.15s;
+}
+.bm-chip:hover{background:rgba(245,158,11,.2)}
+.bm-chip .bm-rm{font-size:10px;color:var(--text3);margin-left:2px}
+.bm-chip .bm-rm:hover{color:var(--red)}
+.bm-empty{font-size:11px;color:var(--text3);align-self:center}
+
+/* ── Bookmark star on card ── */
+.bm-star{
+  position:absolute;top:8px;right:8px;
+  font-size:16px;cursor:pointer;opacity:.35;
+  transition:.15s;z-index:2;line-height:1;
+}
+.bm-star:hover{opacity:.8;transform:scale(1.2)}
+.bm-star.starred{opacity:1;filter:drop-shadow(0 0 4px var(--yellow))}
+.coin-card{position:relative}/* ensure positioning context */
+
+/* ── Compare overlay ── */
+.compare-bar{
+  position:fixed;bottom:0;left:0;right:0;z-index:150;
+  transform:translateY(100%);transition:transform .25s ease;
+  background:var(--bg2);border-top:1px solid var(--border-hi);
+  padding:12px 20px;display:flex;align-items:center;gap:12px;
+  backdrop-filter:blur(12px);
+}
+.compare-bar.open{transform:translateY(0)}
+.compare-slots{display:flex;gap:8px;flex:1;flex-wrap:wrap}
+.compare-slot{
+  display:flex;align-items:center;gap:6px;
+  padding:6px 12px;border-radius:8px;
+  background:var(--bg3);border:1px solid var(--border);
+  font-family:var(--font-mono);font-size:12px;font-weight:700;
+}
+.compare-slot .cs-rm{cursor:pointer;color:var(--text3);margin-left:4px;font-size:12px}
+.compare-slot .cs-rm:hover{color:var(--red)}
+.compare-hint{font-size:11px;color:var(--text2)}
+.btn-compare{
+  background:linear-gradient(135deg,#7c3aed,#a855f7);
+  border:none;border-radius:8px;padding:8px 18px;
+  color:#fff;font-weight:700;font-size:12px;cursor:pointer;
+  font-family:var(--font);white-space:nowrap;
+}
+.btn-compare:disabled{opacity:.4;cursor:default}
+
+/* ── Compare Modal ── */
+.compare-modal{
+  position:fixed;inset:0;z-index:200;display:none;
+  background:rgba(0,0,0,.8);backdrop-filter:blur(6px);
+  align-items:center;justify-content:center;padding:16px;
+}
+.compare-modal.open{display:flex}
+.compare-box{
+  background:var(--bg2);border:1px solid var(--border-hi);
+  border-radius:16px;width:100%;max-width:760px;
+  max-height:90vh;overflow-y:auto;
+  animation:slideUp .2s ease;
+}
+.compare-header{
+  display:flex;align-items:center;justify-content:space-between;
+  padding:16px 20px;border-bottom:1px solid var(--border);
+  position:sticky;top:0;background:var(--bg2);z-index:2;
+}
+.compare-title{font-family:var(--font-display);font-size:16px;font-weight:700}
+.btn-close-modal{
+  background:var(--bg3);border:1px solid var(--border);
+  border-radius:8px;padding:5px 12px;font-size:12px;
+  color:var(--text2);cursor:pointer;font-family:var(--font);
+}
+.cmp-grid{display:grid;grid-template-columns:1fr 1fr;gap:0;padding:0}
+.cmp-col{padding:16px 20px;border-right:1px solid var(--border)}
+.cmp-col:last-child{border-right:none}
+.cmp-sym{font-family:var(--font-display);font-size:18px;font-weight:800;margin-bottom:12px}
+.cmp-row{display:flex;justify-content:space-between;align-items:center;
+  padding:6px 0;border-bottom:1px solid var(--border);font-size:12px}
+.cmp-key{color:var(--text2)}
+.cmp-val{font-family:var(--font-mono);font-weight:700}
+.cmp-bar-row{padding:8px 0;border-bottom:1px solid var(--border)}
+.cmp-bar-label{display:flex;justify-content:space-between;font-size:10px;color:var(--text2);margin-bottom:3px}
+.cmp-bar-track{height:4px;background:var(--border-hi);border-radius:2px;overflow:hidden}
+.cmp-bar-fill{height:100%;border-radius:2px;transition:width 1s ease}
+@media(max-width:600px){
+  .cmp-grid{grid-template-columns:1fr}
+  .cmp-col{border-right:none;border-bottom:1px solid var(--border)}
+  .compare-bar{padding:10px 12px}
+  .toolbar{gap:6px}
+  .tb-btn{padding:4px 8px;font-size:10px}
+}
+
 /* ── Flash update animation ── */
 @keyframes flashGreen{0%,100%{background:transparent}50%{background:rgba(16,185,129,.08)}}
 .flash{animation:flashGreen .6s ease}
@@ -515,6 +668,55 @@ body{
 <main class="main" id="main" style="display:none">
   <div class="ambient"></div>
 
+  <!-- BOOKMARKS -->
+  <div class="bookmark-section" id="bm-section" style="display:none">
+    <div class="bm-header">
+      <span class="bm-title">⭐ Pinned Coins</span>
+      <span class="bm-count" id="bm-count">0 coin</span>
+      <span class="bm-clear" onclick="clearBookmarks()">Hapus semua</span>
+    </div>
+    <div class="bm-grid" id="bm-grid">
+      <span class="bm-empty">Belum ada coin yang di-pin</span>
+    </div>
+  </div>
+
+  <!-- TOOLBAR -->
+  <div class="toolbar">
+    <div class="search-wrap">
+      <span class="search-ico">🔍</span>
+      <input class="tb-search" id="tb-search" placeholder="Cari symbol..." oninput="applyFilters()">
+    </div>
+    <div class="tb-divider"></div>
+    <span class="tb-label">Profil</span>
+    <div class="tb-btn-group" id="filter-btns">
+      <button class="tb-btn active" data-filter="all"    onclick="setFilter('all',this)">Semua</button>
+      <button class="tb-btn"        data-filter="hodl_accumulate"  onclick="setFilter('hodl_accumulate',this)">🏦 Hodl</button>
+      <button class="tb-btn"        data-filter="trend_follow"     onclick="setFilter('trend_follow',this)">📈 Trend</button>
+      <button class="tb-btn"        data-filter="breakout_swift"   onclick="setFilter('breakout_swift',this)">⚡ Break</button>
+      <button class="tb-btn"        data-filter="scalp_volatile"   onclick="setFilter('scalp_volatile',this)">🎯 Scalp</button>
+      <button class="tb-btn"        data-filter="extreme_momentum" onclick="setFilter('extreme_momentum',this)">🚀 Momentum</button>
+      <button class="tb-btn"        data-filter="mean_revert"      onclick="setFilter('mean_revert',this)">🔄 Revert</button>
+    </div>
+    <div class="tb-divider"></div>
+    <span class="tb-label">Sort</span>
+    <select class="tb-select" id="sort-select" onchange="applyFilters()">
+      <option value="score">Score ↓</option>
+      <option value="prob">Probabilitas ↓</option>
+      <option value="rr">R:R Ratio ↓</option>
+      <option value="profit_pct">% TP Potensi ↓</option>
+      <option value="sym">Symbol A-Z</option>
+    </select>
+    <div class="tb-divider"></div>
+    <span class="tb-label">Chart TF</span>
+    <div class="tb-btn-group" id="tf-btns">
+      <button class="tb-btn" data-tf="1m"  onclick="setTF('1m',this)">1m</button>
+      <button class="tb-btn" data-tf="5m"  onclick="setTF('5m',this)">5m</button>
+      <button class="tb-btn active" data-tf="15m" onclick="setTF('15m',this)">15m</button>
+      <button class="tb-btn" data-tf="1h"  onclick="setTF('1h',this)">1h</button>
+      <button class="tb-btn" data-tf="4h"  onclick="setTF('4h',this)">4h</button>
+    </div>
+  </div>
+
   <!-- STATS BAR -->
   <div class="stats-bar">
     <div class="stat-chip">
@@ -587,6 +789,27 @@ body{
     </div>
   </section>
 
+  <!-- COMPARE BAR -->
+  <div class="compare-bar" id="compare-bar">
+    <span class="compare-hint">⚖ Bandingkan:</span>
+    <div class="compare-slots" id="compare-slots">
+      <span style="font-size:11px;color:var(--text3)">Klik ikon ⊕ di card untuk tambah (maks 2)</span>
+    </div>
+    <button class="btn-compare" id="btn-do-compare" onclick="openCompare()" disabled>Bandingkan →</button>
+    <button class="btn-cancel" onclick="clearCompare()" style="font-size:11px;padding:6px 12px">✕</button>
+  </div>
+
+  <!-- COMPARE MODAL -->
+  <div class="compare-modal" id="compare-modal" onclick="closeCompareModal(event)">
+    <div class="compare-box">
+      <div class="compare-header">
+        <div class="compare-title" id="cmp-title">⚖ Perbandingan Coin</div>
+        <button class="btn-close-modal" onclick="closeCompareModal()">✕ Tutup</button>
+      </div>
+      <div class="cmp-grid" id="cmp-grid"></div>
+    </div>
+  </div>
+
   <div class="page-footer">
     AlgoTrader Pro — Gate Scanner · Data dari <code>/api/forecast</code> + <code>/api/candles</code>
     · <span id="footer-ts">—</span>
@@ -611,10 +834,15 @@ document.getElementById('s-refresh').value = String(REFRESH_SEC);
 ═══════════════════════════════════════════ */
 let S = {
   forecasts: [],
-  candles: {},    // cache candle per symbol
+  candles: {},
   countdown: REFRESH_SEC,
   timer: null,
   ringTimer: null,
+  bookmarks: JSON.parse(localStorage.getItem('gate_bookmarks')||'[]'),
+  filter: 'all',
+  sortBy: 'score',
+  tf: '15m',
+  compareList: [],    // maks 2 symbol
 };
 
 /* ═══════════════════════════════════════════
@@ -673,10 +901,12 @@ function getGate(fc) {
 /* ═══════════════════════════════════════════
    CANDLE FETCH + MINI CHART
 ═══════════════════════════════════════════ */
-async function loadCandles(sym, tf = '15m') {
-  if (S.candles[sym]) return S.candles[sym];
+async function loadCandles(sym, tf) {
+  tf = tf || S.tf || '15m';
+  const key = sym + '_' + tf;
+  if (S.candles[key]) return S.candles[key];
   const d = await apiFetch('/candles/' + encodeURIComponent(sym) + '?timeframe=' + tf + '&limit=60');
-  if (d && d.candles) { S.candles[sym] = d.candles; return d.candles; }
+  if (d && d.candles) { S.candles[key] = d.candles; return d.candles; }
   return [];
 }
 
@@ -862,7 +1092,11 @@ function buildCard(fc, gate) {
 
   const cardId = 'card-' + sym.replace(/\//g,'_');
 
+  const isBookmarked = S.bookmarks.includes(sym);
+  const inCompare    = S.compareList.includes(sym);
+
   return `<div class="coin-card" id="${cardId}">
+    <span class="bm-star ${isBookmarked?'starred':''}" title="Pin coin" onclick="toggleBookmark('${esc(sym)}',event)">⭐</span>
     <div class="card-head">
       <div class="coin-avatar ${gateAvatarClass(gate)}">${esc(av)}</div>
       <div class="coin-head-info">
@@ -929,6 +1163,7 @@ function buildCard(fc, gate) {
       <div style="display:flex;flex-direction:column;align-items:flex-end;gap:4px">
         <div class="prob-badge ${probClass(prob)}">▲ ${fmtNum(prob,1)}%</div>
         ${fc.regime_confidence != null ? `<span style="font-size:9px;color:var(--text3)">Regime conf: ${(fc.regime_confidence*100).toFixed(0)}%</span>` : ''}
+        <span onclick="toggleCompare('${esc(sym)}',event)" style="font-size:9.5px;cursor:pointer;padding:2px 7px;border-radius:10px;border:1px solid var(--border);color:${inCompare?'var(--g4)':'var(--text3)'};background:${inCompare?'var(--g4-bg)':'transparent'};transition:.15s" title="Bandingkan">${inCompare?'⊖ Uncompare':'⊕ Compare'}</span>
       </div>
     </div>
     ${(fc.nearest_support || fc.nearest_resistance) ? `<div style="display:flex;justify-content:space-between;padding:6px 14px;font-size:9.5px;border-top:1px solid var(--border);background:rgba(0,0,0,0.08)">
@@ -942,9 +1177,28 @@ function buildCard(fc, gate) {
    RENDER GRIDS
 ═══════════════════════════════════════════ */
 async function render(forecasts) {
-  const g5 = forecasts.filter(f => getGate(f) === 5);
-  const g4 = forecasts.filter(f => getGate(f) === 4);
-  const g3 = forecasts.filter(f => getGate(f) === 3);
+  // Apply search + profile filter
+  let filtered = forecasts.filter(f => {
+    const searchOk = !S.filter_search ||
+      (f.symbol||'').toLowerCase().includes(S.filter_search);
+    const profileOk = S.filter === 'all' || f.strategy_profile === S.filter;
+    return searchOk && profileOk;
+  });
+
+  // Apply sort
+  filtered.sort((a,b) => {
+    switch(S.sortBy) {
+      case 'prob':       return (b.probability_up_pct||0)-(a.probability_up_pct||0);
+      case 'rr':         return (b.rr_ratio||0)-(a.rr_ratio||0);
+      case 'profit_pct': return (b.potential_profit_pct||0)-(a.potential_profit_pct||0);
+      case 'sym':        return (a.symbol||'').localeCompare(b.symbol||'');
+      default:           return (b.total_score||0)-(a.total_score||0);
+    }
+  });
+
+  const g5 = filtered.filter(f => getGate(f) === 5);
+  const g4 = filtered.filter(f => getGate(f) === 4);
+  const g3 = filtered.filter(f => getGate(f) === 3);
 
   // Counts
   document.getElementById('cnt-g5').textContent = g5.length;
@@ -960,6 +1214,8 @@ async function render(forecasts) {
   await renderGrid('grid-g5', g5, 5, '#f59e0b');
   await renderGrid('grid-g4', g4, 4, '#a855f7');
   await renderGrid('grid-g3', g3, 3, '#3b82f6');
+  renderBookmarks();
+  renderCompareBar();
 }
 
 async function renderGrid(gridId, list, gate, gc) {
@@ -985,7 +1241,7 @@ async function renderGrid(gridId, list, gate, gc) {
     const canvas = document.getElementById('canvas-' + cardId);
     if (canvas) {
       const tf = fc.timeframe || '15m';
-      loadCandles(sym, tf).then(candles => {
+      loadCandles(sym, S.tf).then(candles => {
         drawMiniChart(canvas, candles, gc);
         // Set price
         if (candles.length) {
@@ -1007,7 +1263,7 @@ async function renderGrid(gridId, list, gate, gc) {
 ═══════════════════════════════════════════ */
 async function fetchData() {
   // Clear candle cache on every refresh so we get fresh data
-  S.candles = {};
+  S.candles = {}; // clear cache (key = sym_tf)
 
   const errBar = document.getElementById('err-bar');
   const data   = await apiFetch('/forecast', 30000);
@@ -1064,11 +1320,213 @@ window.addEventListener('resize', () => {
       const sym    = fc.symbol;
       const cardId = 'card-' + sym.replace(/\//g,'_');
       const canvas = document.getElementById('canvas-' + cardId);
-      const candles = S.candles[sym];
+      const candles = S.candles[sym+'_'+S.tf] || S.candles[sym];
       if (canvas && candles) drawMiniChart(canvas, candles, gateColor(gate));
     }
   }, 200);
 });
+
+/* ═══════════════════════════════════════════
+   FILTER / SORT / TF
+═══════════════════════════════════════════ */
+function setFilter(val, btn) {
+  S.filter = val;
+  document.querySelectorAll('#filter-btns .tb-btn').forEach(b => b.classList.remove('active'));
+  if (btn) btn.classList.add('active');
+  applyFilters();
+}
+
+function setTF(val, btn) {
+  S.tf = val;
+  S.candles = {}; // clear cache karena TF berubah
+  document.querySelectorAll('#tf-btns .tb-btn').forEach(b => b.classList.remove('active'));
+  if (btn) btn.classList.add('active');
+  applyFilters(); // re-render → chart akan load ulang dengan TF baru
+}
+
+function applyFilters() {
+  S.filter_search = (document.getElementById('tb-search')?.value||'').trim().toLowerCase();
+  S.sortBy        = document.getElementById('sort-select')?.value || 'score';
+  render(S.forecasts);
+}
+
+/* ═══════════════════════════════════════════
+   BOOKMARKS
+═══════════════════════════════════════════ */
+function toggleBookmark(sym, e) {
+  if (e) e.stopPropagation();
+  const idx = S.bookmarks.indexOf(sym);
+  if (idx >= 0) S.bookmarks.splice(idx, 1);
+  else          S.bookmarks.push(sym);
+  localStorage.setItem('gate_bookmarks', JSON.stringify(S.bookmarks));
+  renderBookmarks();
+  // Update star icon in card
+  const card = document.getElementById('card-' + sym.replace(/\//g,'_'));
+  if (card) {
+    const star = card.querySelector('.bm-star');
+    if (star) star.classList.toggle('starred', S.bookmarks.includes(sym));
+  }
+}
+
+function clearBookmarks() {
+  S.bookmarks = [];
+  localStorage.setItem('gate_bookmarks','[]');
+  renderBookmarks();
+  render(S.forecasts); // re-render cards to update stars
+}
+
+function renderBookmarks() {
+  const sec  = document.getElementById('bm-section');
+  const grid = document.getElementById('bm-grid');
+  const cnt  = document.getElementById('bm-count');
+  if (!sec || !grid || !cnt) return;
+
+  if (!S.bookmarks.length) {
+    sec.style.display = 'none';
+    return;
+  }
+  sec.style.display = 'block';
+  cnt.textContent = S.bookmarks.length + ' coin';
+  grid.innerHTML = S.bookmarks.map(sym => {
+    const fc  = S.forecasts.find(f=>f.symbol===sym);
+    const gate = fc ? getGate(fc) : 0;
+    const gc  = gate ? gateColor(gate) : '#888';
+    return `<div class="bm-chip" onclick="scrollToCard('${esc(sym)}')">
+      <span style="color:${gc};font-size:10px">G${gate||'?'}</span>
+      ${esc(sym)}
+      <span style="font-size:10px;color:${gc}">${fc?Math.round(fc.total_score||0):''}</span>
+      <span class="bm-rm" onclick="toggleBookmark('${esc(sym)}',event)" title="Hapus pin">✕</span>
+    </div>`;
+  }).join('');
+}
+
+function scrollToCard(sym) {
+  const card = document.getElementById('card-' + sym.replace(/\//g,'_'));
+  if (card) card.scrollIntoView({behavior:'smooth', block:'center'});
+}
+
+/* ═══════════════════════════════════════════
+   COMPARE
+═══════════════════════════════════════════ */
+function toggleCompare(sym, e) {
+  if (e) e.stopPropagation();
+  const idx = S.compareList.indexOf(sym);
+  if (idx >= 0) {
+    S.compareList.splice(idx, 1);
+  } else {
+    if (S.compareList.length >= 2) {
+      showCompareToast('Maksimal 2 coin untuk dibandingkan'); return;
+    }
+    S.compareList.push(sym);
+  }
+  renderCompareBar();
+  // Update button state in all cards
+  render(S.forecasts);
+}
+
+function clearCompare() {
+  S.compareList = [];
+  renderCompareBar();
+  render(S.forecasts);
+}
+
+function renderCompareBar() {
+  const bar   = document.getElementById('compare-bar');
+  const slots = document.getElementById('compare-slots');
+  const btn   = document.getElementById('btn-do-compare');
+  if (!bar || !slots || !btn) return;
+
+  bar.classList.toggle('open', S.compareList.length > 0);
+  btn.disabled = S.compareList.length < 2;
+
+  if (!S.compareList.length) {
+    slots.innerHTML = '<span style="font-size:11px;color:var(--text3)">Klik ⊕ di card untuk tambah (maks 2)</span>';
+    return;
+  }
+  slots.innerHTML = S.compareList.map(sym => {
+    const fc  = S.forecasts.find(f=>f.symbol===sym);
+    const g   = fc ? getGate(fc) : 0;
+    const gc  = g ? gateColor(g) : '#888';
+    return `<div class="compare-slot">
+      <span style="color:${gc};font-size:10px;font-weight:700">G${g||'?'}</span>
+      <span>${esc(sym)}</span>
+      <span class="cs-rm" onclick="toggleCompare('${esc(sym)}',event)">✕</span>
+    </div>`;
+  }).join('');
+}
+
+function openCompare() {
+  if (S.compareList.length < 2) return;
+  const [symA, symB] = S.compareList;
+  const fcA = S.forecasts.find(f=>f.symbol===symA);
+  const fcB = S.forecasts.find(f=>f.symbol===symB);
+  if (!fcA || !fcB) return;
+
+  document.getElementById('cmp-title').textContent = '⚖ ' + symA + ' vs ' + symB;
+  document.getElementById('cmp-grid').innerHTML = [fcA,fcB].map((fc,i) => {
+    const gc  = gateColor(getGate(fc));
+    const bd  = fc.score_breakdown || {};
+    const ind = fc.indicators || {};
+    const cats = [
+      ['Trend','trend'],['Momentum','momentum'],['Strength','strength'],
+      ['Volatility','volatility'],['Pattern','pattern'],['Oscillator','oscillator'],
+      ['Structure','structure'],['Orderbook','orderbook'],
+    ];
+    return `<div class="cmp-col">
+      <div class="cmp-sym" style="color:${gc}">${esc(fc.symbol)}</div>
+
+      <div class="cmp-row"><span class="cmp-key">Gate</span>
+        <span class="cmp-val" style="color:${gc}">Gate ${getGate(fc)}</span></div>
+      <div class="cmp-row"><span class="cmp-key">Score</span>
+        <span class="cmp-val" style="color:${gc}">${Math.round(fc.total_score||0)}</span></div>
+      <div class="cmp-row"><span class="cmp-key">Probabilitas ▲</span>
+        <span class="cmp-val" style="color:${(fc.probability_up_pct||0)>=65?'var(--green)':'var(--yellow)'}">${fmtNum(fc.probability_up_pct,1)}%</span></div>
+      <div class="cmp-row"><span class="cmp-key">R:R</span>
+        <span class="cmp-val" style="color:${(fc.rr_ratio||0)>=2?'var(--green)':'var(--yellow)'}">${fmtNum(fc.rr_ratio,2)}×</span></div>
+      <div class="cmp-row"><span class="cmp-key">Harga</span>
+        <span class="cmp-val">${fmtP(fc.current_price)}</span></div>
+      <div class="cmp-row"><span class="cmp-key">Take Profit</span>
+        <span class="cmp-val" style="color:var(--green)">${fmtP(fc.suggested_tp)} (+${fmtNum(fc.potential_profit_pct,2)}%)</span></div>
+      <div class="cmp-row"><span class="cmp-key">Stop Loss</span>
+        <span class="cmp-val" style="color:var(--red)">${fmtP(fc.suggested_sl)} (-${fmtNum(fc.potential_loss_pct,2)}%)</span></div>
+      <div class="cmp-row"><span class="cmp-key">Regime</span>
+        <span class="cmp-val">${esc(fc.regime||'—')}</span></div>
+      <div class="cmp-row"><span class="cmp-key">Trend</span>
+        <span class="cmp-val">${esc(fc.trend_summary||'—')}</span></div>
+      <div class="cmp-row"><span class="cmp-key">Hold</span>
+        <span class="cmp-val">${esc(fc.hold_display||'—')}</span></div>
+      <div class="cmp-row"><span class="cmp-key">RSI</span>
+        <span class="cmp-val">${fmtNum(ind.rsi,1)}</span></div>
+      <div class="cmp-row"><span class="cmp-key">ADX</span>
+        <span class="cmp-val">${fmtNum(ind.adx,1)}</span></div>
+      <div class="cmp-row"><span class="cmp-key">Volume Ratio</span>
+        <span class="cmp-val">${fmtNum(ind.volume_ratio,2)}×</span></div>
+      <div style="height:8px"></div>
+      ${cats.map(([lbl,k])=>{
+        const v=bd[k]||0; const c=v>=70?'var(--green)':v>=50?'var(--yellow)':'var(--red)';
+        return `<div class="cmp-bar-row">
+          <div class="cmp-bar-label"><span>${lbl}</span><span style="color:${c}">${Math.round(v)}</span></div>
+          <div class="cmp-bar-track"><div class="cmp-bar-fill" style="width:${Math.min(100,v)}%;background:${c}"></div></div>
+        </div>`;
+      }).join('')}
+    </div>`;
+  }).join('');
+
+  document.getElementById('compare-modal').classList.add('open');
+}
+
+function closeCompareModal(e) {
+  if (!e || e.target === document.getElementById('compare-modal'))
+    document.getElementById('compare-modal').classList.remove('open');
+}
+
+function showCompareToast(msg) {
+  const t = document.createElement('div');
+  t.style.cssText = 'position:fixed;bottom:80px;left:50%;transform:translateX(-50%);background:var(--bg2);border:1px solid var(--border);border-radius:8px;padding:8px 16px;font-size:12px;z-index:300;animation:slideUp .2s ease;white-space:nowrap';
+  t.textContent = msg;
+  document.body.appendChild(t);
+  setTimeout(()=>t.remove(), 2500);
+}
 
 /* ═══════════════════════════════════════════
    BOOT
@@ -1079,6 +1537,7 @@ async function boot() {
   await new Promise(r => setTimeout(r, 400));
   document.getElementById('loader-msg').textContent = 'Mengambil data forecast...';
   await fetchData();
+  renderBookmarks();
   document.getElementById('loader-msg').textContent = 'Siap!';
   await new Promise(r => setTimeout(r, 200));
   const ld = document.getElementById('loader');
