@@ -25,7 +25,41 @@ from profiles.thresholds import get_profile_thresholds, get_all_profile_names
 
 log = logging.getLogger("profiles.registry")
 
+
+def _fire_and_forget_db(coro_or_result) -> None:
+    """
+    [TAMBAHAN] Helper untuk handle db calls yang bisa sync ATAU async.
+    registry.py dipanggil dari konteks sync (set_profile_override,
+    revert_parameter_override, dll) tapi DatabaseManager menggunakan
+    async methods. Tanpa penanganan ini, coroutine dari async DB call
+    tidak pernah dieksekusi — perubahan tidak tersimpan ke DB secara
+    diam-diam tanpa error.
+
+    Solusi: kalau ada running event loop, schedule via create_task.
+    Kalau tidak ada running loop (konteks sync murni), tutup coroutine
+    agar tidak memory leak dan log debug.
+    Konsisten dengan cara apply_parameter_override sudah melakukannya.
+    """
+    if coro_or_result is None:
+        return
+    if not hasattr(coro_or_result, "__await__"):
+        return  # sudah sync result
+    try:
+        loop = asyncio.get_running_loop()
+        loop.create_task(coro_or_result)
+    except RuntimeError:
+        try:
+            coro_or_result.close()
+        except Exception:
+            pass
+        log.debug(
+            "DB call tidak bisa di-schedule (no running loop) — "
+            "perubahan mungkin tidak tersimpan ke DB."
+        )
+
+
 _COIN_PROFILE_MAP: Dict[str, str] = {
+    # [BUG-FIX] BTC hilang dari map akibat str_replace error saat audit
     "BTC": "hodl_accumulate",
     "ETH": "hodl_accumulate",
     "SOL":  "breakout_swift",
@@ -386,7 +420,13 @@ def set_profile_override(
 
     if db_manager is not None:
         try:
-            db_manager.save_parameter_change(
+            # [BUG-FIX] Sebelumnya: save_parameter_change dipanggil tanpa
+            # penanganan async — DatabaseManager.save_parameter_change adalah
+            # async method, tanpa await/create_task coroutine tidak pernah
+            # dieksekusi, override tidak tersimpan ke DB secara diam-diam.
+            # Sekarang: pakai _fire_and_forget_db yang konsisten dengan cara
+            # apply_parameter_override sudah melakukannya.
+            _fire_and_forget_db(db_manager.save_parameter_change(
                 symbol=base,
                 profile=resolved,
                 parameter_name="_profile_override",
@@ -394,7 +434,7 @@ def set_profile_override(
                 new_value=resolved,
                 reason="Manual profile override via set_profile_override()",
                 approved_by="manual",
-            )
+            ))
         except Exception as exc:
             log.warning("Gagal simpan profile override ke DB: %s", exc)
 
@@ -416,7 +456,9 @@ def clear_profile_override(symbol: str, db_manager=None) -> bool:
 
         if db_manager is not None:
             try:
-                db_manager.save_parameter_change(
+                # [BUG-FIX] Sama seperti set_profile_override — async call
+                # tanpa penanganan yang benar. Fix: _fire_and_forget_db.
+                _fire_and_forget_db(db_manager.save_parameter_change(
                     symbol=base,
                     profile=_COIN_PROFILE_MAP.get(base, "unknown"),
                     parameter_name="_profile_override",
@@ -424,7 +466,7 @@ def clear_profile_override(symbol: str, db_manager=None) -> bool:
                     new_value="(cleared)",
                     reason="Profile override cleared",
                     approved_by="manual",
-                )
+                ))
             except Exception as exc:
                 log.warning("Gagal simpan clear override ke DB: %s", exc)
 
@@ -511,7 +553,8 @@ def revert_parameter_override(
     profile_name_resolved = _COIN_PROFILE_MAP.get(base, "unknown")
     if db_manager is not None:
         try:
-            db_manager.save_parameter_change(
+            # [BUG-FIX] Sama — async call tanpa penanganan. Fix: _fire_and_forget_db.
+            _fire_and_forget_db(db_manager.save_parameter_change(
                 symbol=base,
                 profile=profile_name_resolved,
                 parameter_name=parameter_name,
@@ -519,7 +562,7 @@ def revert_parameter_override(
                 new_value="(reverted to default)",
                 reason="Reverted due to performance degradation",
                 approved_by="meta_learner",
-            )
+            ))
         except Exception as exc:
             log.warning("Gagal simpan revert ke DB: %s", exc)
 
