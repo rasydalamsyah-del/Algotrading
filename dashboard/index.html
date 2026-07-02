@@ -3319,7 +3319,7 @@ async function loadOrderbook(sym) {
   const imb = data.imbalance_score;
   let html = '<div style="font-size:11px;margin-bottom:8px">';
   html += '<span style="color:var(--text-muted)">Imbalance: </span>';
-  html += '<span style="color:'+(imb>0.6?'var(--green)':imb<-0.6?'var(--red)':'var(--yellow))'+'">'+(imb!==undefined?imb.toFixed(3):'—')+'</span>';
+  html += '<span style="color:'+(imb>0.6?'var(--green)':imb<-0.6?'var(--red)':'var(--yellow)')+'">'+(imb!==undefined?imb.toFixed(3):'—')+'</span>';
   html += ' &nbsp; <span class="badge '+(danger==='danger'?'red':danger==='warning'?'yellow':'green')+'">'+danger.toUpperCase()+'</span></div>';
   html += '<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;font-size:10px">';
   html += '<div><div style="color:var(--green);font-weight:700;margin-bottom:4px">BIDS</div>';
