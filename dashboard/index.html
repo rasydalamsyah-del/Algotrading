@@ -820,6 +820,7 @@ tbody td.symbol:hover { color: var(--blue); }
     <a onclick="navigate('diagnosa')"   id="nav-diagnosa">Diagnosa</a>
     <a onclick="navigate('risk')"       id="nav-risk">Risk</a>
     <a onclick="navigate('intelligence')" id="nav-intelligence">AI Learner</a>
+    <a href="gate.html" style="background:linear-gradient(135deg,rgba(168,85,247,.2),rgba(245,158,11,.2));border:1px solid rgba(245,158,11,.3);border-radius:6px;padding:3px 10px;color:var(--yellow);font-weight:700" title="Gate Scanner — lihat koin lolos gate">🎯 Gate</a>
     <a onclick="navigate('settings')"   id="nav-settings">Settings</a>
   </div>
   <div class="topbar-right">
@@ -979,6 +980,20 @@ tbody td.symbol:hover { color: var(--blue); }
       </div>
     </div>
   </div>
+  <!-- Gate Preview Widget -->
+  <div class="pos-card" id="gate-preview-card" style="margin-bottom:0">
+    <div class="pos-card-header">
+      <span class="card-title">🎯 Top Gate 5 Signals</span>
+      <div style="display:flex;gap:8px;align-items:center">
+        <span id="gate-preview-ts" style="font-size:10px;color:var(--text-muted)">—</span>
+        <a href="gate.html" class="card-action" style="text-decoration:none;color:var(--yellow)">Gate Scanner →</a>
+      </div>
+    </div>
+    <div id="gate-preview-body" style="padding:10px 14px">
+      <div class="empty-state" style="padding:12px">Memuat sinyal terbaik...</div>
+    </div>
+  </div>
+
   <div class="grid-6-4 section-gap">
     <div class="pos-card">
       <div class="pos-card-header">
@@ -1986,6 +2001,7 @@ async function refreshAll() {
   }
   if (S.page==='watchlist') renderCoinGrid();
   if (S.page==='settings')  renderSettingsTable?.();
+  if (S.page==='dashboard') loadGatePreview(); // Gate preview + notifikasi Gate 5
 }
 
 /* ═══════════════════════════════════════════
@@ -2586,6 +2602,7 @@ function renderCoinGrid() {
         const rgCls='rb-'+regime.toLowerCase().replace(/\s+/g,'_');
         return '<div style="display:flex;align-items:center;justify-content:space-between;margin-top:7px;gap:5px">'
           +(score!==null?'<span style="font-size:10px;font-weight:800;font-family:var(--font-mono);color:'+scColor+'">▲ '+Math.round(score)+'</span>':'')
+          +(()=>{const g=score>=85?5:score>=70?4:score>=55?3:0;const gc=g===5?'#f59e0b':g===4?'#a855f7':g===3?'#3b82f6':'';return g?'<span style="font-size:8px;font-weight:800;padding:1px 5px;border-radius:8px;border:1px solid '+gc+'44;color:'+gc+';background:'+gc+'18">G'+g+'</span>':''})()
           +'<span class="regime-badge '+rgCls+'" style="font-size:8.5px;padding:2px 6px">'+regime.replace(/_/g,' ').toUpperCase()+'</span>'
           +(sc.trigger_met?'<span style="font-size:9px;color:var(--green);font-weight:700">✓ SIGNAL</span>':'')
           +'</div>';
@@ -3623,6 +3640,77 @@ function connectSSE() {
     // Untuk sekarang kita catat di console.
     addConsole('INFO','SSE','SSE stream tersedia di '+url+' — butuh backend update untuk header-less auth.');
   } catch(e) {}
+}
+
+/* ═══════════════════════════════════════════
+   GATE PREVIEW WIDGET (dashboard utama)
+═══════════════════════════════════════════ */
+let prevGate5Syms = new Set();
+
+async function loadGatePreview() {
+  const data = await apiFetch('/forecast', 20000);
+  if (!data || !data.forecasts) return;
+
+  const forecasts = data.forecasts || [];
+  const g5 = forecasts.filter(f => (f.total_score||0) >= 85).sort((a,b)=>(b.total_score||0)-(a.total_score||0));
+  const g4 = forecasts.filter(f => (f.total_score||0) >= 70 && (f.total_score||0) < 85).length;
+  const g3 = forecasts.filter(f => (f.total_score||0) >= 55 && (f.total_score||0) < 70).length;
+
+  // Notifikasi: cek apakah ada coin baru masuk Gate 5
+  const curG5Syms = new Set(g5.map(f=>f.symbol));
+  curG5Syms.forEach(sym => {
+    if (!prevGate5Syms.has(sym)) {
+      const fc = g5.find(f=>f.symbol===sym);
+      const sc = fc ? Math.round(fc.total_score||0) : '';
+      showToast('buy', '🔥 Gate 5 Baru!', sym+' masuk Gate 5 — Score: '+sc);
+      addFeedItem('buy','GATE5',sym+' lolos Gate 5 (score: '+sc+')');
+    }
+  });
+  prevGate5Syms = curG5Syms;
+
+  const el = document.getElementById('gate-preview-body');
+  const ts = document.getElementById('gate-preview-ts');
+  if (!el) return;
+  if (ts) ts.textContent = new Date().toLocaleTimeString('id-ID');
+
+  if (!g5.length) {
+    el.innerHTML = `<div style="display:flex;align-items:center;gap:16px;flex-wrap:wrap;font-size:11px;color:var(--text-muted)">
+      <span>Gate 5: <b style="color:var(--text-primary)">0</b></span>
+      <span>Gate 4: <b style="color:#a855f7">${g4}</b></span>
+      <span>Gate 3: <b style="color:#3b82f6">${g3}</b></span>
+      <span>Belum ada coin lolos Gate 5 saat ini.</span>
+      <a href="gate.html" style="color:var(--yellow);text-decoration:none;font-size:11px">Lihat semua →</a>
+    </div>`;
+    return;
+  }
+
+  el.innerHTML = `
+    <div style="display:flex;gap:8px;margin-bottom:10px;flex-wrap:wrap;font-size:11px">
+      <span style="color:#f59e0b;font-weight:700">🔥 G5: ${g5.length}</span>
+      <span style="color:#a855f7">✨ G4: ${g4}</span>
+      <span style="color:#3b82f6">📊 G3: ${g3}</span>
+    </div>
+    <div style="display:flex;gap:8px;flex-wrap:wrap">
+    ${g5.slice(0,5).map(fc => {
+      const sym  = fc.symbol||'';
+      const sc   = Math.round(fc.total_score||0);
+      const prob = (fc.probability_up_pct||0).toFixed(1);
+      const rr   = fc.rr_ratio ? fc.rr_ratio.toFixed(2)+'×' : '—';
+      const trend= fc.trend_summary||'—';
+      const trendC = trend.toLowerCase().includes('bull')?'var(--green)':trend.toLowerCase().includes('bear')?'var(--red)':'var(--yellow)';
+      return `<div onclick="openCoinDrawer('${esc(sym)}')" style="cursor:pointer;background:rgba(245,158,11,0.07);border:1px solid rgba(245,158,11,0.2);border-radius:8px;padding:8px 12px;min-width:130px;flex:1;transition:.15s" onmouseover="this.style.background='rgba(245,158,11,0.12)'" onmouseout="this.style.background='rgba(245,158,11,0.07)'">
+        <div style="font-family:var(--font-mono);font-weight:800;font-size:12px;color:#f59e0b">${esc(sym.split('/')[0])}</div>
+        <div style="font-size:9.5px;color:var(--text-muted)">${esc(sym)}</div>
+        <div style="margin-top:5px;font-family:var(--font-mono);font-size:14px;font-weight:800;color:var(--green)">${sc}</div>
+        <div style="display:flex;justify-content:space-between;margin-top:3px;font-size:9.5px">
+          <span style="color:var(--text-muted)">▲${prob}%</span>
+          <span style="color:var(--text-muted)">R:${rr}</span>
+        </div>
+        <div style="font-size:9px;color:${trendC};margin-top:2px">${esc(trend)}</div>
+      </div>`;
+    }).join('')}
+    ${g5.length>5?`<div style="display:flex;align-items:center;padding:0 4px;font-size:11px;color:var(--text-muted)">+${g5.length-5} lagi <a href="gate.html" style="margin-left:4px;color:var(--yellow);text-decoration:none">→</a></div>`:''}
+    </div>`;
 }
 
 /* ═══════════════════════════════════════════
