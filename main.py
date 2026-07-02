@@ -2548,6 +2548,29 @@ class TradingBot:
             _reset_position_flag()
             raise
 
+        # [BUG-FIX — root cause] Hubungkan SignalScore yang memicu entry ini
+        # ke Trade yang baru dibuat. Sebelumnya related_trade_id TIDAK PERNAH
+        # terisi di manapun dalam codebase — bikin get_score_vs_outcome(),
+        # compute_indicator_effectiveness(), dan get_win_rate_by_profile_regime()
+        # (dashboard Gate Scanner) selalu mengembalikan data kosong secara diam-diam,
+        # walau bot sudah jalan lama dan sudah banyak trade closed.
+        # Non-critical: kegagalan di sini TIDAK BOLEH menggagalkan proses buka
+        # posisi yang sudah berhasil — cukup di-log, posisi tetap valid & aman.
+        try:
+            _linked = await self.db.link_latest_signal_to_trade(
+                symbol=symbol,
+                trade_id=trade.id,
+                trade_timestamp=getattr(trade, "timestamp", None),
+            )
+            if not _linked:
+                log.debug(
+                    "Tidak ada SignalScore yang cocok utk di-link ke Trade #%s (%s) "
+                    "— win-rate historis utk trade ini tidak akan tercatat.",
+                    trade.id, symbol,
+                )
+        except Exception as _link_err:
+            log.debug("link_latest_signal_to_trade error (non-critical) %s: %s", symbol, _link_err)
+
         with self.strategy._lock:
             last_params = dict(getattr(self.strategy, "_last_entry_params", {}))
         entry_info = last_params.get(symbol, {})
