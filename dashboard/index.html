@@ -2000,7 +2000,6 @@ async function refreshAll() {
     scData.scores.forEach(s => { S.scores[s.symbol] = s; });
   }
   if (S.page==='watchlist') renderCoinGrid();
-  if (S.page==='settings')  renderSettingsTable?.();
   if (S.page==='dashboard') loadGatePreview(); // Gate preview + notifikasi Gate 5
 }
 
@@ -2393,8 +2392,9 @@ async function loadDiagnosa() {
   S.diagnosaData=data;
   let buyCount=0,watchCount=0,noneCount=0;
   data.results.forEach(r=>{
-    if (r.includes('SINYAL BUY')) buyCount++;
-    else if (r.includes('3/4')||r.includes('2/4')) watchCount++;
+    if (r.error) { noneCount++; return; }
+    if (r.trigger_met) buyCount++;
+    else if ((r.conditions_met||0)>=2) watchCount++;
     else noneCount++;
   });
 
@@ -2407,25 +2407,33 @@ async function loadDiagnosa() {
 
   if (results) {
     results.innerHTML=data.results.map(r=>{
-      const isBuy=r.includes('SINYAL BUY');
-      const lines=r.split('\n').map(l=>l.trim()).filter(Boolean);
-      const headerLine=lines[0]||'';
-      const sym=headerLine.match(/\*([^*]+)\*/)?.[1]||'';
-      const restLines=lines.slice(1);
+      const sym=r.symbol||'';
+      const hasError=!!r.error;
+      const isBuy=!!r.trigger_met;
       const tk=S.tickers[sym]||{};
-      const sc=S.scores[sym];
-      const price=tk.last;
       const chg=tk.change_pct||0;
       const up=chg>=0;
-      const pStr=price?(price>=1?'$'+price.toFixed(2):'$'+price.toFixed(6)):'';
-      const scVal=sc&&sc.total_score!==null?Math.round(sc.total_score):null;
+      const price=r.price!=null?r.price:tk.last;
+      const pStr=price?(price>=1?'$'+(+price).toFixed(2):'$'+(+price).toFixed(6)):'';
+      const scVal=(r.total_score!==null&&r.total_score!==undefined)?Math.round(r.total_score):null;
       const scColor=scVal>=70?'var(--green)':scVal>=50?'var(--yellow)':'var(--red)';
-      const regime=sc?sc.regime||'undefined':'';
+      const regime=r.regime||'undefined';
       const rgCls='rb-'+regime.toLowerCase().replace(/\s+/g,'_');
-      return `<div class="diagnosa-card ${isBuy?'buy-signal':'no-signal'}" onclick="openCoinDrawer('${esc(sym)}')" style="cursor:pointer">
+
+      const detailLines=[];
+      if (hasError) detailLines.push('❌ '+r.error);
+      if (r.profile) detailLines.push('Profil: `'+r.profile+'`');
+      if (r.conditions_met!=null&&r.conditions_total!=null) detailLines.push('`'+r.conditions_met+'/'+r.conditions_total+'` kondisi terpenuhi');
+      if (r.threshold!=null&&scVal!==null) detailLines.push('Score `'+scVal+'` · Threshold `'+Math.round(r.threshold)+'`');
+      if (r.sl!=null) detailLines.push('SL: `'+r.sl+'`'+(r.tp!=null?' · TP: `'+r.tp+'`':''));
+      if (r.rsi!=null) detailLines.push('RSI: `'+r.rsi+'`'+(r.vol_ratio!=null?' · Vol ratio: `'+r.vol_ratio+'x`':''));
+      if (r.narrative) detailLines.push(r.narrative);
+      if (Array.isArray(r.failed_conditions)&&r.failed_conditions.length) detailLines.push('Belum terpenuhi: '+r.failed_conditions.join(', '));
+
+      return `<div class="diagnosa-card ${isBuy&&!hasError?'buy-signal':'no-signal'}" onclick="openCoinDrawer('${esc(sym)}')" style="cursor:pointer">
         <div class="diagnosa-header">
-          <span class="diagnosa-sym">${isBuy?'🚀':'⏳'} ${esc(sym)}</span>
-          ${isBuy?'<span class="status-chip open">BUY SIGNAL</span>':''}
+          <span class="diagnosa-sym">${hasError?'⚠️':(isBuy?'🚀':'⏳')} ${esc(sym)}</span>
+          ${isBuy&&!hasError?'<span class="status-chip open">BUY SIGNAL</span>':''}
           <span style="margin-left:auto;display:flex;align-items:center;gap:6px">
             ${pStr?`<span style="font-family:var(--font-mono);font-size:11px;font-weight:700">${pStr}</span>`:''}
             ${pStr?`<span style="font-size:10px;font-weight:600;color:${up?'var(--green)':'var(--red)'}">${up?'▲':'▼'}${Math.abs(chg).toFixed(2)}%</span>`:''}
@@ -2433,7 +2441,7 @@ async function loadDiagnosa() {
             ${regime?`<span class="regime-badge ${rgCls}" style="font-size:8px;padding:2px 5px">${regime.replace(/_/g,' ').toUpperCase()}</span>`:''}
           </span>
         </div>
-        ${restLines.map(l=>`<div style="font-size:11px;color:var(--text-secondary);padding:1px 0">${formatDiagnosaLine(l)}</div>`).join('')}
+        ${detailLines.map(l=>`<div style="font-size:11px;color:var(--text-secondary);padding:1px 0">${formatDiagnosaLine(l)}</div>`).join('')}
       </div>`;
     }).join('');
   }
@@ -3319,7 +3327,7 @@ async function loadOrderbook(sym) {
   const imb = data.imbalance_score;
   let html = '<div style="font-size:11px;margin-bottom:8px">';
   html += '<span style="color:var(--text-muted)">Imbalance: </span>';
-  html += '<span style="color:'+(imb>0.6?'var(--green)':imb<-0.6?'var(--red)':'var(--yellow))'+'">'+(imb!==undefined?imb.toFixed(3):'—')+'</span>';
+  html += '<span style="color:'+(imb>0.6?'var(--green)':imb<-0.6?'var(--red)':'var(--yellow)')+'">'+(imb!==undefined?imb.toFixed(3):'—')+'</span>';
   html += ' &nbsp; <span class="badge '+(danger==='danger'?'red':danger==='warning'?'yellow':'green')+'">'+danger.toUpperCase()+'</span></div>';
   html += '<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;font-size:10px">';
   html += '<div><div style="color:var(--green);font-weight:700;margin-bottom:4px">BIDS</div>';
