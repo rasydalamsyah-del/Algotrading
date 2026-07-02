@@ -1286,7 +1286,20 @@ def create_app(bot_getter) -> FastAPI:
 
         try:
             _latest_regime = latest.regime if latest and hasattr(latest, "regime") else "undefined"
-            entry_threshold = get_dynamic_threshold(symbol.split("/")[0], _latest_regime)
+            # [BUG-FIX] Sebelumnya: get_dynamic_threshold dipanggil dengan
+            # symbol.split('/')[0] sebagai profile_name — misal 'BTC/USDT'
+            # menghasilkan 'BTC', bukan nama profile yang valid ('trend_follow',
+            # 'breakout_swift', dll). Karena 'BTC' tidak ada di matrix,
+            # selalu fallback ke 65.0 tanpa mempertimbangkan profile koin ini.
+            # Dashboard menampilkan threshold 65.0 untuk semua koin terlepas
+            # dari profile aktualnya. Fix: pakai latest.strategy_profile
+            # (yang tersimpan di signal_scores saat sinyal di-score).
+            _profile_name = (
+                latest.strategy_profile
+                if latest and hasattr(latest, "strategy_profile") and latest.strategy_profile
+                else "trend_follow"  # fallback ke profile default yang paling umum
+            )
+            entry_threshold = get_dynamic_threshold(_profile_name, _latest_regime)
         except Exception:
             entry_threshold = 70.0
 

@@ -225,6 +225,15 @@
         "notify_whale_dead_guard_none_dihapus"
       ],
       "catatan": "Bug 1: notify_trade_closed menghitung pnl_pct dari pergerakan harga mentah ((exit-entry)/entry*100) tanpa fee, tidak konsisten dengan realized_pnl yang sudah memperhitungkan fee. User bisa lihat pnl_pct positif tapi realized_pnl negatif (karena fee) — membingungkan. Fix: hitung dari realized_pnl/position_value. Bug 2: notify_whale punya guard 'if self._whale_notifier is None: return' yang dead code — _whale_notifier SELALU diinit di __init__. Dihapus. Cross-check: semua signature notify_* cocok dengan caller di main.py, strategy.py, learning/coin_swap.py. File 878 baris, dibaca menyeluruh, semua method ditest."
+    },
+    "profiles/thresholds.py": {
+      "status": "DONE",
+      "audit_level": "SERIUS",
+      "bug_fixed": [
+        "get_transition_action_docstring_no_position_tidak_pernah_direturn",
+        "api_server_get_dynamic_threshold_symbol_ticker_bukan_profile_name"
+      ],
+      "catatan": "Bug 1 (thresholds.py): docstring get_transition_action menyebut 'NO_POSITION' sebagai return value tapi tidak ada satupun entry di TRANSITION_ACTION_MATRIX yang mengandung NO_POSITION — matrix hanya punya HOLD/HOLD_TIGHTEN_SL/HOLD_RELAX_SL/EXIT. Docstring tidak akurat diperbaiki. Bug 2 (api_server.py): get_dynamic_threshold dipanggil dengan symbol.split('/')[0] ('BTC') sebagai profile_name — bukan nama profile yang valid. Selalu fallback ke 65.0, threshold di dashboard tidak akurat untuk semua koin. Fix: pakai latest.strategy_profile. Struktur file solid: _validate_all_thresholds() sudah sangat komprehensif (validasi cross-profile, bounds, R/R, RSI consistency). Cross-check: get_dynamic_threshold dan get_profile_thresholds dipakai di scorer.py, validator.py, commander.py, registry.py, main.py, api_server.py, learning/meta_learner.py, learning/coin_swap.py — semua signature cocok dan fallback 65.0 untuk unknown profile memadai."
     }
   },
   "file_belum_diaudit": {
@@ -259,10 +268,6 @@
     "profiles/registry.py": {
       "status": "PENDING",
       "ukuran": "19 fungsi"
-    },
-    "profiles/thresholds.py": {
-      "status": "PENDING",
-      "ukuran": "12 fungsi, 1 class"
     },
     "telegram_bot.py": {
       "status": "PENDING",

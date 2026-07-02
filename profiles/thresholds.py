@@ -131,7 +131,14 @@ TRANSITION_ACTION_MATRIX: Dict[str, Dict[str, Dict[str, str]]] = {
 
 def get_transition_action(profile_name: str, entry_regime: str, current_regime: str) -> str:
     """Ambil aksi transisi berdasarkan profile x entry_regime x current_regime.
-    Return: HOLD | HOLD_TIGHTEN_SL | HOLD_RELAX_SL | EXIT | NO_POSITION
+    Return: HOLD | HOLD_TIGHTEN_SL | HOLD_RELAX_SL | EXIT
+
+    # [BUG-FIX] Sebelumnya: docstring menyebut 'NO_POSITION' sebagai salah satu
+    # kemungkinan return value. Tapi tidak ada satupun entry di
+    # TRANSITION_ACTION_MATRIX yang mengandung 'NO_POSITION' — matrix hanya
+    # berisi: HOLD, HOLD_TIGHTEN_SL, HOLD_RELAX_SL, EXIT. Docstring yang
+    # tidak akurat ini bisa menyesatkan caller yang menyiapkan handler untuk
+    # 'NO_POSITION' yang tidak pernah datang. Dihapus dari docstring.
     """
     if current_regime == "trending_bear":
         return "EXIT"
