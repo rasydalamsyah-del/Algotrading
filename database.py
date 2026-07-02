@@ -650,6 +650,73 @@ class DatabaseManager:
 
         return rows
 
+    async def get_win_rate_by_profile_regime(
+        self,
+        profile:        str,
+        regime:         str,
+        lookback_days:  int = 60,
+        min_samples:    int = 15,
+    ) -> Dict[str, Any]:
+        """
+        [BARU] Win-rate HISTORIS nyata untuk kombinasi (strategy_profile, regime)
+        tertentu — dihitung dari SignalScore yang punya related_trade_id (artinya
+        sinyal itu benar-benar dieksekusi jadi trade) di-join ke hasil realized_pnl_pct
+        trade tsb.
+
+        Ini SENGAJA dibuat sebagai sumber independen dari total_score/confidence:
+        - total_score & signal_confidence = kondisi teknikal SAAT INI (real-time)
+        - win_rate di sini = fakta hasil trade beneran di MASA LALU untuk setup
+          yang mirip (profile+regime sama)
+
+        Dipakai untuk probability_up_pct di /api/forecast supaya angka itu tidak
+        cuma "total_score didaur ulang" — lihat catatan di api_server.py get_forecast().
+
+        Return dict:
+            win_rate       : float 0..1, atau None kalau sampel < min_samples
+            sample_size    : jumlah trade yang match
+            avg_pnl_pct    : rata-rata realized_pnl_pct dari sampel
+            is_mature      : bool — True kalau sample_size >= min_samples
+        """
+        from datetime import timedelta
+        since = _utcnow() - timedelta(days=lookback_days)
+
+        async with self._session() as s:
+            q = (
+                select(SignalScore)
+                .where(
+                    SignalScore.timestamp >= since,
+                    SignalScore.related_trade_id.isnot(None),
+                    SignalScore.strategy_profile == profile,
+                    SignalScore.regime == regime,
+                )
+            )
+            result = await s.execute(q)
+            scores = list(result.scalars().all())
+
+        if not scores:
+            return {"win_rate": None, "sample_size": 0, "avg_pnl_pct": None, "is_mature": False}
+
+        trade_ids = [sc.related_trade_id for sc in scores]
+        async with self._session() as s:
+            trade_result = await s.execute(
+                select(Trade).where(Trade.id.in_(trade_ids), Trade.realized_pnl_pct.isnot(None))
+            )
+            trades = list(trade_result.scalars().all())
+
+        if not trades:
+            return {"win_rate": None, "sample_size": 0, "avg_pnl_pct": None, "is_mature": False}
+
+        pnl_list  = [t.realized_pnl_pct or 0.0 for t in trades]
+        win_count = sum(1 for p in pnl_list if p > 0)
+        sample_size = len(pnl_list)
+
+        return {
+            "win_rate":    round(win_count / sample_size, 4),
+            "sample_size": sample_size,
+            "avg_pnl_pct": round(sum(pnl_list) / sample_size, 3),
+            "is_mature":   sample_size >= min_samples,
+        }
+
     async def get_score_vs_outcome(
         self,
         lookback_days: int           = 30,
@@ -1179,6 +1246,91 @@ class DatabaseManager:
                 await s.commit()
         except Exception as e:
             log.debug("link_signal_to_trade non-critical error: %s", e)
+
+    async def link_latest_signal_to_trade(
+        self,
+        symbol:             str,
+        trade_id:           int,
+        trade_timestamp:    Optional[datetime] = None,
+        tolerance_seconds:  int                = 120,
+    ) -> bool:
+        """
+        [BARU — perbaikan akar bug related_trade_id] Cari SignalScore paling
+        relevan untuk `symbol` ini dan link ke `trade_id` yang baru saja dibuat.
+
+        Kenapa perlu ini, bukan langsung terima signal_score_id dari caller:
+        intelligence/scorer.py menyimpan SignalScore secara fire-and-forget
+        (asyncio.run_coroutine_threadsafe) supaya hot-path scoring loop tidak
+        nunggu I/O database — row_id hasil insert-nya TIDAK PERNAH sempat
+        ditangkap balik ke objek sinyal yang diteruskan ke main.py. Daripada
+        mengubah scoring loop jadi blocking (berisiko memperlambat semua
+        simbol yang di-score, padahal >95% tidak pernah jadi trade), matching
+        dilakukan di sini — HANYA sekali per trade yang benar-benar terjadi
+        (jarang, bukan hot-path), pakai pendekatan yang SAMA seperti
+        get_trades_with_regime() yang sudah terbukti jalan.
+
+        Kriteria matching (SEMUA harus benar, supaya tidak pernah salah link):
+        - symbol sama persis
+        - action_taken menandakan sinyal ini yang dieksekusi (EXECUTE/EXECUTE_CANDIDATE)
+        - belum pernah di-link ke trade lain (related_trade_id IS NULL)
+        - timestamp skor <= timestamp trade (skor selalu mendahului entry,
+          bukan sebaliknya)
+        - dalam toleransi waktu (default 120 detik — cukup luas utk latency
+          Gate3→Gate4→Gate4.5→Gate5, cukup sempit utk hindari salah tempel ke
+          skor lama yang kebetulan simbolnya sama)
+        - kalau ada beberapa kandidat, ambil yang PALING BARU (paling dekat ke
+          waktu trade)
+
+        Return True kalau berhasil ketemu & link, False kalau tidak ada
+        kandidat yang cocok (bukan error — bisa jadi memang tidak ada
+        SignalScore yang tersimpan, misal karena scanner_pipeline lama tidak
+        selalu men-score lewat scorer.py).
+        """
+        ts = trade_timestamp or _utcnow()
+        from datetime import timedelta
+        window_start = ts - timedelta(seconds=tolerance_seconds)
+
+        try:
+            async with self._session() as s:
+                q = (
+                    select(SignalScore)
+                    .where(
+                        SignalScore.symbol == symbol,
+                        SignalScore.related_trade_id.is_(None),
+                        SignalScore.timestamp >= window_start,
+                        SignalScore.timestamp <= ts,
+                        func.upper(SignalScore.action_taken).in_(
+                            ["EXECUTE_CANDIDATE", "EXECUTE"]
+                        ),
+                    )
+                    .order_by(desc(SignalScore.timestamp))
+                    .limit(1)
+                )
+                result = await s.execute(q)
+                candidate = result.scalar_one_or_none()
+
+                if candidate is None:
+                    log.debug(
+                        "link_latest_signal_to_trade: tidak ada SignalScore "
+                        "cocok utk %s (trade_id=%d, window=%ds)",
+                        symbol, trade_id, tolerance_seconds,
+                    )
+                    return False
+
+                candidate.related_trade_id = trade_id
+                await s.commit()
+                log.info(
+                    "SignalScore #%d di-link ke Trade #%d (%s, delta=%.1fs)",
+                    candidate.id, trade_id, symbol,
+                    (ts - candidate.timestamp).total_seconds(),
+                )
+                return True
+        except Exception as e:
+            log.warning(
+                "link_latest_signal_to_trade gagal utk %s (trade_id=%d): %s",
+                symbol, trade_id, e,
+            )
+            return False
 
     async def get_signal_scores(
         self,
