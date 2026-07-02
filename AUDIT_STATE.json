@@ -156,9 +156,13 @@
     },
     "constants.py": {
       "status": "DONE",
-      "bug_fixed": [],
-      "audit_level": "TIDAK_JELAS_LOW_PRIORITY",
-      "audit_level_keterangan": "0 bug ditemukan. Tidak ada keterangan audit mendalam. File berisi konstanta saja — kemungkinan memang bersih. Perlu spot-check saat audit file yang memakainya."
+      "audit_level": "SERIUS",
+      "bug_fixed": [
+        "signal_confirmation_matrix_duplikat_definisi",
+        "production_indicator_cols_dead_code_misleading_comment",
+        "tambah_validasi_scm_vs_rsm_konsistensi_di_validate_constants"
+      ],
+      "catatan": "Bug 1: SIGNAL_CONFIRMATION_MATRIX didefinisikan 2x (baris 443 dan 495), isi identik — definisi pertama selalu ditimpa definisi kedua, rawan bug kalau suatu saat dua versi tidak sengaja dibuat berbeda. Definisi pertama dihapus. Bug 2: PRODUCTION_INDICATOR_COLS tidak dipakai di manapun (dead code), dan komentar 'Referensikan via konstanta ini' tidak akurat. Juga tidak lengkap (DMP_14, DMN_14, VWMA_20, ICH_* tidak ada). Komentar diperbaiki untuk refleksi kenyataan. Tambahan: validasi konsistensi SIGNAL_CONFIRMATION_MATRIX vs REGIME_SCORE_MODIFIERS ditambahkan ke _validate_constants() — harus punya key yang sama persis. Cross-check: semua regime name konsisten di seluruh codebase. Sebelumnya TIDAK_JELAS_LOW_PRIORITY, sekarang diaudit serius."
     },
     "database.py": {
       "status": "DONE",

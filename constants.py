@@ -102,9 +102,15 @@ REQUIRED_INDICATOR_COLS: Tuple[str, ...] = (
     COL_ATR,
 )
 
-# Semua kolom yang dihasilkan df.ta.enrich_production() — v5
-# Wajib ada sebelum Gate3 logic dan observer pipeline dijalankan.
-# Referensikan via konstanta ini, BUKAN hardcode string literal.
+# [CATATAN] PRODUCTION_INDICATOR_COLS ini adalah referensi dokumentasi kolom
+# yang dihasilkan enrich_production() — namun saat ini TIDAK DIPAKAI di manapun
+# dalam codebase (grep: tidak ada caller selain definisi ini sendiri).
+# Komentar "Referensikan via konstanta ini, BUKAN hardcode string literal" tidak
+# akurat karena kode aktual tidak pernah menggunakan list ini untuk validasi
+# atau filtering — setiap indikator mengakses kolomnya sendiri langsung.
+# Juga: beberapa kolom penting yang di-generate ta_compat.py tidak ada di sini
+# (DMP_14, DMN_14, VWMA_20, ICH_*, OBV_MA, VOL_MA, dll) — list ini tidak lengkap.
+# Dipertahankan sebagai dokumentasi referensi saja, bukan untuk dipakai di runtime.
 PRODUCTION_INDICATOR_COLS: Tuple[str, ...] = (
     # EMA stack
     COL_EMA9, COL_EMA21, COL_EMA50, COL_EMA100, COL_EMA200,
@@ -439,15 +445,6 @@ APP_VERSION = "7.0"
 APP_NAME    = "AlgoTrader Pro"
 APP_CODENAME = "The Intelligence Pipeline"
 
-# Jumlah konfirmasi BUY berturut-turut yang dibutuhkan per regime
-SIGNAL_CONFIRMATION_MATRIX: dict = {
-    "trending_bull":      5,  # Trending = butuh 5x konfirmasi (75 menit di 15m)
-    "volatile_expansion": 3,  # Volatile = cepat tangkap momentum
-    "ranging":            4,  # Ranging = sedang
-    "undefined":          6,  # Undefined = paling ketat
-    "trending_bear":    999,  # Bear = tidak pernah buy
-}
-
 def _validate_constants() -> None:
 
     assert SCORE_MIN < SCORE_NEUTRAL < SCORE_MAX, \
@@ -491,6 +488,23 @@ def _validate_constants() -> None:
                 f"'{m}' muncul di lebih dari satu CORRELATION_GROUPS group"
             seen.add(m)
 
+    # [TAMBAHAN] Validasi konsistensi SIGNAL_CONFIRMATION_MATRIX vs REGIME_SCORE_MODIFIERS
+    # Kedua dict harus punya key yang sama persis — kalau ada regime baru ditambahkan
+    # ke salah satu, harus ditambahkan ke keduanya juga.
+    scm_keys = set(SIGNAL_CONFIRMATION_MATRIX.keys())
+    rsm_keys = set(REGIME_SCORE_MODIFIERS.keys())
+    assert scm_keys == rsm_keys, (
+        f"SIGNAL_CONFIRMATION_MATRIX dan REGIME_SCORE_MODIFIERS harus punya "
+        f"key yang sama. SCM extra: {scm_keys - rsm_keys}, RSM extra: {rsm_keys - scm_keys}"
+    )
+    assert SIGNAL_CONFIRMATION_MATRIX.get("trending_bear", 0) >= 100, \
+        "SIGNAL_CONFIRMATION_MATRIX['trending_bear'] harus sangat besar (>=100) untuk blokir buy"
+
+# [BUG-FIX] Sebelumnya: SIGNAL_CONFIRMATION_MATRIX didefinisikan DUA KALI
+# (di atas APP_CODENAME dan di bawah _validate_constants). Definisi pertama
+# selalu ditimpa definisi kedua — kode yang membingungkan dan rawan bug kalau
+# suatu saat dua versi tidak sengaja dibuat berbeda. Definisi pertama dihapus,
+# hanya satu definisi yang tersisa (di bawah, langsung sebelum _validate_constants()).
 # Jumlah konfirmasi BUY berturut-turut yang dibutuhkan per regime
 SIGNAL_CONFIRMATION_MATRIX: dict = {
     "trending_bull":      5,  # Trending = butuh 5x konfirmasi (75 menit di 15m)
