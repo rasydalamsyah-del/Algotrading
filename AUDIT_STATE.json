@@ -234,6 +234,12 @@
         "api_server_get_dynamic_threshold_symbol_ticker_bukan_profile_name"
       ],
       "catatan": "Bug 1 (thresholds.py): docstring get_transition_action menyebut 'NO_POSITION' sebagai return value tapi tidak ada satupun entry di TRANSITION_ACTION_MATRIX yang mengandung NO_POSITION — matrix hanya punya HOLD/HOLD_TIGHTEN_SL/HOLD_RELAX_SL/EXIT. Docstring tidak akurat diperbaiki. Bug 2 (api_server.py): get_dynamic_threshold dipanggil dengan symbol.split('/')[0] ('BTC') sebagai profile_name — bukan nama profile yang valid. Selalu fallback ke 65.0, threshold di dashboard tidak akurat untuk semua koin. Fix: pakai latest.strategy_profile. Struktur file solid: _validate_all_thresholds() sudah sangat komprehensif (validasi cross-profile, bounds, R/R, RSI consistency). Cross-check: get_dynamic_threshold dan get_profile_thresholds dipakai di scorer.py, validator.py, commander.py, registry.py, main.py, api_server.py, learning/meta_learner.py, learning/coin_swap.py — semua signature cocok dan fallback 65.0 untuk unknown profile memadai."
+    },
+    "smoke_api.py": {
+      "status": "DONE",
+      "audit_level": "SERIUS",
+      "bug_fixed": [],
+      "catatan": "File bersih — 18 baris, tidak ada bug. Fungsi: start minimal FastAPI instance untuk smoke-test tanpa TradingBot. _bot_getter() return None → semua endpoint yang butuh bot() return HTTP 503 (by design, guard 'if b is None: raise HTTPException(503)' di api_server.py). Endpoint yang jalan tanpa bot: / (dashboard/index.html atau endpoint list) dan /health (return ok). Cross-check: create_app signature (bot_getter) -> FastAPI cocok dengan pemanggilan di smoke_api.py. Tidak dipanggil dari file manapun — dijalankan manual untuk testing. Tidak ada caller, tidak ada dependency lain."
     }
   },
   "file_belum_diaudit": {
@@ -272,10 +278,6 @@
     "telegram_bot.py": {
       "status": "PENDING",
       "ukuran": "56 fungsi"
-    },
-    "smoke_api.py": {
-      "status": "PENDING",
-      "ukuran": "1 fungsi"
     }
   },
   "catatan_penting": [
