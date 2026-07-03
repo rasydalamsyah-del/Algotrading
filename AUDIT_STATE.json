@@ -293,16 +293,24 @@
       "cross_file_check": "main.py (constructor + run_coin_swap_loop), api_server.py (get_swap_history), simulate_test.py (init only) — semua caller tetap kompatibel. database.py upsert_universe_override/get_active_universe_overrides/deactivate_universe_override signature cocok.",
       "test": "Syntax OK, Import OK, Functional PASS (read/write UNIVERSE_WATCHLIST key benar, key lama WATCHLIST tidak lagi salah match, _score_coin normal, init dgn config dict tidak crash)",
       "catatan": "Concurrency: tidak ada file-lock saat baca/tulis .env dari run_cycle() dan _triggered_swap() — kalau dua proses jalan bersamaan bisa race. Belum di-fix karena di luar scope bug fungsional utama; dicatat untuk audit main.py nanti (siapa yang panggil kapan)."
+    },
+    "learning/cross_learn.py": {
+      "status": "DONE",
+      "audit_level": "SERIUS",
+      "peran": "Cross-Bot Learning Reader — baca trades & signal_scores dari DB algotrader_test, normalisasi skala score, sediakan untuk analytics.py & meta_learner.py.",
+      "bug_fixed": [
+        "State bug: _cache/_cache_ts dideklarasikan (TTL 30 menit) tapi TIDAK PERNAH dipakai di get_peer_trades/get_peer_signal_scores/get_peer_regime_stats — setiap panggilan selalu buka koneksi baru & query ulang peer DB, padahal dalam satu compute_attribution() (analytics.py) method2 ini dipanggil berkali-kali dengan lookback_days sama. Berisiko lock contention karena peer DB aktif ditulis proses lain. Fix: cache per-key (key = method+params) dengan _cache_get/_cache_set/_is_cache_fresh yang benar2 dipakai di 3 method fetch.",
+        "Minor: get_peer_signal_scores pakai \"if thresh_raw:\" (truthy check) untuk threshold_used — nilai 0.0 (valid tapi falsy) lolos tanpa dinormalisasi. Fix: \"if thresh_raw is not None:\"."
+      ],
+      "cross_file_check": "analytics.py (compute_attribution: get_peer_trades+get_peer_signal_scores+get_peer_regime_stats dipanggil sekuensial per request — sekarang benar2 dapat manfaat cache), meta_learner.py (get_peer_regime_stats, get_peer_signal_scores, get_peer_trades), main.py & api_server.py (get_summary, tidak di-cache by design karena untuk status on-demand). Semua signature caller tetap kompatibel (return type tidak berubah).",
+      "test": "Syntax OK, Import OK, Functional PASS (cache benar2 aktif — hasil kedua tetap sama walau DB fisik dihapus; cache key spesifik per parameter/lookback_days; get_summary tidak terpengaruh)",
+      "catatan": "get_summary() sengaja TIDAK di-cache karena dipakai untuk status check on-demand (Telegram/API) yang perlu data terbaru, bukan data periodik seperti 3 method fetch lainnya."
     }
   },
   "file_belum_diaudit": {
     "intelligence/commander.py": {
       "status": "PENDING",
       "ukuran": "27 fungsi, 2 class"
-    },
-    "learning/cross_learn.py": {
-      "status": "PENDING",
-      "ukuran": "13 fungsi, 1 class"
     },
     "learning/meta_learner.py": {
       "status": "PENDING",
@@ -327,7 +335,6 @@
   "urutan_audit_disepakati": {
     "filosofi": "Audit dari dalam ke luar. File yang paling spesifik/independen dulu, orkestrator (main.py) terakhir.",
     "pending_urutan": [
-      "2. learning/cross_learn.py",
       "3. learning/meta_learner.py",
       "4. telegram_bot.py",
       "5. intelligence/commander.py"

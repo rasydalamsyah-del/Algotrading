@@ -103,8 +103,17 @@ class CrossLearnReader:
     def __init__(self):
         self._peer_db   = _get_peer_db_path()
         self._enabled   = _is_enabled()
-        self._cache:    Dict[str, Any] = {}
-        self._cache_ts: Optional[datetime] = None
+        # [BUG-FIX] _cache/_cache_ts dulu dideklarasikan (dengan TTL 30 menit)
+        # tapi TIDAK PERNAH dipakai di get_peer_trades/get_peer_signal_scores/
+        # get_peer_regime_stats/get_summary — semua method itu selalu buka
+        # koneksi sqlite baru dan query ulang peer DB setiap dipanggil, padahal
+        # dalam satu siklus compute_attribution() (analytics.py) method-method
+        # ini bisa terpanggil beberapa kali dengan lookback_days yang sama.
+        # Ini juga berisiko lock contention karena peer DB sedang aktif ditulis
+        # oleh proses algotrader_test lain.
+        # Sekarang: _cache jadi dict per-key (key = nama method + params) yang
+        # menyimpan (timestamp, value); _is_cache_fresh() menerima key spesifik.
+        self._cache:    Dict[str, Any] = {}   # key -> (timestamp, value)
         self._cache_ttl_s = 1800  # cache 30 menit
 
         log.info(
@@ -112,11 +121,20 @@ class CrossLearnReader:
             self._enabled, self._peer_db or "(tidak ada)",
         )
 
-    def _is_cache_fresh(self) -> bool:
-        if self._cache_ts is None:
+    def _is_cache_fresh(self, key: str) -> bool:
+        entry = self._cache.get(key)
+        if entry is None:
             return False
-        age = (_utcnow() - self._cache_ts).total_seconds()
+        ts, _ = entry
+        age = (_utcnow() - ts).total_seconds()
         return age < self._cache_ttl_s
+
+    def _cache_get(self, key: str) -> Any:
+        entry = self._cache.get(key)
+        return entry[1] if entry is not None else None
+
+    def _cache_set(self, key: str, value: Any) -> None:
+        self._cache[key] = (_utcnow(), value)
 
     def _open_peer_db(self) -> Optional[sqlite3.Connection]:
         if not self._peer_db or not os.path.exists(self._peer_db):
@@ -141,6 +159,12 @@ class CrossLearnReader:
         """
         if not self._enabled:
             return []
+
+        # [BUG-FIX] Pakai cache 30 menit yang sekarang benar-benar aktif —
+        # sebelumnya method ini selalu query ulang peer DB tiap dipanggil.
+        cache_key = f"trades:{lookback_days}:{profile or ''}"
+        if self._is_cache_fresh(cache_key):
+            return self._cache_get(cache_key)
 
         conn = self._open_peer_db()
         if conn is None:
@@ -188,6 +212,7 @@ class CrossLearnReader:
                 "CrossLearn: %d peer trades dimuat (lookback=%dd profile=%s)",
                 len(result), lookback_days, profile or "all",
             )
+            self._cache_set(cache_key, result)
             return result
 
         except Exception as e:
@@ -208,6 +233,12 @@ class CrossLearnReader:
         """
         if not self._enabled:
             return []
+
+        # [BUG-FIX] Sama seperti get_peer_trades — pakai cache 30 menit yang
+        # sekarang aktif, key mencakup semua parameter query.
+        cache_key = f"scores:{lookback_days}:{profile or ''}:{only_triggered}"
+        if self._is_cache_fresh(cache_key):
+            return self._cache_get(cache_key)
 
         conn = self._open_peer_db()
         if conn is None:
@@ -267,8 +298,11 @@ class CrossLearnReader:
                             pass
 
                 # Normalisasi threshold_used juga
+                # [BUG-FIX] Sebelumnya "if thresh_raw:" — threshold_used=0.0
+                # (nilai valid tapi falsy) akan ke-skip dan raw 0.0 lolos
+                # tanpa dinormalisasi. Sekarang cek eksplisit "is not None".
                 thresh_raw = d.get("threshold_used")
-                if thresh_raw:
+                if thresh_raw is not None:
                     prod_thresh = _PROD_THRESHOLDS.get(prof, 70.0)
                     d["threshold_used"] = prod_thresh
 
@@ -285,6 +319,7 @@ class CrossLearnReader:
                 "CrossLearn: %d peer signal_scores dimuat (lookback=%dd profile=%s triggered=%s)",
                 len(result), lookback_days, profile or "all", only_triggered,
             )
+            self._cache_set(cache_key, result)
             return result
 
         except Exception as e:
@@ -303,6 +338,11 @@ class CrossLearnReader:
         """
         if not self._enabled:
             return {}
+
+        # [BUG-FIX] Cache 30 menit yang sekarang aktif.
+        cache_key = f"regime:{lookback_days}"
+        if self._is_cache_fresh(cache_key):
+            return self._cache_get(cache_key)
 
         conn = self._open_peer_db()
         if conn is None:
@@ -341,6 +381,7 @@ class CrossLearnReader:
                 "CrossLearn: %d regime stats dari peer (lookback=%dd)",
                 len(result), lookback_days,
             )
+            self._cache_set(cache_key, result)
             return result
 
         except Exception as e:
