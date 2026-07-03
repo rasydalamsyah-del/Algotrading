@@ -263,16 +263,20 @@
         "fetch_ticker_bypass_exchange_wrapper_via_private_ex_attribute"
       ],
       "catatan": "Bug PALING SERIUS di file ini: adopt_position() pakai raw sqlite3.connect() ke path ABSOLUT hardcoded '/root/algotrader/data/trading_bot.db' -- parameter db_manager yang di-pass sama sekali tidak dipakai (dead parameter). Path ini tidak cocok dgn konvensi seluruh codebase lain (main.py, simulate_test.py, learning/coin_swap.py semua pakai 'sqlite+aiosqlite:///./data/trading_bot.db' relatif, via DATABASE_URL, lewat SQLAlchemy async ORM). Proyek jalan di Termux/Linux, path /root/ nyaris pasti salah -> insert selalu gagal diam-diam (caught except -> log.error) atau nulis ke file DB orphan terpisah. Ditambah 2 bug data yang FATAL utk risk management: (1) side='buy' padahal SELURUH logika main.py (trailing stop, cek SL/TP baris 1807-2934) HANYA membandingkan pos.side == 'long'/'short' -- posisi hasil adopt tidak akan PERNAH kena stop-loss/take-profit otomatis. (2) strategy_profile hardcode 'scalp_volatile' utk SEMUA symbol, entry_regime hardcode 'undefined' -- padahal analyze_position() sudah menghitung profile & regime asli tapi tidak pernah dikembalikan/dipakai caller. entry_time juga string (strftime) bukan objek datetime, padahal Position.entry_time kolom DateTime dan semua call site upsert_position lain (main.py) kirim objek datetime naive. Fix: adopt_position sekarang pakai db_manager.upsert_position(symbol, {...}) -- jalur sama dgn cara bot buka posisi normal, side='long', strategy_profile & entry_regime asli (dikembalikan dari analyze_position yg diperluas return tuple-nya), entry_time = datetime.now(timezone.utc).replace(tzinfo=None). Bug tambahan: fetch_binance_spot_positions() akses exchange._ex.fetch_ticker() langsung (private attribute raw ccxt), satu-satunya tempat di seluruh repo yg bypass wrapper publik ExchangeConnector.fetch_ticker() (throttling, retry, latency log) -- fix ganti ke exchange.fetch_ticker() (drop-in, return format sama). Cross-check: analyze_position() dan adopt_position() murni internal (tidak dipanggil dari file lain, dikonfirmasi grep), aman diubah signature-nya. run_position_sync(exchange, db_manager) -> Dict, satu-satunya fungsi yg dipanggil eksternal (main.py:3210), signature TIDAK berubah, caller hanya baca dict result -- aman. Test fungsional: adopt_position via mock db_manager memverifikasi semua field benar (side=long, profile asli, regime asli, entry_time objek datetime naive); fetch_binance_spot_positions via mock exchange TANPA attribute _ex sama sekali berhasil jalan (sebelumnya akan AttributeError)."
+    },
+    "intelligence/trade_guardian.py": {
+      "status": "DONE",
+      "audit_level": "SERIUS",
+      "bug_fixed": [
+        "docstring_overclaim_fase_b_regime_aware_duration_tidak_ada_implementasi"
+      ],
+      "catatan": "File relatif bersih secara logika internal — RSI (Wilder), EMA, supertrend adaptif, profit-zone trailing (5 zona), composite exit score semua diverifikasi benar via test fungsional (RSI range 0-100, EMA None saat data kurang, profit zone monotonic increasing + guard no-downgrade SL, check_atg end-to-end dgn downtrend kuat berhasil trigger exit, graceful degrade saat df=None, guard entry_price<=0). MarketRegime enum (core/models.py) cocok persis dgn key di _W dict (_exit_score): trending_bull/trending_bear/ranging/volatile_expansion/undefined -- tidak ada silent fallback ke 'undefined' yg tidak disengaja. Fix: docstring lama overclaim 'Fase B: Regime-Aware Duration + Pre-Exit Warning (hooks ready)' -- 'Regime-Aware Duration' TIDAK punya implementasi/field sama sekali (bukan bug logika, murni dokumentasi tidak akurat, dikoreksi jujur). TEMUAN CROSS-FILE (2, keduanya di main.py, DIDOKUMENTASIKAN untuk audit main.py nanti, TIDAK diperbaiki sekarang sesuai strategi main.py di-audit terakhir): (1) ATGResult.warning_level dihitung benar (0-4 dari 4 sinyal teknikal) tapi TIDAK PERNAH dibaca main.py -- fitur pre-exit warning belum davkan wired ke notifikasi apapun. (2) main.py baris ~1946 memanggil notify_sl_tp_hit(trigger='take_profit', ...) HARDCODE untuk semua ATG exit, padahal ATG bisa exit saat posisi RUGI (profit_pct negatif, skor exit tinggi krn sinyal teknikal memburuk) -- user akan terima notifikasi salah/menyesatkan 'TAKE PROFIT HIT' padahal PnL negatif. Cross-check caller: check_atg() dipanggil dari main.py:1920 dan simulate_test.py:620, kedua caller pakai keyword args yg cocok persis dgn signature saat ini (entry_price, current_price, highest_price, current_sl, df, symbol, regime) -- tidak ada mismatch. get_profit_zone_sl() murni internal (hanya dipanggil dari check_atg sendiri). effective_confirmation_tf (dipakai main.py utk tentukan timeframe candle ATG) dikonfirmasi ada di profiles/base_profile.py:149."
     }
   },
   "file_belum_diaudit": {
     "intelligence/commander.py": {
       "status": "PENDING",
       "ukuran": "27 fungsi, 2 class"
-    },
-    "intelligence/trade_guardian.py": {
-      "status": "PENDING",
-      "ukuran": "6 fungsi, 1 class"
     },
     "learning/analytics.py": {
       "status": "PENDING",
@@ -309,13 +313,12 @@
   "urutan_audit_disepakati": {
     "filosofi": "Audit dari dalam ke luar. File yang paling spesifik/independen dulu, orkestrator (main.py) terakhir.",
     "pending_urutan": [
-      "1. intelligence/trade_guardian.py",
-      "2. learning/analytics.py",
-      "3. learning/coin_swap.py",
-      "4. learning/cross_learn.py",
-      "5. learning/meta_learner.py",
-      "6. telegram_bot.py",
-      "7. intelligence/commander.py"
+      "1. learning/analytics.py",
+      "2. learning/coin_swap.py",
+      "3. learning/cross_learn.py",
+      "4. learning/meta_learner.py",
+      "5. telegram_bot.py",
+      "6. intelligence/commander.py"
     ],
     "alasan_main_terakhir": "main.py adalah orkestrator yang memanggil semua modul. Kalau diaudit duluan, banyak temuan akan berupa 'seharusnya ada fungsi X di modul Y' yang belum bisa diverifikasi karena modul Y belum diaudit. Dengan main.py terakhir, semua modul sudah dalam kondisi yang diketahui dan verified."
   }

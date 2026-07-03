@@ -2,8 +2,22 @@
 intelligence/trade_guardian.py
 AlgoTrader Pro v7.0 — Adaptive Trade Guardian
 
-Fase A : Composite Exit Score + Profit Zone Trailing
-Fase B : Regime-Aware Duration + Pre-Exit Warning (hooks ready)
+Fase A : Composite Exit Score + Profit Zone Trailing (aktif, dipakai main.py)
+Fase B : Pre-Exit Warning — ATGResult.warning_level DIHITUNG (0-4, dari 4 sinyal
+         teknikal) tapi TIDAK DIBACA oleh caller manapun (dicek: main.py &
+         simulate_test.py hanya baca new_sl/should_exit/exit_reason). Belum ada
+         notifikasi pre-exit warning yang jalan. "Regime-Aware Duration" yang
+         sebelumnya disebut di sini TIDAK punya implementasi/field sama sekali
+         (tidak ada tracking durasi posisi per regime) — docstring lama
+         overclaim, dikoreksi supaya jujur (bukan bug logika, cuma dokumentasi
+         yang tidak akurat).
+         [CATATAN UNTUK AUDIT main.py]: pertimbangkan wire warning_level ke
+         notifikasi pre-exit warning saat >=3, dan cek bug terkait: panggilan
+         notify_sl_tp_hit(trigger="take_profit", ...) di ATG exit block main.py
+         (~baris 1946) HARDCODE trigger="take_profit" walau ATG bisa exit saat
+         posisi rugi (profit_pct negatif tapi skor exit tetap >= threshold
+         karena sinyal teknikal). Ini akan menampilkan notif "TAKE PROFIT HIT"
+         yang salah/menyesatkan saat sebenarnya exit terjadi karena kerugian.
 
 Dipanggil setiap siklus run_sl_tp_monitor.
 Self-contained — tidak depend ke intelligence pipeline.
