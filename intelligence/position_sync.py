@@ -35,8 +35,15 @@ async def fetch_binance_spot_positions(exchange) -> List[Dict]:
 
             symbol = f"{coin}/USDT"
             # Estimasi nilai USDT
+            # [BUG-FIX] Sebelumnya: exchange._ex.fetch_ticker(symbol) — akses
+            # langsung ke raw ccxt object (private attribute _ex), bypass
+            # wrapper publik ExchangeConnector.fetch_ticker() yang menyediakan
+            # throttling, retry/backoff, dan latency logging. Ini satu-satunya
+            # tempat di seluruh repo yang bypass wrapper (dicek via grep).
+            # Sekarang: pakai exchange.fetch_ticker(symbol) — return format
+            # sama persis (ccxt ticker dict), tapi dapat proteksi rate-limit.
             try:
-                ticker = await exchange._ex.fetch_ticker(symbol)
+                ticker = await exchange.fetch_ticker(symbol)
                 price  = ticker.get("last") or ticker.get("close") or 0.0
                 usdt_value = amount * price
             except Exception:
@@ -93,34 +100,51 @@ async def analyze_position(
     price:    float,
     exchange,
     db_manager,
-) -> Tuple[bool, float, Optional[float], Optional[float], str]:
+) -> Tuple[bool, float, Optional[float], Optional[float], str, str, str]:
     """
     Analisis Gate3-5 untuk posisi yang sudah terbeli.
-    Return: (layak_dikawal, score, sl, tp, alasan)
+    Return: (layak_dikawal, score, sl, tp, alasan, regime_value, profile_name)
+
+    # [BUG-FIX] Sebelumnya return tuple tidak menyertakan regime dan
+    # profile_name hasil analisis nyata — caller (run_position_sync) terpaksa
+    # hardcode regime="undefined" saat memanggil adopt_position, dan
+    # adopt_position sendiri hardcode strategy_profile="scalp_volatile"
+    # untuk SEMUA posisi apapun hasil klasifikasi sebenarnya. Sekarang
+    # regime_value dan profile_name asli dikembalikan agar tersimpan benar
+    # di kolom entry_regime & strategy_profile saat posisi diadopsi.
     """
     from intelligence.observer  import observe
     from intelligence.scorer    import score_signal
     from intelligence.classifier import classify_regime
     from profiles.registry      import get_coin_profile
 
+    profile_name = "unknown"
     try:
         # ── Gate 3: Fetch OHLCV & hitung indikator ──
         bars = await exchange.fetch_ohlcv(symbol, timeframe="15m", limit=200)
         if not bars or len(bars) < MIN_CANDLE_BARS:
-            return False, 0.0, None, None, f"Data candle tidak cukup ({len(bars) if bars else 0} bars)"
+            return (False, 0.0, None, None,
+                    f"Data candle tidak cukup ({len(bars) if bars else 0} bars)",
+                    "unknown", profile_name)
 
         import pandas as pd
         df = pd.DataFrame(bars, columns=["timestamp","open","high","low","close","volume"])
         df["timestamp"] = pd.to_datetime(df["timestamp"], unit="ms")
 
         # ── Gate 4: Observe & Score ──
-        profile     = get_coin_profile(symbol)
-        observation = await observe(symbol, df, profile)
+        profile      = get_coin_profile(symbol)
+        profile_name = (
+            profile.profile.value if hasattr(profile.profile, "value")
+            else str(profile.profile)
+        )
+        observation  = await observe(symbol, df, profile)
 
         if not observation.primary_tf_valid:
-            return False, 0.0, None, None, "Indikator primary TF tidak valid"
+            return (False, 0.0, None, None, "Indikator primary TF tidak valid",
+                    "unknown", profile_name)
 
         regime, regime_conf = classify_regime(symbol, observation.primary_tf_indicators)
+        regime_value = regime.value if hasattr(regime, "value") else str(regime)
         scored = score_signal(observation, regime, regime_conf, db_manager)
 
         score = scored.total_score
@@ -137,63 +161,87 @@ async def analyze_position(
         if score >= MIN_ADOPT_SCORE:
             alasan = (
                 f"Score {score:.1f} >= {MIN_ADOPT_SCORE} | "
-                f"regime={regime.value} | conf={regime_conf:.2f}"
+                f"regime={regime_value} | conf={regime_conf:.2f}"
             )
-            return True, score, sl, tp, alasan
+            return True, score, sl, tp, alasan, regime_value, profile_name
         else:
             alasan = (
                 f"Score {score:.1f} < {MIN_ADOPT_SCORE} (terlalu lemah) | "
-                f"regime={regime.value}"
+                f"regime={regime_value}"
             )
-            return False, score, sl, tp, alasan
+            return False, score, sl, tp, alasan, regime_value, profile_name
 
     except Exception as e:
         log.error("analyze_position error [%s]: %s", symbol, e)
-        return False, 0.0, None, None, f"Error analisis: {e}"
+        return False, 0.0, None, None, f"Error analisis: {e}", "unknown", profile_name
 
 
 async def adopt_position(
-    symbol:   str,
-    amount:   float,
-    price:    float,
-    score:    float,
-    sl:       float,
-    tp:       float,
-    regime:   str,
+    symbol:       str,
+    amount:       float,
+    price:        float,
+    score:        float,
+    sl:           float,
+    tp:           float,
+    regime:       str,
+    profile_name: str,
     db_manager,
 ) -> bool:
     """
     Inject posisi ke DB bot agar Trade Guardian bisa mengawal.
+
+    # [BUG-FIX] Sebelumnya fungsi ini melakukan raw sqlite3.connect() ke path
+    # ABSOLUT hardcoded "/root/algotrader/data/trading_bot.db" — sama sekali
+    # tidak memakai parameter db_manager yang sudah di-pass (dead parameter).
+    # Path ini TIDAK cocok dengan konvensi path DB yang dipakai di seluruh
+    # codebase lain (main.py, simulate_test.py, learning/coin_swap.py semua
+    # pakai "sqlite+aiosqlite:///./data/trading_bot.db", relatif & lewat
+    # DATABASE_URL, via SQLAlchemy async ORM). Proyek ini jalan di
+    # Termux/Linux (bukan selalu /root) — path lama nyaris pasti salah,
+    # membuat sqlite3.connect() diam-diam bikin file DB baru yang terpisah/
+    # orphan, atau gagal buka (caught oleh except -> log.error saja).
+    # Juga ditemukan 2 bug tambahan di data yang ditulis:
+    #   - side="buy" -- SALAH. Konvensi Position.side di seluruh main.py
+    #     (trailing stop, cek SL/TP) HANYA membandingkan == "long" / "short".
+    #     Posisi dgn side="buy" tidak akan pernah kena SL/TP oleh logika
+    #     normal -> risk management posisi hasil adopt jadi tidak aktif.
+    #   - strategy_profile="scalp_volatile" hardcoded utk SEMUA symbol,
+    #     padahal analyze_position sudah menghitung profile asli via
+    #     get_coin_profile(). entry_regime juga selalu "undefined" (caller
+    #     tidak pernah mengirim regime asli — lihat fix di analyze_position).
+    #   - entry_time berupa STRING (strftime), padahal Position.entry_time
+    #     adalah kolom DateTime dan seluruh call site upsert_position lain
+    #     (main.py) selalu mengirim objek datetime naive
+    #     (datetime.now(timezone.utc).replace(tzinfo=None)).
+    # Sekarang: pakai db_manager.upsert_position(symbol, {...}) — jalur yang
+    # sama dgn cara bot membuka posisi normal, otomatis pakai DB/engine yang
+    # benar (async, sesuai DATABASE_URL), side="long", strategy_profile &
+    # entry_regime asli, entry_time sebagai objek datetime.
     """
     try:
-        entry_time = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+        entry_time = datetime.now(timezone.utc).replace(tzinfo=None)
 
-        import sqlite3
-        conn = sqlite3.connect("/root/algotrader/data/trading_bot.db")
-        cur  = conn.cursor()
-
-        cur.execute("""
-            INSERT INTO positions (
-                symbol, entry_time, entry_price, current_price,
-                amount, side, is_open, is_closing,
-                stop_loss_price, take_profit_price,
-                strategy_name, strategy_profile,
-                entry_score, entry_regime, highest_price
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """, (
-            symbol, entry_time, price, price,
-            amount, "buy", True, False,
-            sl, tp,
-            "manual_adopt", "scalp_volatile",
-            score, regime, price,
-        ))
-
-        conn.commit()
-        conn.close()
+        await db_manager.upsert_position(symbol, {
+            "entry_time":        entry_time,
+            "entry_price":       round(price, 8),
+            "current_price":     round(price, 8),
+            "amount":            round(amount, 8),
+            "side":              "long",
+            "is_open":           True,
+            "is_closing":        False,
+            "stop_loss_price":   sl,
+            "take_profit_price": tp,
+            "strategy_name":     "manual_adopt",
+            "strategy_profile":  profile_name,
+            "entry_score":       score,
+            "entry_regime":      regime,
+            "highest_price":     price,
+        })
 
         log.info(
-            "✅ ADOPT %s | amount=%.4f | entry=%.6f | SL=%.6f | TP=%.6f | score=%.1f",
-            symbol, amount, price, sl, tp, score,
+            "✅ ADOPT %s | amount=%.4f | entry=%.6f | SL=%.6f | TP=%.6f | "
+            "score=%.1f | profile=%s | regime=%s",
+            symbol, amount, price, sl, tp, score, profile_name, regime,
         )
         return True
 
@@ -229,14 +277,14 @@ async def run_position_sync(exchange, db_manager) -> Dict:
 
             log.info("🔍 Analisis posisi tidak tertracking: %s", symbol)
 
-            layak, score, sl, tp, alasan = await analyze_position(
+            layak, score, sl, tp, alasan, regime, profile_name = await analyze_position(
                 symbol, amount, price, exchange, db_manager
             )
 
             if layak:
                 adopted = await adopt_position(
                     symbol, amount, price, score,
-                    sl, tp, "undefined", db_manager,
+                    sl, tp, regime, profile_name, db_manager,
                 )
                 if adopted:
                     result["adopted"] += 1
