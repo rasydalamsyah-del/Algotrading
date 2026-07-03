@@ -575,9 +575,15 @@ def revert_parameter_override(
         f"{parameter_name} kembali ke default."
     )
 
-def _load_overrides_from_db(symbol: str, db_manager) -> None:
+async def _load_overrides_from_db_async(symbol: str, db_manager) -> None:
+    """
+    # [TAMBAHAN] Bagian async sebenarnya dari _load_overrides_from_db.
+    # Dipisah dari fungsi sync di bawah supaya bisa di-await langsung
+    # (dipanggil dari konteks async seperti startup main.py) ATAU
+    # di-fire-and-forget (dipanggil lazy dari get_coin_profile yang sync).
+    """
     try:
-        history = db_manager.get_parameter_history(symbol=symbol, limit=100)
+        history = await db_manager.get_parameter_history(symbol=symbol, limit=100)
         if not history:
             return
 
@@ -601,13 +607,47 @@ def _load_overrides_from_db(symbol: str, db_manager) -> None:
     except Exception as exc:
         log.warning("Gagal load overrides dari DB untuk %s: %s", symbol, exc)
 
-def load_all_overrides_from_db(db_manager) -> int:
+
+def _load_overrides_from_db(symbol: str, db_manager) -> None:
+    """
+    # [BUG-FIX] Sebelumnya: db_manager.get_parameter_history() dipanggil
+    # secara sync tanpa await, padahal method itu async def di database.py.
+    # Akibatnya coroutine yang dihasilkan tidak pernah dieksekusi -> variabel
+    # `history` berisi objek coroutine (truthy, jadi lolos `if not history`),
+    # lalu `sorted(history, ...)` melempar TypeError (coroutine tidak
+    # iterable) -> masuk except -> hanya log.warning diam-diam. Efeknya:
+    # parameter override dari DB TIDAK PERNAH ter-load ke _ACTIVE_OVERRIDES,
+    # untuk SEMUA symbol, setiap kali get_coin_profile() dipanggil.
+    # Sekarang: kerja async dipindah ke _load_overrides_from_db_async,
+    # dipanggil lewat _fire_and_forget_db (fungsi ini sendiri tetap sync
+    # karena caller-nya, get_coin_profile, adalah fungsi sync).
+    """
+    _fire_and_forget_db(_load_overrides_from_db_async(symbol, db_manager))
+
+async def load_all_overrides_from_db(db_manager) -> int:
+    """
+    # [BUG-FIX] Sebelumnya: fungsi sync yang memanggil
+    # db_manager.get_parameter_history() (async def di database.py) tanpa
+    # await -> coroutine tidak pernah dieksekusi -> overrides tidak pernah
+    # ter-load, silently masuk except tiap symbol. SELAIN itu fungsi ini
+    # ternyata tidak dipanggil dari mana pun di seluruh codebase (dead code)
+    # — dicek dengan grep menyeluruh ke semua file .py.
+    # Sekarang: dijadikan `async def` yang benar (harus di-await oleh caller).
+    #
+    # [CATATAN UNTUK AUDIT main.py — SENTUHAN_PERLU_REAUDIT]:
+    # main.py sebaiknya memanggil `await load_all_overrides_from_db(db_manager)`
+    # SEKALI saat startup (setelah db_manager siap dan sebelum trading loop
+    # utama berjalan), supaya parameter override dari sesi sebelumnya aktif
+    # sejak awal — bukan menunggu lazy-load per simbol lewat
+    # _load_overrides_from_db yang sifatnya fire-and-forget (ada delay/miss
+    # di pemanggilan pertama). Verifikasi ini saat re-audit serius main.py.
+    """
     count = 0
     all_symbols = list(_COIN_PROFILE_MAP.keys())
 
     for base in all_symbols:
         try:
-            history = db_manager.get_parameter_history(symbol=base, limit=100)
+            history = await db_manager.get_parameter_history(symbol=base, limit=100)
             if not history:
                 continue
 

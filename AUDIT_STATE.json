@@ -1,7 +1,7 @@
 {
   "repo": "https://github.com/rasydalamsyah-del/algotrader",
-  "last_commit_saat_ini": "c363949",
-  "sesi_terakhir_update": "2026-07-01",
+  "last_commit_saat_ini": "PENDING_PUSH",
+  "sesi_terakhir_update": "2026-07-02",
   "file_sudah_diaudit_dan_fix": {
     "api_server.py": {
       "status": "DONE",
@@ -240,6 +240,16 @@
       "audit_level": "SERIUS",
       "bug_fixed": [],
       "catatan": "File bersih — 18 baris, tidak ada bug. Fungsi: start minimal FastAPI instance untuk smoke-test tanpa TradingBot. _bot_getter() return None → semua endpoint yang butuh bot() return HTTP 503 (by design, guard 'if b is None: raise HTTPException(503)' di api_server.py). Endpoint yang jalan tanpa bot: / (dashboard/index.html atau endpoint list) dan /health (return ok). Cross-check: create_app signature (bot_getter) -> FastAPI cocok dengan pemanggilan di smoke_api.py. Tidak dipanggil dari file manapun — dijalankan manual untuk testing. Tidak ada caller, tidak ada dependency lain."
+    },
+    "profiles/registry.py": {
+      "status": "DONE",
+      "audit_level": "SERIUS",
+      "bug_fixed": [
+        "async_get_parameter_history_dipanggil_sync_di__load_overrides_from_db",
+        "async_get_parameter_history_dipanggil_sync_di_load_all_overrides_from_db",
+        "load_all_overrides_from_db_dead_code_tidak_pernah_dipanggil"
+      ],
+      "catatan": "Bug utama: get_parameter_history() di database.py adalah async def, tapi _load_overrides_from_db() dan load_all_overrides_from_db() memanggilnya secara sync tanpa await. Akibatnya coroutine tidak pernah dieksekusi -> variabel history berisi objek coroutine (truthy) -> sorted(history,...) TypeError -> masuk except -> log.warning diam-diam. Parameter override dari DB TIDAK PERNAH ter-load untuk SEMUA symbol, setiap kali get_coin_profile() dipanggil. Fix _load_overrides_from_db: kerja async dipecah ke fungsi baru _load_overrides_from_db_async, dipanggil lewat _fire_and_forget_db (fungsi sync aslinya dipertahankan sync karena caller-nya get_coin_profile juga sync). Fix load_all_overrides_from_db: dijadikan async def yang benar (pakai await). Temuan tambahan: load_all_overrides_from_db ternyata dead code -- di-grep ke seluruh repo, tidak ada satupun caller. Ditambahkan CATATAN UNTUK AUDIT main.py: main.py (SENTUHAN_PERLU_REAUDIT, dijadwalkan terakhir) sebaiknya memanggil `await load_all_overrides_from_db(db_manager)` sekali saat startup, sebelum trading loop utama, supaya override dari sesi sebelumnya aktif sejak awal. Sisi tulis (set_profile_override, clear_profile_override, revert_parameter_override) sudah diperbaiki di sesi sebelumnya dengan pola _fire_and_forget_db yang sama -- diverifikasi masih benar dan konsisten di sesi ini. Cross-check: semua caller get_coin_profile (main.py x5, telegram_bot.py x2, api_server.py x2, strategy.py, simulate_test.py x7, learning/coin_swap.py, intelligence/position_sync.py, internal registry.py) memanggil secara sync tanpa await -- signature get_coin_profile TIDAK berubah, semua caller tetap kompatibel. _COIN_PROFILE_MAP['BTC'] dikonfirmasi utuh (sempat hilang di sesi sebelumnya akibat str_replace, sudah dikembalikan). Test fungsional: load_all_overrides_from_db (awaited langsung) berhasil populate _ACTIVE_OVERRIDES dan _MANUAL_PROFILE_OVERRIDES dari mock DB. _load_overrides_from_db fire-and-forget berhasil populate state baik dengan maupun tanpa running event loop (tanpa loop: coroutine ditutup rapi, tidak crash, tidak leak, hanya log.debug)."
     }
   },
   "file_belum_diaudit": {
@@ -271,10 +281,6 @@
       "status": "PENDING",
       "ukuran": "38 fungsi, 1 class"
     },
-    "profiles/registry.py": {
-      "status": "PENDING",
-      "ukuran": "19 fungsi"
-    },
     "telegram_bot.py": {
       "status": "PENDING",
       "ukuran": "56 fungsi"
@@ -294,19 +300,14 @@
   "urutan_audit_disepakati": {
     "filosofi": "Audit dari dalam ke luar. File yang paling spesifik/independen dulu, orkestrator (main.py) terakhir.",
     "pending_urutan": [
-      "1. notifications.py",
-      "2. smoke_api.py",
-      "3. intelligence/position_sync.py",
-      "4. intelligence/trade_guardian.py",
-      "5. profiles/thresholds.py",
-      "6. profiles/registry.py",
-      "7. learning/analytics.py",
-      "8. learning/coin_swap.py",
-      "9. learning/cross_learn.py",
-      "10. learning/meta_learner.py",
-      "11. telegram_bot.py",
-      "12. intelligence/commander.py",
-      "13. main.py (RE-AUDIT SERIUS — terakhir)"
+      "1. intelligence/position_sync.py",
+      "2. intelligence/trade_guardian.py",
+      "3. learning/analytics.py",
+      "4. learning/coin_swap.py",
+      "5. learning/cross_learn.py",
+      "6. learning/meta_learner.py",
+      "7. telegram_bot.py",
+      "8. intelligence/commander.py"
     ],
     "alasan_main_terakhir": "main.py adalah orkestrator yang memanggil semua modul. Kalau diaudit duluan, banyak temuan akan berupa 'seharusnya ada fungsi X di modul Y' yang belum bisa diverifikasi karena modul Y belum diaudit. Dengan main.py terakhir, semua modul sudah dalam kondisi yang diketahui dan verified."
   }
