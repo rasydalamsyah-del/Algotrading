@@ -589,6 +589,17 @@ async def _diagnosa_direct() -> None:
 
     _TF_FALLBACK = {"1d": ["4h", "1h"], "4h": ["1h"], "1h": ["15m"], "15m": []}
 
+    # [BUG-FIX] Sebelumnya `exchange` hanya di-assign DI DALAM try block
+    # (setelah import ccxt & konstruksi ccxt.binance(...)). Kalau exception
+    # terjadi SEBELUM assignment itu (mis. ccxt belum terinstall, atau
+    # ccxt.binance(...) sendiri gagal karena kredensial/konfigurasi), variabel
+    # `exchange` tidak pernah terikat — lalu blok `finally` di bawah yang
+    # mengecek `if exchange is not None:` akan melempar NameError baru,
+    # menutupi pesan error asli dan berpotensi membuat exception itu
+    # menjalar keluar dari fungsi (tidak tertangkap oleh except di atasnya).
+    # Sekarang: inisialisasi exchange=None di luar try supaya selalu terikat.
+    exchange = None
+
     try:
         import ccxt.async_support as ccxt
         import pandas as pd
@@ -600,7 +611,10 @@ async def _diagnosa_direct() -> None:
         })
         exchange.set_sandbox_mode(is_testnet)
 
-        universe = [s.strip() for s in os.getenv("UNIVERSE_WATCHLIST", os.getenv("UNIVERSE_WATCHLIST", "BTC/USDT,ETH/USDT")).split(",")]
+        # [CLEANUP] Sebelumnya os.getenv("UNIVERSE_WATCHLIST", os.getenv("UNIVERSE_WATCHLIST", ...))
+        # — panggilan os.getenv bersarang dengan key yang sama persis, tidak
+        # berefek apa pun selain membingungkan pembaca. Disederhanakan.
+        universe = [s.strip() for s in os.getenv("UNIVERSE_WATCHLIST", "BTC/USDT,ETH/USDT").split(",")]
         results: List[str] = []
 
         for symbol in universe:
@@ -896,7 +910,14 @@ async def cmd_run() -> None:
         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
     )
     await asyncio.sleep(4)
-    data = await api_get("/health")
+    # [BUG-FIX] Sebelumnya api_get("/health") memanggil BOT_API + "/health"
+    # = ".../api/health" — padahal api_server.py cuma mendaftarkan "/health"
+    # di ROOT (tanpa prefix /api), bukan "/api/health". Akibatnya panggilan
+    # ini SELALU gagal (404/None) walau bot berhasil start, sehingga /run
+    # selalu menampilkan pesan "API belum merespons" meski sebenarnya sudah.
+    # Sekarang: pakai endpoint "/status" yang memang ada di bawah /api/ dan
+    # sudah dipakai sukses di cmd_status(), sebagai indikator API sudah hidup.
+    data = await api_get("/status")
     if data:
         await tg_send("✅ *Bot berhasil dijalankan!*\nGunakan /status untuk cek kondisi.")
     else:
@@ -1183,24 +1204,38 @@ async def cmd_suggestions() -> None:
 
 async def cmd_approve_suggestion(suggestion_id: str) -> None:
     data = await api_post(f"/meta_learner/approve/{suggestion_id}")
-    if data and data.get("status") == "approved":
+    # [BUG-FIX] api_server.py /api/meta_learner/approve/{id} SELALU
+    # mengembalikan "status": "approved" pada body 200 OK-nya, terlepas dari
+    # apakah suggestion beneran berhasil di-apply atau tidak (mis. ditolak
+    # guardrail: cooldown 1 jam, delta tidak safe, dsb). Hasil SEBENARNYA ada
+    # di field "applied" (bool) + "message". Sebelumnya kode ini cek
+    # `data.get("status") == "approved"` yang SELALU True, jadi Telegram
+    # selalu menampilkan "✅ berhasil di-approve!" walau sebenarnya gagal.
+    # api_post() sendiri sudah return None untuk HTTP non-200, jadi cabang
+    # "detail" di bawah tidak pernah tercapai — diganti pakai "message".
+    if data and data.get("applied"):
         await tg_send(
             f"✅ *Suggestion #{suggestion_id} di-approve!*\n"
             f"Parameter akan diperbarui. Pantau performa dalam 24 jam ke depan."
         )
     elif data:
-        msg = data.get("detail") or data.get("message") or "Unknown response"
+        msg = data.get("message") or "Ditolak guardrail atau alasan lain."
         await tg_send(f"❌ Approve gagal: `{msg[:200]}`")
     else:
         await tg_send(f"❌ API tidak merespons. Pastikan bot berjalan.")
 
 async def cmd_reject_suggestion(suggestion_id: str) -> None:
     data = await api_post(f"/meta_learner/reject/{suggestion_id}")
-    if data and data.get("status") == "rejected":
+    # [BUG-FIX] Sama seperti cmd_approve_suggestion: "status" di response
+    # SELALU "rejected", hasil sebenarnya ada di field "rejected" (bool).
+    if data and data.get("rejected"):
         await tg_send(
             f"🚫 *Suggestion #{suggestion_id} di-reject.*\n"
             f"Meta-learner tidak akan membuat suggestion yang sama dalam waktu dekat."
         )
+    elif data:
+        msg = data.get("message") or "Unknown reason."
+        await tg_send(f"❌ Reject gagal: `{msg[:200]}`")
     else:
         await tg_send(f"❌ Reject gagal atau API tidak merespons.")
 
@@ -1727,6 +1762,8 @@ async def cmd_setconfig() -> None:
         msg += "universe_watchlist - daftar koin pantauan (pisah koma)\n"
         msg += "initial_capital - modal awal\n"
         msg += "testnet - true atau false\n"
+        msg += "rsi_min / rsi_max - batas RSI global\n"
+        msg += "lookback_candles - jumlah candle historis diambil\n"
         await tg_send(msg)
         return
     key = parts[1].strip()

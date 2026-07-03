@@ -1761,6 +1761,15 @@ def create_app(bot_getter) -> FastAPI:
     async def update_config(payload: dict, _: str = Depends(verify_api_key)):
         b = bot()
         try:
+            # [BUG-FIX cross-file, ditemukan saat audit telegram_bot.py]
+            # rsi_min/rsi_max/lookback_candles adalah key config GLOBAL yang
+            # nyata dipakai di main.py (self.config["rsi_min"], dst) dan
+            # sudah divalidasi+dikonversi tipe dengan benar oleh
+            # telegram_bot.py cmd_setconfig() (masuk allowed_int di sana) —
+            # tapi hilang dari whitelist di bawah, sehingga /setconfig
+            # rsi_min|rsi_max|lookback_candles selalu gagal dengan pesan
+            # "Tidak ada field valid untuk diupdate" walau sudah divalidasi
+            # benar di sisi Telegram.
             allowed = [
                 "universe_watchlist","max_open_positions","max_drawdown_pct",
                 "risk_per_trade_pct","daily_loss_limit_pct","max_position_size_pct",
@@ -1769,6 +1778,7 @@ def create_app(bot_getter) -> FastAPI:
                 "telegram_bot_token","telegram_chat_id","exchange_id",
                 "api_key","api_secret","api_passphrase","testnet","initial_capital",
                 "min_order_value_usdt","max_slippage_pct",
+                "rsi_min","rsi_max","lookback_candles",
             ]
             updates = {k: v for k, v in payload.items() if k in allowed}
             if not updates:

@@ -14,7 +14,10 @@
         "get_intelligence_score_detail_history_attributeerror_dict_as_object"
       ],
       "catatan": "Bug classifier #16b (reset_regime) diperbaiki di sesi hari ini [TEMUAN BARU dari audit database.py] Endpoint GET /api/intelligence/scores/{symbol}: history_rows dari get_signal_scores() diakses dengan sintaks atribut (r.timestamp dll) padahal return type adalah List[Dict] bukan SQLAlchemy object — AttributeError/HTTP500 setiap kali endpoint dipanggil. Dikonfirmasi via simulasi. Fix: ubah ke akses dict (r['timestamp'] dll). Catatan: 'latest' dari get_latest_signal_score() mengembalikan SQLAlchemy object langsung sehingga latest.xxx di bawahnya tetap benar dan tidak diubah. [UPDATE dari audit learning/analytics.py]: endpoint /api/analytics/regime_performance memanggil compute_attribution(group_by='regime') yang sebelumnya menyebabkan TypeError/HTTP 500 -- root cause SUDAH diperbaiki di learning/analytics.py (param group_by ditambahkan ke compute_attribution). Tidak ada perubahan kode di api_server.py itu sendiri.",
-      "audit_level": "SERIUS"
+      "audit_level": "SERIUS",
+      "bug_fixed_tambahan_dari_audit_file_lain": [
+        "Dari audit telegram_bot.py: whitelist /api/config/update kekurangan rsi_min/rsi_max/lookback_candles (key config global valid yang dipakai main.py dan sudah divalidasi telegram_bot.py, tapi disaring habis di sini). Ditambahkan."
+      ]
     },
     "core/models.py": {
       "status": "DONE",
@@ -321,16 +324,30 @@
         "Tidak ditemukan circular dependency literal dengan learning/analytics.py — cross_learn.py dipakai kedua file secara independen (bukan meta_learner import analytics atau sebaliknya secara langsung; hubungan hanya lewat report yang di-generate analytics dan dipassing sebagai parameter).",
         "weight_/disable_regime_ suggestions BY DESIGN tidak masuk outcome-tracking/auto-revert otomatis (outcome parameter_history langsung di-set applied saat approve, bukan pending) — hanya bisa direvert manual sesuai komentar asli _revert_suggestion. Ini bukan bug, tapi limitasi desain yang perlu diketahui operator."
       ]
+    },
+    "telegram_bot.py": {
+      "status": "DONE",
+      "audit_level": "SERIUS",
+      "peran": "Bot kontrol Telegram (proses TERPISAH dari main.py, polling loop sendiri) — semua interaksi trading bot lewat HTTP REST ke api_server.py, plus 1 jalur fallback lokal (_diagnosa_direct) yang akses ccxt langsung.",
+      "catatan_arsitektur": "Awalnya asumsi di catatan audit adalah main.py mengimpor telegram_bot.py — ternyata tidak. telegram_bot.py adalah proses polling mandiri yang bicara ke api_server.py via HTTP (BOT_API=http://localhost:8000/api). Tidak ada import silang dengan main.py atau notifications.py sama sekali.",
+      "bug_fixed": [
+        "NameError risk: _diagnosa_direct() - variabel exchange hanya di-assign DI DALAM try block; kalau exception terjadi sebelum assignment (ccxt belum terinstall / ccxt.binance() gagal), blok finally yang cek exchange is not None akan melempar NameError baru, menutupi error asli. Fix: exchange=None diinisialisasi sebelum try.",
+        "cmd_run(): endpoint kesehatan dipanggil via api_get(\"/health\") yang otomatis prefix BOT_API (.../api/health) - padahal api_server.py cuma daftarkan /health di ROOT (bukan di bawah /api). Panggilan ini SELALU gagal (404), sehingga /run SELALU bilang API belum merespons walau bot sukses jalan. Fix: pakai endpoint /status yang memang ada di /api/ dan sudah terbukti jalan di cmd_status().",
+        "CROSS-FILE KRITIS: cmd_approve_suggestion() dan cmd_reject_suggestion() cek field status pada response API, padahal api_server.py /api/meta_learner/approve|reject SELALU mengembalikan status=approved/rejected apa pun hasilnya - hasil sebenarnya ada di field applied/rejected (bool). Akibatnya Telegram SELALU menampilkan pesan sukses walau approval sebenarnya ditolak guardrail (cooldown, delta unsafe, dst). Fix: cek field applied/rejected yang benar.",
+        "CROSS-FILE: cmd_setconfig() allowed_int menyertakan rsi_min/rsi_max/lookback_candles yang tervalidasi benar di sisi Telegram, tapi HILANG dari whitelist /api/config/update di api_server.py (padahal ketiganya adalah key config global asli yang dipakai main.py). Fix: tambahkan ke whitelist api_server.py + help text /setconfig diperbarui.",
+        "Cleanup: os.getenv nested dengan key sama (UNIVERSE_WATCHLIST di dalam UNIVERSE_WATCHLIST) dobel tanpa efek - disederhanakan."
+      ],
+      "cross_file_check": "Semua 19 endpoint yang dipanggil (api_get/api_post) di-cross-check satu-satu terhadap route yang terdaftar di api_server.py - 18 cocok, 1 (/health) salah prefix (sudah difix). Field response approve/reject dan config/update sudah dicocokkan literal dengan kode api_server.py, ditemukan 2 mismatch (sudah difix, 1 di antaranya perlu sentuhan ke api_server.py).",
+      "test": "Syntax OK, Import OK (setelah install aiohttp/python-dotenv), Functional PASS: approve/reject sekarang benar2 deteksi gagal vs sukses, cmd_run panggil /status bukan /health, _diagnosa_direct tidak NameError walau ccxt gagal diimport.",
+      "sentuhan_file_lain": [
+        "api_server.py: tambah rsi_min/rsi_max/lookback_candles ke whitelist /api/config/update (lihat entry api_server.py, audit_level tetap SERIUS karena perubahan ini kecil dan well-understood, bukan berarti perlu re-audit penuh)"
+      ]
     }
   },
   "file_belum_diaudit": {
     "intelligence/commander.py": {
       "status": "PENDING",
       "ukuran": "27 fungsi, 2 class"
-    },
-    "telegram_bot.py": {
-      "status": "PENDING",
-      "ukuran": "56 fungsi"
     }
   },
   "catatan_penting": [
@@ -347,7 +364,6 @@
   "urutan_audit_disepakati": {
     "filosofi": "Audit dari dalam ke luar. File yang paling spesifik/independen dulu, orkestrator (main.py) terakhir.",
     "pending_urutan": [
-      "4. telegram_bot.py",
       "5. intelligence/commander.py"
     ],
     "alasan_main_terakhir": "main.py adalah orkestrator yang memanggil semua modul. Kalau diaudit duluan, banyak temuan akan berupa 'seharusnya ada fungsi X di modul Y' yang belum bisa diverifikasi karena modul Y belum diaudit. Dengan main.py terakhir, semua modul sudah dalam kondisi yang diketahui dan verified."
