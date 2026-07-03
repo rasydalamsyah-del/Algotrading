@@ -22,12 +22,21 @@ def _utcnow() -> datetime:
     return datetime.now(timezone.utc)
 
 def _read_env_universe(env_path: str) -> List[str]:
-    """Baca WATCHLIST dari file .env tanpa load dotenv."""
+    """Baca UNIVERSE_WATCHLIST dari file .env tanpa load dotenv."""
+    # [BUG-FIX] Key salah: dulu cek "WATCHLIST=" padahal SEMUA file lain di
+    # sistem (main.py, telegram_bot.py, dan bahkan _restart_bots() di file
+    # ini sendiri) memakai key "UNIVERSE_WATCHLIST". Akibatnya fungsi ini
+    # SELALU return [] karena baris "WATCHLIST=" tidak pernah ada di .env
+    # manapun — membuat seluruh CoinSwapEngine (run_cycle & _triggered_swap)
+    # selalu abort di pengecekan "universe kosong" dan tidak pernah benar-benar
+    # jalan.
+    # Sebelumnya: if line.startswith("WATCHLIST="):
+    # Sekarang: cek key yang benar sesuai konvensi seluruh sistem.
     try:
         with open(env_path, "r") as f:
             for line in f:
                 line = line.strip()
-                if line.startswith("WATCHLIST="):
+                if line.startswith("UNIVERSE_WATCHLIST="):
                     val = line.split("=", 1)[1].strip()
                     return [s.strip() for s in val.split(",") if s.strip()]
     except Exception as e:
@@ -35,7 +44,15 @@ def _read_env_universe(env_path: str) -> List[str]:
     return []
 
 def _write_env_universe(env_path: str, new_universe: List[str]) -> bool:
-    """Update WATCHLIST di file .env tanpa mengubah baris lain."""
+    """Update UNIVERSE_WATCHLIST di file .env tanpa mengubah baris lain."""
+    # [BUG-FIX] Sama seperti _read_env_universe: key lama "WATCHLIST=" tidak
+    # pernah dibaca oleh main.py/telegram_bot.py. Kalau fungsi ini sempat
+    # kepanggil, ia akan menambah baris "WATCHLIST=..." baru yang tidak
+    # berefek apa pun ke bot (bot baca UNIVERSE_WATCHLIST), sehingga swap
+    # terlihat "berhasil" di log tapi watchlist asli tidak pernah berubah.
+    # Sebelumnya: cari/replace/append baris "WATCHLIST=..."
+    # Sekarang: cari/replace/append baris "UNIVERSE_WATCHLIST=..." — konsisten
+    # dengan key yang dipakai di seluruh sistem.
     try:
         with open(env_path, "r") as f:
             lines = f.readlines()
@@ -43,13 +60,13 @@ def _write_env_universe(env_path: str, new_universe: List[str]) -> bool:
         new_val = ",".join(new_universe)
         updated = False
         for i, line in enumerate(lines):
-            if line.strip().startswith("WATCHLIST="):
-                lines[i] = f"WATCHLIST={new_val}\n"
+            if line.strip().startswith("UNIVERSE_WATCHLIST="):
+                lines[i] = f"UNIVERSE_WATCHLIST={new_val}\n"
                 updated = True
                 break
 
         if not updated:
-            lines.append(f"WATCHLIST={new_val}\n")
+            lines.append(f"UNIVERSE_WATCHLIST={new_val}\n")
 
         with open(env_path, "w") as f:
             f.writelines(lines)
@@ -154,6 +171,12 @@ class CoinSwapEngine:
     """
 
     def __init__(self, config: Dict, notifier=None):
+        # [CATATAN] Param `config` sengaja tidak dipakai untuk override nilai
+        # di bawah — semua setting CoinSwap diambil langsung dari env var,
+        # konsisten dengan cara main.py & telegram_bot.py membaca
+        # UNIVERSE_WATCHLIST/watchlist lain (selalu via os.getenv, bukan
+        # dict config). Disimpan sebagai referensi/debug saja.
+        self._config         = config
         self._enabled       = os.getenv("COIN_SWAP_ENABLED", "false").lower() == "true"
         self._peer_db       = os.getenv("CROSS_LEARN_DB", "")
         self._peer_env      = os.getenv("PEER_BOT_ENV", "/root/algotrader_test/.env")

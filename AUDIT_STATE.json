@@ -281,16 +281,24 @@
         "load_persistent_parameters_getattr_pada_dict_selalu_none"
       ],
       "catatan": "File besar (1141 baris, 37 fungsi/2 class: AnalyticsEngine & PerformanceAnalytics) -- attribution engine utk analisis performa trading per regime/indicator/win-rate-trend, dgn caching snapshot ke DB. Bug 1 (paling signifikan): _serialize_report() hanya menyimpan net_pnl (gross_profit+gross_loss) dan profit_factor (turunan) ke cache JSON -- TIDAK menyimpan gross_profit/gross_loss mentah. _deserialize_report() lalu salah assign gross_profit=rp['net_pnl'] dan gross_loss tidak di-restore sama sekali (default 0.0). Akibatnya RegimePerformance.profit_factor (property = gross_profit/gross_loss) SELALU jadi inf atau 0 untuk report yang diambil dari CACHE (yaitu compute_attribution(force_refresh=False) yg hit cache -- kasus paling umum). Fix: gross_profit & gross_loss disimpan eksplisit di serialize, dibaca balik dgn benar di deserialize. Verifikasi test: round-trip serialize->deserialize menghasilkan profit_factor identik dgn nilai asli. Bug 2 (cross-file, KRITIS): api_server.py endpoint /api/analytics/regime_performance (baris ~1460) memanggil compute_attribution(..., group_by='regime') -- parameter group_by TIDAK ADA di signature PerformanceAnalytics.compute_attribution sebelumnya -> TypeError -> endpoint SELALU return HTTP 500 setiap diakses. Fix: tambah parameter group_by (Optional[str]=None) ke compute_attribution, diterima & didokumentasikan (report sudah selalu menyertakan regime_performance apapun nilainya, jadi tidak perlu logic tambahan saat ini). api_server.py juga disentuh (lihat entrinya) hanya utk update AUDIT_STATE.json, TIDAK ada perubahan kode di api_server.py itu sendiri -- root cause bug ada di analytics.py yg tidak punya param ini. Bug 3 (ringan): load_persistent_parameters() -- getattr(r, 'outcome', None) dipanggil pada r yg berupa dict (get_parameter_history return List[Dict]), getattr pada dict tidak pernah menemukan key sbg attribute -> applied count SELALU 0 di log startup meski datanya ada. Fix: pakai _row_get() helper yg sudah ada di file ini (sudah didesain utk dict-or-object). Dipanggil dari main.py:482 setiap startup bot. Cross-check lain: format_report_api() & format_report_telegram() dikonfirmasi TIDAK dipanggil dari file manapun di seluruh repo (dead code, dicek grep) -- dicatat, tidak diubah krn bukan bug, hanya belum dipakai. compute_attribution dipanggil dari main.py (via PerformanceAnalytics init), api_server.py x2, learning/meta_learner.py x2 (PENDING, akan di cross-check ulang saat audit meta_learner.py), simulate_test.py -- semua signature (selain group_by yg sudah difix) cocok. Test: syntax OK, import OK, 3 functional test PASS."
+    },
+    "learning/coin_swap.py": {
+      "status": "DONE",
+      "audit_level": "SERIUS",
+      "peran": "Cross-Bot Coin Swap Engine — swap otomatis coin performa terbaik dari algotrader_test ke algotrader, dan sebaliknya coin terlemah keluar.",
+      "bug_fixed": [
+        "KRITIS: _read_env_universe/_write_env_universe cek/tulis key \"WATCHLIST=\" di .env, padahal SELURUH sistem (main.py, telegram_bot.py, bahkan _restart_bots() di file yang sama) pakai key \"UNIVERSE_WATCHLIST\". Akibatnya self_wl/peer_wl SELALU kosong -> run_cycle() dan _triggered_swap() SELALU abort di cek universe kosong -> fitur coin swap tidak pernah benar-benar berjalan meski enabled=true. Fix: ganti ke UNIVERSE_WATCHLIST di kedua fungsi.",
+        "MINOR: param config di __init__ diterima tapi tidak pernah dipakai (semua setting dari os.getenv). Ditambahkan self._config untuk referensi/debug, perilaku tidak diubah karena desain env-var-driven konsisten dengan main.py/telegram_bot.py."
+      ],
+      "cross_file_check": "main.py (constructor + run_coin_swap_loop), api_server.py (get_swap_history), simulate_test.py (init only) — semua caller tetap kompatibel. database.py upsert_universe_override/get_active_universe_overrides/deactivate_universe_override signature cocok.",
+      "test": "Syntax OK, Import OK, Functional PASS (read/write UNIVERSE_WATCHLIST key benar, key lama WATCHLIST tidak lagi salah match, _score_coin normal, init dgn config dict tidak crash)",
+      "catatan": "Concurrency: tidak ada file-lock saat baca/tulis .env dari run_cycle() dan _triggered_swap() — kalau dua proses jalan bersamaan bisa race. Belum di-fix karena di luar scope bug fungsional utama; dicatat untuk audit main.py nanti (siapa yang panggil kapan)."
     }
   },
   "file_belum_diaudit": {
     "intelligence/commander.py": {
       "status": "PENDING",
       "ukuran": "27 fungsi, 2 class"
-    },
-    "learning/coin_swap.py": {
-      "status": "PENDING",
-      "ukuran": "13 fungsi, 1 class"
     },
     "learning/cross_learn.py": {
       "status": "PENDING",
@@ -319,7 +327,6 @@
   "urutan_audit_disepakati": {
     "filosofi": "Audit dari dalam ke luar. File yang paling spesifik/independen dulu, orkestrator (main.py) terakhir.",
     "pending_urutan": [
-      "1. learning/coin_swap.py",
       "2. learning/cross_learn.py",
       "3. learning/meta_learner.py",
       "4. telegram_bot.py",
