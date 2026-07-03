@@ -345,14 +345,23 @@
       "sentuhan_file_lain": [
         "api_server.py: tambah rsi_min/rsi_max/lookback_candles ke whitelist /api/config/update (lihat entry api_server.py, audit_level tetap SERIUS karena perubahan ini kecil dan well-understood, bukan berarti perlu re-audit penuh)"
       ]
-    }
-  },
-  "file_belum_diaudit": {
+    },
     "intelligence/commander.py": {
-      "status": "PENDING",
-      "ukuran": "27 fungsi, 2 class"
+      "status": "DONE",
+      "audit_level": "SERIUS",
+      "peran": "Trade Commander - jalankan 7 gate keputusan (supertrend, score/trigger, regime, spread, risk manager, Kelly sizing, correlation) lalu hasilkan TradeDecision (EXECUTE/WAIT/REJECT). IntelligenceCommander adalah class yang benar-benar dipakai main.py; TradeCommander adalah class lama yang sudah tidak dipakai.",
+      "bug_fixed": [
+        "BUG KRITIS (sudah diketahui sejak audit exchange.py): _gate_spread() mengecek keberadaan method get_current_spread_pct/get_spread_pct/get_spread lewat exchange_connector.__dict__ (dict INSTANCE) sebelum memanggil getattr. Method-method ini didefinisikan sebagai method biasa di class WebSocketFeed (exchange.py), jadi TIDAK PERNAH muncul di __dict__ instance -> kondisi \"fn_name not in explicit_attrs\" SELALU True -> loop selalu continue -> spread_pct SELALU None -> Gate G3_SPREAD tidak pernah benar-benar mengecek spread real time, selalu lolos sebagai G3_SPREAD_UNKNOWN walau data spread tersedia. Dikonfirmasi production-real: main.py membuat self.ws_feed = WebSocketFeed(...) dan inject_dependencies() meneruskannya sebagai exchange_connector ke IntelligenceCommander -> jadi bug ini aktif di jalur eksekusi nyata, bukan cuma teoretis. Fix: hapus pre-check __dict__ yang salah, getattr+callable saja sudah aman."
+      ],
+      "cross_file_check": "main.py (IntelligenceCommander via inject_dependencies -> self._exchange = WebSocketFeed instance yang benar-benar punya method get_spread/get_current_spread_pct/is_feed_healthy sebagai method class, dikonfirmasi baris demi baris di exchange.py). strategy.py (should_exit_on_regime_change - tidak terpengaruh fix ini). database.py (action_taken disimpan sebagai \"EXECUTE\" oleh commander, sudah cocok dengan fix case-insensitive di get_trades_with_regime yang dibuat saat audit database.py sebelumnya).",
+      "test": "Syntax OK, Import OK, Functional PASS: dibuat FakeWebSocketFeed dengan method di level CLASS (persis pola production, __dict__ instance kosong terbukti) - spread kecil (0.5%) sekarang benar-benar terbaca dan lolos gate, spread besar (5%) sekarang benar-benar terdeteksi dan MEMBLOKIR entry (sebelum fix, kedua kasus akan selalu G3_SPREAD_UNKNOWN dan lolos tanpa pernah mengecek).",
+      "catatan_investigasi": [
+        "class TradeCommander (baris 755-839) adalah DEAD CODE - tidak direferensikan di file manapun selain definisinya sendiri. main.py memakai IntelligenceCommander (class terpisah, baris 842+). Tidak dihapus karena di luar scope audit bug-fix (bisa jadi disengaja untuk kompatibilitas API/rencana masa depan), tapi didokumentasikan supaya operator tahu.",
+        "IntelligenceCommander.process() memakai getattr(self, \"_exchange\", None) / getattr(self, \"_risk\", None) sebagai default-safe accessor - ini AMAN karena main.py selalu memanggil inject_dependencies() tepat setelah konstruksi. Bukan bug, hanya pola defensif."
+      ]
     }
   },
+  "file_belum_diaudit": {},
   "catatan_penting": [
     "Setiap kali satu file selesai diaudit dan diperbaiki, update status file ini dari PENDING ke DONE",
     "Jika ada bug baru yang ditemukan di file DONE saat audit file PENDING, tambahkan ke bug_fixed file DONE tersebut",
@@ -366,9 +375,7 @@
   },
   "urutan_audit_disepakati": {
     "filosofi": "Audit dari dalam ke luar. File yang paling spesifik/independen dulu, orkestrator (main.py) terakhir.",
-    "pending_urutan": [
-      "5. intelligence/commander.py"
-    ],
+    "pending_urutan": [],
     "alasan_main_terakhir": "main.py adalah orkestrator yang memanggil semua modul. Kalau diaudit duluan, banyak temuan akan berupa 'seharusnya ada fungsi X di modul Y' yang belum bisa diverifikasi karena modul Y belum diaudit. Dengan main.py terakhir, semua modul sudah dalam kondisi yang diketahui dan verified."
   }
 }

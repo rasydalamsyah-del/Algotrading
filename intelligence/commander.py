@@ -228,10 +228,21 @@ def _gate_spread(
             return False
 
         spread_pct = None
-        explicit_attrs = getattr(exchange_connector, "__dict__", None)
+        # [BUG-FIX] Sebelumnya kode mengecek `fn_name not in explicit_attrs`
+        # dengan explicit_attrs = exchange_connector.__dict__ (dict INSTANCE).
+        # Method seperti get_current_spread_pct/get_spread_pct/get_spread
+        # didefinisikan sebagai method biasa di body class ExchangeConnector
+        # (exchange.py) — method class TIDAK PERNAH muncul di __dict__
+        # instance (hanya atribut yang di-assign via self.x = ... yang
+        # muncul di situ). Akibatnya `fn_name not in explicit_attrs` SELALU
+        # True untuk ketiga nama method ini -> loop selalu `continue` tanpa
+        # pernah memanggil getattr yang sebenarnya -> spread_pct SELALU None
+        # -> gate G3_SPREAD tidak pernah benar-benar mengecek spread nyata,
+        # selalu lolos sebagai "G3_SPREAD_UNKNOWN" walau data spread ada.
+        # Sekarang: getattr() sendiri sudah aman kalau atribut tidak ada
+        # (return None default), jadi pre-check __dict__ yang salah itu
+        # dihapus — cukup coba getattr+callable langsung.
         for fn_name in ("get_current_spread_pct", "get_spread_pct", "get_spread"):
-            if isinstance(explicit_attrs, dict) and fn_name not in explicit_attrs:
-                continue
             fn = getattr(exchange_connector, fn_name, None)
             if callable(fn):
                 spread_pct = fn(symbol)
