@@ -465,6 +465,19 @@ class MetaLearner:
         symbol:  Optional[str] = None,
         profile: Optional[str] = None,
     ) -> List[Dict[str, Any]]:
+        # [CATATAN — cross-check dgn database.py.get_pending_outcomes()]
+        # Parameter min_trades_threshold=self._track_trades di bawah TIDAK
+        # dipakai untuk filter di level query (lihat komentar di
+        # database.py.get_pending_outcomes: trades_after_apply masih 0 selagi
+        # PENDING sehingga filter di situ akan selalu kosong). Gating jumlah
+        # trade yang sebenarnya terjadi di _evaluate_outcome() di bawah, via
+        # get_trade_stats(limit=self._track_trades, since=applied_at) + cek
+        # "total_trades < self._track_trades // 2". Keduanya SENGAJA tidak
+        # disatukan: separuh dari track_trades dipakai sebagai ambang minimum
+        # supaya outcome bisa dievaluasi lebih awal (feedback lebih cepat)
+        # daripada menunggu penuh track_trades trade baru. Parameter
+        # min_trades_threshold di sini tetap dikirim untuk dokumentasi intent
+        # pemanggil, meski saat ini tidak berefek di sisi database.py.
         try:
             pending_records = await self._db.get_pending_outcomes(
                 min_trades_threshold=self._track_trades,
@@ -480,7 +493,21 @@ class MetaLearner:
             if profile and record.get("profile") != profile:
                 continue
 
-            result = await self._evaluate_outcome(record)
+            # [BUG-FIX] Sebelumnya _evaluate_outcome() dipanggil tanpa
+            # try/except di sini — kalau satu record punya data korup/tak
+            # terduga (mis. field "id" hilang), exception akan menjalar ke
+            # run_full_cycle()/run_cross_cycle() dan menggagalkan SELURUH
+            # batch, termasuk record lain yang valid. Sekarang: isolasi per
+            # record supaya satu record bermasalah tidak menghentikan yang
+            # lain.
+            try:
+                result = await self._evaluate_outcome(record)
+            except Exception as e:
+                log.error(
+                    "check_pending_outcomes: gagal evaluasi record id=%s: %s",
+                    record.get("id", "?"), e,
+                )
+                continue
             if result:
                 results.append(result)
 
@@ -875,6 +902,23 @@ class MetaLearner:
     ) -> Tuple[bool, str]:
         from profiles.registry import apply_parameter_override
 
+        # [BUG-FIX] Cooldown 1 jam sebelumnya HANYA dicek untuk parameter
+        # numerik (entry_threshold, volume_multiplier, dst) karena cabang
+        # weight_/disable_regime_ di bawah langsung return sebelum sampai ke
+        # pengecekan cooldown. Akibatnya suggestion weight_* baru untuk
+        # indikator yang sama bisa diterapkan berkali-kali dalam waktu
+        # singkat (mis. beberapa cycle berturut-turut) tanpa jeda — berisiko
+        # weight drift tak terkendali di profiles/weights.py karena jenis
+        # parameter ini juga tidak dilacak di parameter_history untuk
+        # auto-revert (lihat _revert_suggestion: weight_/disable_regime_
+        # hanya bisa direvert manual).
+        # Sekarang: cooldown dicek di awal, berlaku untuk SEMUA jenis
+        # parameter termasuk weight_/disable_regime_.
+        cooling_key = self._cooling_key(sug.symbol, sug.profile, sug.parameter_name)
+        last_apply = self._last_apply_at.get(cooling_key)
+        if last_apply and (_utcnow() - last_apply).total_seconds() < 3600:
+            return False, "Cooldown apply 1 jam aktif untuk parameter ini."
+
         if sug.parameter_name.startswith("weight_"):
             indicator = sug.parameter_name.replace("weight_", "")
             ok, msg = _apply_weight_change(
@@ -882,6 +926,8 @@ class MetaLearner:
                 indicator=indicator,
                 delta=-_WEIGHT_STEP,
             )
+            if ok:
+                self._last_apply_at[cooling_key] = _utcnow()
             return ok, msg
         if sug.parameter_name.startswith("disable_regime_"):
             return True, (
@@ -893,11 +939,6 @@ class MetaLearner:
 
         if not self._is_delta_safe(sug):
             return False, "Perubahan parameter terlalu agresif untuk guardrail."
-
-        cooling_key = self._cooling_key(sug.symbol, sug.profile, sug.parameter_name)
-        last_apply = self._last_apply_at.get(cooling_key)
-        if last_apply and (_utcnow() - last_apply).total_seconds() < 3600:
-            return False, "Cooldown apply 1 jam aktif untuk parameter ini."
 
         res = apply_parameter_override(
             symbol=sug.symbol or "",
@@ -1021,14 +1062,33 @@ class MetaLearner:
         prof       = record.get("profile", "")
         param      = record.get("parameter_name", "")
         perf_before = record.get("performance_before")
+        applied_at  = record.get("timestamp")
 
         if perf_before is None:
             return None
+
+        # [BUG-FIX] Sebelumnya get_trade_stats() dipanggil tanpa filter waktu
+        # sama sekali — hanya "N trade terakhir" apapun kapan terjadinya.
+        # Kalau belum ada cukup trade BARU sejak parameter diubah, stats bisa
+        # didominasi trade dari SEBELUM perubahan (termasuk trade yang justru
+        # jadi alasan suggestion ini dibuat) — sehingga wr_before/wr_after
+        # dibandingkan dengan data yang sebagian tumpang tindih, membuat
+        # keputusan auto-revert bisa salah. Ini adalah isu yang sudah dicatat
+        # di database.py get_pending_outcomes() untuk dicek ulang di sini.
+        # Sekarang: pakai param `since=applied_at` (baru ditambahkan di
+        # database.get_trade_stats) supaya hanya trade SETELAH parameter
+        # diubah yang dihitung.
+        if isinstance(applied_at, str):
+            try:
+                applied_at = datetime.fromisoformat(applied_at)
+            except ValueError:
+                applied_at = None
 
         stats = await self._db.get_trade_stats(
             symbol=sym or None,
             profile=prof or None,
             limit=self._track_trades,
+            since=applied_at,
         )
 
         if not stats or stats["total_trades"] < self._track_trades // 2:
@@ -1074,6 +1134,34 @@ class MetaLearner:
                         and sug.status == SuggestionStatus.APPLIED):
                     matching_sug = sug
                     break
+
+            if matching_sug is None:
+                # [BUG-FIX] Sebelumnya kalau matching_sug tidak ketemu di
+                # self._pending (in-memory), auto-revert langsung SILENT
+                # SKIP — tidak ada fallback. self._pending kosong setiap kali
+                # MetaLearner di-restart (restart proses, deploy, crash),
+                # sehingga suggestion yang di-APPLY sebelum restart tidak
+                # pernah bisa di-auto-revert lagi walau outcome-nya degraded,
+                # padahal semua data yang dibutuhkan (symbol, profile,
+                # parameter_name, old_value/new_value, db_record_id) sudah
+                # lengkap di record parameter_history ini.
+                # Sekarang: rekonstruksi ParameterSuggestion langsung dari
+                # record DB sebagai fallback supaya revert tetap jalan.
+                matching_sug = ParameterSuggestion(
+                    symbol=sym,
+                    profile=prof,
+                    parameter_name=param,
+                    current_value=record.get("old_value"),
+                    suggested_value=record.get("new_value"),
+                    status=SuggestionStatus.APPLIED,
+                )
+                matching_sug.supporting_data["db_record_id"] = record_id
+                log.info(
+                    "AUTO-REVERT: suggestion %s/%s %s tidak ada di memori "
+                    "(kemungkinan proses baru saja restart) — direkonstruksi "
+                    "dari parameter_history id=%s.",
+                    sym, prof, param, record_id,
+                )
 
             if matching_sug:
                 revert_reason = (
@@ -1158,7 +1246,10 @@ class MetaLearner:
             from profiles.thresholds import get_dynamic_threshold
             # Gunakan regime undefined sebagai base threshold untuk meta learner
             return get_dynamic_threshold(profile, "undefined")
-        except (KeyError, Exception) as e:
+        except Exception as e:
+            # [BUG-FIX] Sebelumnya "except (KeyError, Exception)" — redundan
+            # karena KeyError sudah subclass dari Exception, tidak berefek
+            # apa pun selain membingungkan pembaca kode.
             log.debug("_get_current_threshold: %s", e)
             return None
 

@@ -305,16 +305,28 @@
       "cross_file_check": "analytics.py (compute_attribution: get_peer_trades+get_peer_signal_scores+get_peer_regime_stats dipanggil sekuensial per request — sekarang benar2 dapat manfaat cache), meta_learner.py (get_peer_regime_stats, get_peer_signal_scores, get_peer_trades), main.py & api_server.py (get_summary, tidak di-cache by design karena untuk status on-demand). Semua signature caller tetap kompatibel (return type tidak berubah).",
       "test": "Syntax OK, Import OK, Functional PASS (cache benar2 aktif — hasil kedua tetap sama walau DB fisik dihapus; cache key spesifik per parameter/lookback_days; get_summary tidak terpengaruh)",
       "catatan": "get_summary() sengaja TIDAK di-cache karena dipakai untuk status check on-demand (Telegram/API) yang perlu data terbaru, bukan data periodik seperti 3 method fetch lainnya."
+    },
+    "learning/meta_learner.py": {
+      "status": "DONE",
+      "audit_level": "SERIUS",
+      "peran": "Meta Learner — analisis attribution report, generate parameter suggestion (threshold/volume/weight/regime), auto-apply (mode autonomous) dengan guardrail, evaluasi outcome & auto-revert kalau win rate turun.",
+      "bug_fixed": [
+        "Guardrail gap: cooldown apply 1 jam sebelumnya HANYA berlaku untuk parameter numerik (entry_threshold, volume_multiplier) — cabang weight_*/disable_regime_* di _apply_suggestion return lebih dulu sebelum sampai ke pengecekan cooldown. Weight suggestion baru untuk indikator yang sama bisa diterapkan berkali-kali tanpa jeda -> risiko weight drift tak terkendali di profiles/weights.py (apalagi weight_ tidak punya auto-revert, hanya bisa direvert manual). Fix: cooldown dicek di awal _apply_suggestion, berlaku untuk semua jenis parameter.",
+        "Persistence bug: _evaluate_outcome() mencari matching_sug HANYA di self._pending (in-memory) untuk auto-revert saat outcome degraded. self._pending kosong setiap kali proses MetaLearner restart, sehingga suggestion yang di-APPLY sebelum restart TIDAK PERNAH bisa di-auto-revert lagi walau win rate anjlok setelahnya — padahal semua data yang dibutuhkan sudah lengkap di parameter_history. Fix: rekonstruksi ParameterSuggestion langsung dari record DB sebagai fallback kalau tidak ketemu di memori."
+      ],
+      "cross_file_check": "main.py (run_full_cycle, run_cross_cycle), api_server.py (approve_suggestion, reject_suggestion) — semua signature publik tidak berubah, tetap kompatibel. profiles/registry.py (apply_parameter_override/revert_parameter_override), profiles/thresholds.py (get_dynamic_threshold/get_profile_thresholds), profiles/weights.py (LEVEL1_WEIGHTS, ditulis langsung oleh _apply_weight_change via string manipulation) — signature & format cocok. database.py (get_pending_outcomes, get_trade_stats dengan param since yang sudah ditambahkan sesi lalu, save_parameter_change, update_parameter_outcome, get_parameter_history) — semua signature cocok.",
+      "test": "Syntax OK, Import OK, Functional PASS: (1) cooldown 1 jam sekarang menolak apply weight_ kedua untuk parameter sama, (2) matching_sug direkonstruksi dari record DB dan auto-revert tetap terpanggil walau self._pending kosong (simulasi restart)",
+      "catatan_investigasi": [
+        "Cross-check dgn database.py get_pending_outcomes(min_trades_threshold): parameter ini memang tidak dipakai di level query (sudah didokumentasikan di database.py kenapa), dan SENGAJA tidak disatukan dengan threshold internal _evaluate_outcome (total_trades < track_trades//2) karena //2 dipakai untuk feedback lebih awal. Didokumentasikan di kedua file, tidak ada bug — hanya klarifikasi.",
+        "Tidak ditemukan circular dependency literal dengan learning/analytics.py — cross_learn.py dipakai kedua file secara independen (bukan meta_learner import analytics atau sebaliknya secara langsung; hubungan hanya lewat report yang di-generate analytics dan dipassing sebagai parameter).",
+        "weight_/disable_regime_ suggestions BY DESIGN tidak masuk outcome-tracking/auto-revert otomatis (outcome parameter_history langsung di-set applied saat approve, bukan pending) — hanya bisa direvert manual sesuai komentar asli _revert_suggestion. Ini bukan bug, tapi limitasi desain yang perlu diketahui operator."
+      ]
     }
   },
   "file_belum_diaudit": {
     "intelligence/commander.py": {
       "status": "PENDING",
       "ukuran": "27 fungsi, 2 class"
-    },
-    "learning/meta_learner.py": {
-      "status": "PENDING",
-      "ukuran": "38 fungsi, 1 class"
     },
     "telegram_bot.py": {
       "status": "PENDING",
@@ -335,7 +347,6 @@
   "urutan_audit_disepakati": {
     "filosofi": "Audit dari dalam ke luar. File yang paling spesifik/independen dulu, orkestrator (main.py) terakhir.",
     "pending_urutan": [
-      "3. learning/meta_learner.py",
       "4. telegram_bot.py",
       "5. intelligence/commander.py"
     ],
