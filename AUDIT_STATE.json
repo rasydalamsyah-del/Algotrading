@@ -176,7 +176,10 @@
         "get_signal_scores_kolom_hilang_oscillator_structure_orderbook_dkk"
       ],
       "catatan": "Bug utama: get_trades_with_regime() hardcode filter action_taken=='EXECUTE_CANDIDATE' (string milik scorer.py), padahal eksekusi nyata via intelligence/commander.py menyimpan 'execute'/'EXECUTE' (DecisionAction enum) — korelasi regime/score untuk trade produksi selalu meleset ke default, berdampak ke learning/analytics.py (5 callsite). Diperbaiki jadi case-insensitive match. Param min_trades_threshold di get_pending_outcomes() TIDAK diubah (tetap unused) — sengaja didokumentasikan, perlu dicek ulang saat audit learning/meta_learner.py (Tier 2) apakah perlu disatukan dengan pengecekan trade count di _evaluate_outcome. Observasi non-bug: main.py 2x mengakses db._session() (private) langsung untuk raw update yang belum ada public method-nya — dicatat untuk dipertimbangkan saat audit intelligence/position_sync.py atau learning/coin_swap.py. [TEMUAN BARU saat tambah sentiment logging] get_signal_scores() tidak mengembalikan banyak kolom yang sudah ada di skema (oscillator_score, structure_score, orderbook_score, current_price, suggested_sl/tp, fib_support/resistance, signal_confidence) -- data tersimpan tapi tidak ter-return. Sudah diperbaiki + tambah sentiment_score baru (kolom + parameter save_signal_score, logging pasif Fear&Greed Index untuk pipeline v7, TIDAK memengaruhi keputusan apapun). PERINGATAN BELUM DIPERBAIKI: api_server.py:1267-1273 mengakses hasil get_signal_scores() (list-of-dict) dengan sintaks atribut (r.timestamp) -- akan AttributeError/HTTP 500 tiap kali endpoint dipanggil. Dikonfirmasi via simulasi langsung. PRIORITAS untuk audit api_server.py berikutnya.",
-      "audit_level": "SERIUS"
+      "audit_level": "SERIUS",
+      "bug_fixed_tambahan_dari_audit_file_lain": [
+        "[TAMBAHAN, baru dicommit saat audit learning/meta_learner.py] get_trade_stats() ditambah param since:Optional[datetime] untuk filter trade >= waktu tertentu — dibutuhkan _evaluate_outcome() di meta_learner.py supaya evaluasi outcome parameter change tidak tercampur trade dari SEBELUM parameter diubah. Perubahan ini sempat ada di working tree tanpa ter-commit dari sesi sebelumnya, sekarang dicommit resmi."
+      ]
     },
     "exchange.py": {
       "status": "DONE",

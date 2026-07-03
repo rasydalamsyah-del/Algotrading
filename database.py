@@ -477,8 +477,13 @@ class DatabaseManager:
         symbol:  Optional[str] = None,
         profile: Optional[str] = None,
         limit:   int           = 50,
+        since:   Optional[datetime] = None,
     ) -> Optional[Dict[str, Any]]:
-
+        # [TAMBAHAN] Param `since` ditambah untuk kebutuhan
+        # learning/meta_learner.py._evaluate_outcome() — sebelumnya tidak ada
+        # cara memfilter trade yang terjadi SETELAH parameter change tertentu,
+        # sehingga hasil evaluasi bisa tercampur trade dari SEBELUM parameter
+        # diubah (lihat AUDIT_STATE.json bug_fixed untuk detail).
         async with self._session() as s:
             q = (
                 select(Trade)
@@ -489,6 +494,8 @@ class DatabaseManager:
                 q = q.where(Trade.symbol == symbol)
             if profile:
                 q = q.where(Trade.strategy_profile == profile)
+            if since is not None:
+                q = q.where(Trade.timestamp >= since)
             q = q.limit(min(limit, 500))
             result = await s.execute(q)
             trades = list(result.scalars().all())
