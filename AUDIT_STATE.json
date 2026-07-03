@@ -13,7 +13,7 @@
         "reset_regime_terhubung",
         "get_intelligence_score_detail_history_attributeerror_dict_as_object"
       ],
-      "catatan": "Bug classifier #16b (reset_regime) diperbaiki di sesi hari ini [TEMUAN BARU dari audit database.py] Endpoint GET /api/intelligence/scores/{symbol}: history_rows dari get_signal_scores() diakses dengan sintaks atribut (r.timestamp dll) padahal return type adalah List[Dict] bukan SQLAlchemy object — AttributeError/HTTP500 setiap kali endpoint dipanggil. Dikonfirmasi via simulasi. Fix: ubah ke akses dict (r['timestamp'] dll). Catatan: 'latest' dari get_latest_signal_score() mengembalikan SQLAlchemy object langsung sehingga latest.xxx di bawahnya tetap benar dan tidak diubah.",
+      "catatan": "Bug classifier #16b (reset_regime) diperbaiki di sesi hari ini [TEMUAN BARU dari audit database.py] Endpoint GET /api/intelligence/scores/{symbol}: history_rows dari get_signal_scores() diakses dengan sintaks atribut (r.timestamp dll) padahal return type adalah List[Dict] bukan SQLAlchemy object — AttributeError/HTTP500 setiap kali endpoint dipanggil. Dikonfirmasi via simulasi. Fix: ubah ke akses dict (r['timestamp'] dll). Catatan: 'latest' dari get_latest_signal_score() mengembalikan SQLAlchemy object langsung sehingga latest.xxx di bawahnya tetap benar dan tidak diubah. [UPDATE dari audit learning/analytics.py]: endpoint /api/analytics/regime_performance memanggil compute_attribution(group_by='regime') yang sebelumnya menyebabkan TypeError/HTTP 500 -- root cause SUDAH diperbaiki di learning/analytics.py (param group_by ditambahkan ke compute_attribution). Tidak ada perubahan kode di api_server.py itu sendiri.",
       "audit_level": "SERIUS"
     },
     "core/models.py": {
@@ -271,16 +271,22 @@
         "docstring_overclaim_fase_b_regime_aware_duration_tidak_ada_implementasi"
       ],
       "catatan": "File relatif bersih secara logika internal — RSI (Wilder), EMA, supertrend adaptif, profit-zone trailing (5 zona), composite exit score semua diverifikasi benar via test fungsional (RSI range 0-100, EMA None saat data kurang, profit zone monotonic increasing + guard no-downgrade SL, check_atg end-to-end dgn downtrend kuat berhasil trigger exit, graceful degrade saat df=None, guard entry_price<=0). MarketRegime enum (core/models.py) cocok persis dgn key di _W dict (_exit_score): trending_bull/trending_bear/ranging/volatile_expansion/undefined -- tidak ada silent fallback ke 'undefined' yg tidak disengaja. Fix: docstring lama overclaim 'Fase B: Regime-Aware Duration + Pre-Exit Warning (hooks ready)' -- 'Regime-Aware Duration' TIDAK punya implementasi/field sama sekali (bukan bug logika, murni dokumentasi tidak akurat, dikoreksi jujur). TEMUAN CROSS-FILE (2, keduanya di main.py, DIDOKUMENTASIKAN untuk audit main.py nanti, TIDAK diperbaiki sekarang sesuai strategi main.py di-audit terakhir): (1) ATGResult.warning_level dihitung benar (0-4 dari 4 sinyal teknikal) tapi TIDAK PERNAH dibaca main.py -- fitur pre-exit warning belum davkan wired ke notifikasi apapun. (2) main.py baris ~1946 memanggil notify_sl_tp_hit(trigger='take_profit', ...) HARDCODE untuk semua ATG exit, padahal ATG bisa exit saat posisi RUGI (profit_pct negatif, skor exit tinggi krn sinyal teknikal memburuk) -- user akan terima notifikasi salah/menyesatkan 'TAKE PROFIT HIT' padahal PnL negatif. Cross-check caller: check_atg() dipanggil dari main.py:1920 dan simulate_test.py:620, kedua caller pakai keyword args yg cocok persis dgn signature saat ini (entry_price, current_price, highest_price, current_sl, df, symbol, regime) -- tidak ada mismatch. get_profit_zone_sl() murni internal (hanya dipanggil dari check_atg sendiri). effective_confirmation_tf (dipakai main.py utk tentukan timeframe candle ATG) dikonfirmasi ada di profiles/base_profile.py:149."
+    },
+    "learning/analytics.py": {
+      "status": "DONE",
+      "audit_level": "SERIUS",
+      "bug_fixed": [
+        "deserialize_report_gross_profit_gross_loss_hilang_dari_cache",
+        "compute_attribution_missing_group_by_param_crash_api_server",
+        "load_persistent_parameters_getattr_pada_dict_selalu_none"
+      ],
+      "catatan": "File besar (1141 baris, 37 fungsi/2 class: AnalyticsEngine & PerformanceAnalytics) -- attribution engine utk analisis performa trading per regime/indicator/win-rate-trend, dgn caching snapshot ke DB. Bug 1 (paling signifikan): _serialize_report() hanya menyimpan net_pnl (gross_profit+gross_loss) dan profit_factor (turunan) ke cache JSON -- TIDAK menyimpan gross_profit/gross_loss mentah. _deserialize_report() lalu salah assign gross_profit=rp['net_pnl'] dan gross_loss tidak di-restore sama sekali (default 0.0). Akibatnya RegimePerformance.profit_factor (property = gross_profit/gross_loss) SELALU jadi inf atau 0 untuk report yang diambil dari CACHE (yaitu compute_attribution(force_refresh=False) yg hit cache -- kasus paling umum). Fix: gross_profit & gross_loss disimpan eksplisit di serialize, dibaca balik dgn benar di deserialize. Verifikasi test: round-trip serialize->deserialize menghasilkan profit_factor identik dgn nilai asli. Bug 2 (cross-file, KRITIS): api_server.py endpoint /api/analytics/regime_performance (baris ~1460) memanggil compute_attribution(..., group_by='regime') -- parameter group_by TIDAK ADA di signature PerformanceAnalytics.compute_attribution sebelumnya -> TypeError -> endpoint SELALU return HTTP 500 setiap diakses. Fix: tambah parameter group_by (Optional[str]=None) ke compute_attribution, diterima & didokumentasikan (report sudah selalu menyertakan regime_performance apapun nilainya, jadi tidak perlu logic tambahan saat ini). api_server.py juga disentuh (lihat entrinya) hanya utk update AUDIT_STATE.json, TIDAK ada perubahan kode di api_server.py itu sendiri -- root cause bug ada di analytics.py yg tidak punya param ini. Bug 3 (ringan): load_persistent_parameters() -- getattr(r, 'outcome', None) dipanggil pada r yg berupa dict (get_parameter_history return List[Dict]), getattr pada dict tidak pernah menemukan key sbg attribute -> applied count SELALU 0 di log startup meski datanya ada. Fix: pakai _row_get() helper yg sudah ada di file ini (sudah didesain utk dict-or-object). Dipanggil dari main.py:482 setiap startup bot. Cross-check lain: format_report_api() & format_report_telegram() dikonfirmasi TIDAK dipanggil dari file manapun di seluruh repo (dead code, dicek grep) -- dicatat, tidak diubah krn bukan bug, hanya belum dipakai. compute_attribution dipanggil dari main.py (via PerformanceAnalytics init), api_server.py x2, learning/meta_learner.py x2 (PENDING, akan di cross-check ulang saat audit meta_learner.py), simulate_test.py -- semua signature (selain group_by yg sudah difix) cocok. Test: syntax OK, import OK, 3 functional test PASS."
     }
   },
   "file_belum_diaudit": {
     "intelligence/commander.py": {
       "status": "PENDING",
       "ukuran": "27 fungsi, 2 class"
-    },
-    "learning/analytics.py": {
-      "status": "PENDING",
-      "ukuran": "37 fungsi, 2 class"
     },
     "learning/coin_swap.py": {
       "status": "PENDING",
@@ -313,12 +319,11 @@
   "urutan_audit_disepakati": {
     "filosofi": "Audit dari dalam ke luar. File yang paling spesifik/independen dulu, orkestrator (main.py) terakhir.",
     "pending_urutan": [
-      "1. learning/analytics.py",
-      "2. learning/coin_swap.py",
-      "3. learning/cross_learn.py",
-      "4. learning/meta_learner.py",
-      "5. telegram_bot.py",
-      "6. intelligence/commander.py"
+      "1. learning/coin_swap.py",
+      "2. learning/cross_learn.py",
+      "3. learning/meta_learner.py",
+      "4. telegram_bot.py",
+      "5. intelligence/commander.py"
     ],
     "alasan_main_terakhir": "main.py adalah orkestrator yang memanggil semua modul. Kalau diaudit duluan, banyak temuan akan berupa 'seharusnya ada fungsi X di modul Y' yang belum bisa diverifikasi karena modul Y belum diaudit. Dengan main.py terakhir, semua modul sudah dalam kondisi yang diketahui dan verified."
   }

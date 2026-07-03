@@ -762,6 +762,13 @@ class AnalyticsEngine:
                     "win_rate":         round(p.win_rate, 2),
                     "profit_factor":    round(p.profit_factor, 4) if p.profit_factor != float("inf") else 9999.0,
                     "net_pnl":          round(p.net_pnl, 4),
+                    # [BUG-FIX] gross_profit & gross_loss sebelumnya TIDAK
+                    # disimpan sama sekali -- hanya net_pnl (gross_profit +
+                    # gross_loss) dan profit_factor (turunan) yang di-cache.
+                    # Akibatnya _deserialize_report tidak bisa merekonstruksi
+                    # gross_profit/gross_loss asli (lihat fix di sana).
+                    "gross_profit":     round(p.gross_profit, 4),
+                    "gross_loss":       round(p.gross_loss, 4),
                     "avg_score_wins":   round(p.avg_score_wins, 2),
                     "avg_score_losses": round(p.avg_score_losses, 2),
                     "is_significant":   p.is_significant,
@@ -820,7 +827,17 @@ class AnalyticsEngine:
                 total_trades=rp.get("total_trades", 0),
                 win_count=rp.get("win_count", 0),
                 loss_count=rp.get("loss_count", 0),
-                gross_profit=rp.get("net_pnl", 0.0),
+                # [BUG-FIX] Sebelumnya: gross_profit=rp.get("net_pnl", 0.0) --
+                # salah field (net_pnl = gross_profit + gross_loss, bukan
+                # gross_profit itu sendiri), dan gross_loss tidak di-pass
+                # sama sekali -> selalu default 0.0. Akibatnya
+                # perf.profit_factor (property = gross_profit/gross_loss)
+                # SELALU jadi inf atau 0 untuk report yang diambil dari
+                # cache (skip komputasi ulang). Sekarang baca gross_profit
+                # & gross_loss langsung dari field yang benar (lihat fix di
+                # _serialize_report yang sekarang menyimpan keduanya).
+                gross_profit=rp.get("gross_profit", 0.0),
+                gross_loss=rp.get("gross_loss", 0.0),
                 avg_score_wins=rp.get("avg_score_wins", 50.0),
                 avg_score_losses=rp.get("avg_score_losses", 50.0),
                 is_significant=rp.get("is_significant", False),
@@ -928,10 +945,33 @@ class PerformanceAnalytics:
         profile:       Optional[str]  = None,
         force_refresh: bool           = False,
         filters:       Optional[Dict] = None,
+        group_by:      Optional[str]  = None,
     ) -> AttributionReport:
+        """
+        # [BUG-FIX] Sebelumnya tidak ada parameter group_by di signature ini,
+        # padahal api_server.py endpoint /api/analytics/regime_performance
+        # (baris ~1460) memanggil compute_attribution(..., group_by="regime")
+        # -> TypeError: unexpected keyword argument 'group_by' -> endpoint
+        # SELALU crash (caught -> HTTP 500) setiap kali diakses.
+        # Fix: terima parameter group_by. AttributionReport SUDAH SELALU
+        # menyertakan report.regime_performance (breakdown per regime)
+        # apapun nilai group_by-nya -- jadi cukup diterima & diabaikan utk
+        # saat ini (tidak ada mode grouping lain yang diimplementasikan di
+        # AnalyticsEngine). Parameter dipertahankan di signature supaya
+        # caller yang eksplisit minta group_by="regime" tidak crash, dan
+        # supaya future group_by mode lain bisa ditambah di sini nanti
+        # tanpa breaking existing caller.
+        """
         if filters:
             symbol  = filters.get("symbol",  symbol)
             profile = filters.get("profile", profile)
+
+        if group_by is not None and group_by != "regime":
+            log.debug(
+                "compute_attribution: group_by='%s' diterima tapi belum ada "
+                "mode grouping selain 'regime' (default report sudah "
+                "menyertakan regime_performance).", group_by,
+            )
 
         return await self._engine.compute_attribution(
             lookback_days=lookback_days,
@@ -1033,7 +1073,14 @@ class PerformanceAnalytics:
 
             applied = sum(
                 1 for r in history
-                if getattr(r, "outcome", None) == "applied"
+                # [BUG-FIX] Sebelumnya: getattr(r, "outcome", None) -- tapi
+                # db_manager.get_parameter_history() return List[Dict], bukan
+                # objek. getattr() pada dict TIDAK PERNAH menemukan key
+                # sebagai attribute -> selalu default None -> applied selalu
+                # 0 di log, walaupun datanya ada. Sekarang pakai _row_get()
+                # (helper yang sudah ada di file ini) yang benar utk dict
+                # MAUPUN objek/mock.
+                if _row_get(r, "outcome") == "applied"
             )
             log.info(
                 "load_persistent_parameters: %d records di DB, "
