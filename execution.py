@@ -486,15 +486,35 @@ class OrderExecutionManager:
                 signal.symbol, actual_filled,
             )
 
+        # [BUG-FIX] Sebelumnya caller (main.py._handle_buy) memakai
+        # trades[0].executed_price (harga CHUNK PERTAMA saja) sebagai
+        # entry_price untuk SELURUH posisi, padahal iceberg secara spesifik
+        # dipakai untuk order BESAR (>3% volume 24h) di mana harga antar
+        # chunk realistis bisa bergeser selama proses (jeda 0.8s per chunk).
+        # amount sudah benar diagregasi lewat note iceberg_actual_filled,
+        # tapi entry_price tidak punya mekanisme serupa — entry_price yang
+        # tercatat bisa meleset dari cost basis sebenarnya, berdampak ke
+        # akurasi PnL & pengecekan SL/TP sepanjang umur posisi.
+        # Sekarang: hitung rata-rata tertimbang harga eksekusi semua chunk
+        # yang berhasil filled, encode ke note yang sama seperti
+        # iceberg_actual_filled supaya caller bisa pakai harga yang akurat.
+        weighted_avg_price = signal.price
+        if done and actual_filled > 0:
+            weighted_avg_price = sum(
+                float(t.executed_price or 0) * float(t.filled or t.amount or 0)
+                for t in done
+            ) / actual_filled
+
         log.info(
-            "Iceberg selesai: %d/%d chunks filled | actual=%.8f | %s",
-            len(done), chunk_count, actual_filled, signal.symbol
+            "Iceberg selesai: %d/%d chunks filled | actual=%.8f | avg_price=%.8f | %s",
+            len(done), chunk_count, actual_filled, weighted_avg_price, signal.symbol
         )
     
         if done:
             await self.db.append_trade_note(
                 done[0].id,
                 f"iceberg_actual_filled={actual_filled:.8f}"
+                f"|iceberg_avg_price={weighted_avg_price:.8f}"
                 f"|chunks={len(done)}/{chunk_count}"
             )
     

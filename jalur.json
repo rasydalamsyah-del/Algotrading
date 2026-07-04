@@ -2918,7 +2918,7 @@
           "referenced_in_files": []
         },
         "OrderExecutionManager._process_fill": {
-          "line": 503,
+          "line": 523,
           "async": true,
           "args": [
             "self",
@@ -2948,7 +2948,7 @@
           "referenced_in_files": []
         },
         "OrderExecutionManager._build_signal_origin": {
-          "line": 596,
+          "line": 616,
           "async": false,
           "args": [
             "self",
@@ -16076,6 +16076,7 @@
             "self.db.update_position_entry_fee",
             "trade.notes.split",
             "<call>.startswith",
+            "tag2.split",
             "str",
             "signal.score_breakdown.to_dict",
             "datetime.now",
@@ -16084,7 +16085,7 @@
           "referenced_in_files": []
         },
         "TradingBot._handle_close": {
-          "line": 2736,
+          "line": 2762,
           "async": true,
           "args": [
             "self",
@@ -16100,7 +16101,7 @@
           "referenced_in_files": []
         },
         "TradingBot._close_position_market": {
-          "line": 2749,
+          "line": 2775,
           "async": true,
           "args": [
             "self",
@@ -16121,7 +16122,7 @@
           ]
         },
         "TradingBot._do_close_position": {
-          "line": 2770,
+          "line": 2796,
           "async": true,
           "args": [
             "self",
@@ -16163,7 +16164,7 @@
           "referenced_in_files": []
         },
         "TradingBot._refresh_portfolio": {
-          "line": 2981,
+          "line": 3007,
           "async": true,
           "args": [
             "self"
@@ -16195,7 +16196,7 @@
           "referenced_in_files": []
         },
         "TradingBot._on_trade_executed": {
-          "line": 3085,
+          "line": 3111,
           "async": true,
           "args": [
             "self",
@@ -16210,7 +16211,7 @@
           "referenced_in_files": []
         },
         "TradingBot.run_config_watcher": {
-          "line": 3096,
+          "line": 3122,
           "async": true,
           "args": [
             "self"
@@ -16253,7 +16254,7 @@
           "referenced_in_files": []
         },
         "TradingBot.run": {
-          "line": 3224,
+          "line": 3250,
           "async": true,
           "args": [
             "self"
@@ -16289,7 +16290,7 @@
           ]
         },
         "TradingBot.run_position_sync_loop": {
-          "line": 3268,
+          "line": 3294,
           "async": true,
           "args": [
             "self"
@@ -16304,7 +16305,7 @@
           "referenced_in_files": []
         },
         "main": {
-          "line": 3286,
+          "line": 3312,
           "async": true,
           "args": [],
           "docstring": null,

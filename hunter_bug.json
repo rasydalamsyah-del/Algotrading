@@ -15,9 +15,25 @@
       "nama_tier": "Jalur uang langsung",
       "alasan": "Bug di sini = kerugian finansial nyata & seketika (order salah, sizing salah, SL/TP tidak jalan). Prioritas tertinggi mutlak.",
       "files": [
-        {"file": "execution.py", "status": "PENDING", "audit_state_ref": "execution.py", "fokus_cross_check": "Order placement (market/limit), slippage guard, retry logic, partial fill handling, exchange error handling. Cek SEMUA pemanggil (main.py._handle_buy, _do_close_position, _close_position_market) benar-benar memproses return value (order id, filled amount, avg price) dengan benar — bukan cuma asumsi order selalu penuh."},
-        {"file": "risk.py", "status": "PENDING", "audit_state_ref": "risk.py", "fokus_cross_check": "Position sizing (Kelly/fixed), max drawdown check, daily loss limit, correlation check. Cek arah masuk: siapa yang memanggil risk manager sebelum eksekusi (commander.py Gate, main.py). Cek arah keluar: apakah risk.py benar-benar baca portfolio_state/equity TERBARU (bukan snapshot basi)."},
-        {"file": "exchange.py", "status": "PENDING", "audit_state_ref": "exchange.py", "fokus_cross_check": "ExchangeConnector (REST) & WebSocketFeed (real-time price/spread/orderbook). Cek reconnect logic, rate limit handling, precision/rounding harga-jumlah sebelum kirim order. PENTING: sudah ditemukan bug __dict__ vs method class di commander.py yang berakar dari sini — cek APAKAH ada pola serupa (getattr salah) di tempat lain yang memanggil method WebSocketFeed/ExchangeConnector."}
+        {
+          "file": "execution.py",
+          "status": "CROSS_CHECKED_FIXED",
+          "audit_state_ref": "execution.py",
+          "fokus_cross_check": "Order placement (market/limit), slippage guard, retry logic, partial fill handling, exchange error handling. Cek SEMUA pemanggil (main.py._handle_buy, _do_close_position, _close_position_market) benar-benar memproses return value (order id, filled amount, avg price) dengan benar — bukan cuma asumsi order selalu penuh.",
+          "bug_baru_ditemukan": "Iceberg entry_price/amount inconsistency (lihat detail lengkap di AUDIT_STATE.json execution.py -> bug_fixed_tambahan_dari_audit_file_lain). Cross-check dua arah (calls_out execute_signal->_execute_iceberg dan referenced_in_files main.py._handle_buy) berhasil menemukan bug yang lolos dari audit kronologis pertama karena baru terlihat saat membaca KEDUA sisi (yang dipanggil DAN pemanggilnya) secara bersamaan."
+        },
+        {
+          "file": "risk.py",
+          "status": "PENDING",
+          "audit_state_ref": "risk.py",
+          "fokus_cross_check": "Position sizing (Kelly/fixed), max drawdown check, daily loss limit, correlation check. Cek arah masuk: siapa yang memanggil risk manager sebelum eksekusi (commander.py Gate, main.py). Cek arah keluar: apakah risk.py benar-benar baca portfolio_state/equity TERBARU (bukan snapshot basi)."
+        },
+        {
+          "file": "exchange.py",
+          "status": "PENDING",
+          "audit_state_ref": "exchange.py",
+          "fokus_cross_check": "ExchangeConnector (REST) & WebSocketFeed (real-time price/spread/orderbook). Cek reconnect logic, rate limit handling, precision/rounding harga-jumlah sebelum kirim order. PENTING: sudah ditemukan bug __dict__ vs method class di commander.py yang berakar dari sini — cek APAKAH ada pola serupa (getattr salah) di tempat lain yang memanggil method WebSocketFeed/ExchangeConnector."
+        }
       ]
     },
     {
@@ -25,15 +41,60 @@
       "nama_tier": "Fondasi matematika (indikator teknikal)",
       "alasan": "Dipakai oleh SEMUA layer di atasnya (scorer, classifier, strategy). Bug matematis di sini menyebar diam-diam ke seluruh sistem tanpa error yang jelas — hasilnya cuma 'keputusan trading yang agak aneh' yang susah dilacak akarnya.",
       "files": [
-        {"file": "ta_compat.py", "status": "PENDING", "audit_state_ref": "ta_compat.py", "fokus_cross_check": "Layer kompatibilitas pandas-ta. Cek SEMUA fungsi indikator yang dibungkus di sini benar-benar meneruskan parameter (period, source column) dengan benar ke pandas-ta, dan menangani NaN/kolom hilang tanpa crash diam-diam (mis. return 0 padahal harusnya NaN/None)."},
-        {"file": "indicators/trend.py", "status": "PENDING", "audit_state_ref": "indicators/trend.py", "fokus_cross_check": "EMA/SMA/Supertrend/ADX dll. Cek off-by-one di window/period, penggunaan .iloc[-1] vs .iloc[-2] yang konsisten (candle terakhir CLOSED vs BELUM CLOSED — bug klasik lookahead bias)."},
-        {"file": "indicators/momentum.py", "status": "PENDING", "audit_state_ref": "indicators/momentum.py", "fokus_cross_check": "RSI/MACD/Stochastic dll. Sama seperti trend.py — cek lookahead bias & pembagian dengan nol (RSI saat avg_loss=0)."},
-        {"file": "indicators/oscillators.py", "status": "PENDING", "audit_state_ref": "indicators/oscillators.py", "fokus_cross_check": "Cek normalisasi skala (0-100 vs 0-1) konsisten dgn caller di intelligence/scorer.py — mismatch skala adalah bug yang sangat mudah lolos review manual."},
-        {"file": "indicators/volatility.py", "status": "PENDING", "audit_state_ref": "indicators/volatility.py", "fokus_cross_check": "ATR dan turunannya dipakai LANGSUNG untuk hitung SL/TP price di strategy.py/risk.py — bug kecil di sini = SL/TP salah tempat = kerugian nyata. Prioritas tinggi walau masuk tier 2."},
-        {"file": "indicators/strength.py", "status": "PENDING", "audit_state_ref": "indicators/strength.py", "fokus_cross_check": "Cek formula kombinasi multi-indikator tidak dobel-hitung komponen yang sama dengan bobot berbeda tanpa sadar."},
-        {"file": "indicators/structure.py", "status": "PENDING", "audit_state_ref": "indicators/structure.py", "fokus_cross_check": "Support/resistance, swing high/low. File terbesar di kategori indicators (1048 baris) — cek deteksi swing point tidak bocor data masa depan (harus pakai candle yang sudah confirmed)."},
-        {"file": "indicators/patterns.py", "status": "PENDING", "audit_state_ref": "indicators/patterns.py", "fokus_cross_check": "Candlestick pattern recognition. Cek pola deteksi tidak overlap/kontradiksi (mis. bullish & bearish pattern true bersamaan tanpa prioritas jelas)."},
-        {"file": "indicators/orderbook.py", "status": "PENDING", "audit_state_ref": "indicators/orderbook.py", "fokus_cross_check": "Analisis orderbook real-time (dipakai _get_ob_danger_level di main.py). Cek staleness check — apakah ada validasi orderbook snapshot tidak terlalu basi sebelum dipakai untuk keputusan Gate 3."}
+        {
+          "file": "ta_compat.py",
+          "status": "PENDING",
+          "audit_state_ref": "ta_compat.py",
+          "fokus_cross_check": "Layer kompatibilitas pandas-ta. Cek SEMUA fungsi indikator yang dibungkus di sini benar-benar meneruskan parameter (period, source column) dengan benar ke pandas-ta, dan menangani NaN/kolom hilang tanpa crash diam-diam (mis. return 0 padahal harusnya NaN/None)."
+        },
+        {
+          "file": "indicators/trend.py",
+          "status": "PENDING",
+          "audit_state_ref": "indicators/trend.py",
+          "fokus_cross_check": "EMA/SMA/Supertrend/ADX dll. Cek off-by-one di window/period, penggunaan .iloc[-1] vs .iloc[-2] yang konsisten (candle terakhir CLOSED vs BELUM CLOSED — bug klasik lookahead bias)."
+        },
+        {
+          "file": "indicators/momentum.py",
+          "status": "PENDING",
+          "audit_state_ref": "indicators/momentum.py",
+          "fokus_cross_check": "RSI/MACD/Stochastic dll. Sama seperti trend.py — cek lookahead bias & pembagian dengan nol (RSI saat avg_loss=0)."
+        },
+        {
+          "file": "indicators/oscillators.py",
+          "status": "PENDING",
+          "audit_state_ref": "indicators/oscillators.py",
+          "fokus_cross_check": "Cek normalisasi skala (0-100 vs 0-1) konsisten dgn caller di intelligence/scorer.py — mismatch skala adalah bug yang sangat mudah lolos review manual."
+        },
+        {
+          "file": "indicators/volatility.py",
+          "status": "PENDING",
+          "audit_state_ref": "indicators/volatility.py",
+          "fokus_cross_check": "ATR dan turunannya dipakai LANGSUNG untuk hitung SL/TP price di strategy.py/risk.py — bug kecil di sini = SL/TP salah tempat = kerugian nyata. Prioritas tinggi walau masuk tier 2."
+        },
+        {
+          "file": "indicators/strength.py",
+          "status": "PENDING",
+          "audit_state_ref": "indicators/strength.py",
+          "fokus_cross_check": "Cek formula kombinasi multi-indikator tidak dobel-hitung komponen yang sama dengan bobot berbeda tanpa sadar."
+        },
+        {
+          "file": "indicators/structure.py",
+          "status": "PENDING",
+          "audit_state_ref": "indicators/structure.py",
+          "fokus_cross_check": "Support/resistance, swing high/low. File terbesar di kategori indicators (1048 baris) — cek deteksi swing point tidak bocor data masa depan (harus pakai candle yang sudah confirmed)."
+        },
+        {
+          "file": "indicators/patterns.py",
+          "status": "PENDING",
+          "audit_state_ref": "indicators/patterns.py",
+          "fokus_cross_check": "Candlestick pattern recognition. Cek pola deteksi tidak overlap/kontradiksi (mis. bullish & bearish pattern true bersamaan tanpa prioritas jelas)."
+        },
+        {
+          "file": "indicators/orderbook.py",
+          "status": "PENDING",
+          "audit_state_ref": "indicators/orderbook.py",
+          "fokus_cross_check": "Analisis orderbook real-time (dipakai _get_ob_danger_level di main.py). Cek staleness check — apakah ada validasi orderbook snapshot tidak terlalu basi sebelum dipakai untuk keputusan Gate 3."
+        }
       ]
     },
     {
@@ -41,13 +102,48 @@
       "nama_tier": "Lapisan keputusan (sinyal & strategi)",
       "alasan": "Mengubah output Tier 2 (angka indikator) jadi keputusan beli/jual/hold. Bug di sini = sinyal salah arah atau salah timing walau indikator di bawahnya benar.",
       "files": [
-        {"file": "intelligence/scorer.py", "status": "PENDING", "audit_state_ref": "intelligence/scorer.py", "fokus_cross_check": "Kombinasi weighted-score dari semua indikator jadi total_score. Cek bobot dari profiles/weights.py benar-benar dibaca ulang tiap cycle (bukan di-cache basi), dan penjumlahan weighted score konsisten dengan skala yang dipakai threshold di profiles/thresholds.py."},
-        {"file": "intelligence/classifier.py", "status": "PENDING", "audit_state_ref": "intelligence/classifier.py", "fokus_cross_check": "Klasifikasi regime (trending/ranging/volatile). Dipakai is_regime_transition() yang baru saja dipakai fix Jalur Entry 2 di main.py — cek konsistensi definisi transisi regime antara sini dan caller-nya."},
-        {"file": "intelligence/validator.py", "status": "PENDING", "audit_state_ref": "intelligence/validator.py", "fokus_cross_check": "File terbesar di intelligence/ (1809 baris, 36 fungsi). Validasi sinyal sebelum eksekusi — cek SEMUA validator benar2 dipanggil dari commander.py/strategy.py, tidak ada validator yang didefinisikan tapi tidak pernah dipanggil (dead validation = false sense of security)."},
-        {"file": "intelligence/observer.py", "status": "PENDING", "audit_state_ref": "intelligence/observer.py", "fokus_cross_check": "Observasi/monitoring pasif. Cek tidak ada side-effect tersembunyi yang mengubah state trading (observer harusnya read-only)."},
-        {"file": "intelligence/trade_guardian.py", "status": "PENDING", "audit_state_ref": "intelligence/trade_guardian.py", "fokus_cross_check": "ATG (Adaptive Trailing Guard) — baru ditemukan bug notifikasi trigger salah di main.py yang MENGGUNAKAN exit_reason dari sini. Cek exit_reason yang dikembalikan trade_guardian.py punya cukup informasi (mis. apakah exit karena profit-protect atau loss-cut) untuk konsumen di main.py menentukan trigger yang benar TANPA perlu hitung ulang tanda PnL secara terpisah."},
-        {"file": "intelligence/position_sync.py", "status": "PENDING", "audit_state_ref": "intelligence/position_sync.py", "fokus_cross_check": "Adopsi posisi Binance yang tidak ke-track. Cek race condition dengan run_sl_tp_monitor & run_scanner_loop yang jalan bersamaan — apakah ada locking/dedup supaya posisi yang sedang di-adopt tidak diproses ganda oleh loop lain."},
-        {"file": "strategy.py", "status": "PENDING", "audit_state_ref": "strategy.py", "fokus_cross_check": "File besar (1751 baris, 43 fungsi) — generate_signals, check_trailing_exit, SL/TP calculation. Cek SEMUA method dipanggil dari main.py dengan parameter yang benar (terutama df/confirmation_df/confirmation_timeframe di commander.process vs strategy.generate_signals langsung — dua jalur berbeda yang harus konsisten hasilnya)."}
+        {
+          "file": "intelligence/scorer.py",
+          "status": "PENDING",
+          "audit_state_ref": "intelligence/scorer.py",
+          "fokus_cross_check": "Kombinasi weighted-score dari semua indikator jadi total_score. Cek bobot dari profiles/weights.py benar-benar dibaca ulang tiap cycle (bukan di-cache basi), dan penjumlahan weighted score konsisten dengan skala yang dipakai threshold di profiles/thresholds.py."
+        },
+        {
+          "file": "intelligence/classifier.py",
+          "status": "PENDING",
+          "audit_state_ref": "intelligence/classifier.py",
+          "fokus_cross_check": "Klasifikasi regime (trending/ranging/volatile). Dipakai is_regime_transition() yang baru saja dipakai fix Jalur Entry 2 di main.py — cek konsistensi definisi transisi regime antara sini dan caller-nya."
+        },
+        {
+          "file": "intelligence/validator.py",
+          "status": "PENDING",
+          "audit_state_ref": "intelligence/validator.py",
+          "fokus_cross_check": "File terbesar di intelligence/ (1809 baris, 36 fungsi). Validasi sinyal sebelum eksekusi — cek SEMUA validator benar2 dipanggil dari commander.py/strategy.py, tidak ada validator yang didefinisikan tapi tidak pernah dipanggil (dead validation = false sense of security)."
+        },
+        {
+          "file": "intelligence/observer.py",
+          "status": "PENDING",
+          "audit_state_ref": "intelligence/observer.py",
+          "fokus_cross_check": "Observasi/monitoring pasif. Cek tidak ada side-effect tersembunyi yang mengubah state trading (observer harusnya read-only)."
+        },
+        {
+          "file": "intelligence/trade_guardian.py",
+          "status": "PENDING",
+          "audit_state_ref": "intelligence/trade_guardian.py",
+          "fokus_cross_check": "ATG (Adaptive Trailing Guard) — baru ditemukan bug notifikasi trigger salah di main.py yang MENGGUNAKAN exit_reason dari sini. Cek exit_reason yang dikembalikan trade_guardian.py punya cukup informasi (mis. apakah exit karena profit-protect atau loss-cut) untuk konsumen di main.py menentukan trigger yang benar TANPA perlu hitung ulang tanda PnL secara terpisah."
+        },
+        {
+          "file": "intelligence/position_sync.py",
+          "status": "PENDING",
+          "audit_state_ref": "intelligence/position_sync.py",
+          "fokus_cross_check": "Adopsi posisi Binance yang tidak ke-track. Cek race condition dengan run_sl_tp_monitor & run_scanner_loop yang jalan bersamaan — apakah ada locking/dedup supaya posisi yang sedang di-adopt tidak diproses ganda oleh loop lain."
+        },
+        {
+          "file": "strategy.py",
+          "status": "PENDING",
+          "audit_state_ref": "strategy.py",
+          "fokus_cross_check": "File besar (1751 baris, 43 fungsi) — generate_signals, check_trailing_exit, SL/TP calculation. Cek SEMUA method dipanggil dari main.py dengan parameter yang benar (terutama df/confirmation_df/confirmation_timeframe di commander.process vs strategy.generate_signals langsung — dua jalur berbeda yang harus konsisten hasilnya)."
+        }
       ]
     },
     {
@@ -55,10 +151,30 @@
       "nama_tier": "Konfigurasi & profil",
       "alasan": "Parameter yang dipakai Tier 3. Bug di sini = threshold/bobot salah tapi TIDAK ADA error — sistem jalan 'normal' dengan parameter yang salah.",
       "files": [
-        {"file": "profiles/base_profile.py", "status": "PENDING", "audit_state_ref": "profiles/base_profile.py", "fokus_cross_check": "Definisi dataclass profile & default value. Cek default yang dipakai saat coin belum punya profile spesifik tidak terlalu agresif/longgar dibanding intent aslinya."},
-        {"file": "profiles/weights.py", "status": "PENDING", "audit_state_ref": "profiles/weights.py", "fokus_cross_check": "PENTING: file ini di-EDIT LANGSUNG (string manipulation) oleh learning/meta_learner.py._apply_weight_change() saat runtime! Cek format file masih persis sesuai yang diharapkan regex/string-replace di meta_learner.py — perubahan struktur file ini bisa DIAM-DIAM merusak auto-tuning tanpa error yang jelas."},
-        {"file": "profiles/thresholds.py", "status": "PENDING", "audit_state_ref": "profiles/thresholds.py", "fokus_cross_check": "get_dynamic_threshold() dipakai scorer.py & validator.py — cek kedua caller memakai return value dengan asumsi skala/tipe yang sama persis."},
-        {"file": "profiles/registry.py", "status": "PENDING", "audit_state_ref": "profiles/registry.py", "fokus_cross_check": "get_coin_profile()/apply_parameter_override()/revert_parameter_override() — dipakai main.py, api_server.py, meta_learner.py, simulate_test.py. Cek apply/revert benar-benar симetris (apply lalu revert menghasilkan state identik dengan sebelum apply)."}
+        {
+          "file": "profiles/base_profile.py",
+          "status": "PENDING",
+          "audit_state_ref": "profiles/base_profile.py",
+          "fokus_cross_check": "Definisi dataclass profile & default value. Cek default yang dipakai saat coin belum punya profile spesifik tidak terlalu agresif/longgar dibanding intent aslinya."
+        },
+        {
+          "file": "profiles/weights.py",
+          "status": "PENDING",
+          "audit_state_ref": "profiles/weights.py",
+          "fokus_cross_check": "PENTING: file ini di-EDIT LANGSUNG (string manipulation) oleh learning/meta_learner.py._apply_weight_change() saat runtime! Cek format file masih persis sesuai yang diharapkan regex/string-replace di meta_learner.py — perubahan struktur file ini bisa DIAM-DIAM merusak auto-tuning tanpa error yang jelas."
+        },
+        {
+          "file": "profiles/thresholds.py",
+          "status": "PENDING",
+          "audit_state_ref": "profiles/thresholds.py",
+          "fokus_cross_check": "get_dynamic_threshold() dipakai scorer.py & validator.py — cek kedua caller memakai return value dengan asumsi skala/tipe yang sama persis."
+        },
+        {
+          "file": "profiles/registry.py",
+          "status": "PENDING",
+          "audit_state_ref": "profiles/registry.py",
+          "fokus_cross_check": "get_coin_profile()/apply_parameter_override()/revert_parameter_override() — dipakai main.py, api_server.py, meta_learner.py, simulate_test.py. Cek apply/revert benar-benar симetris (apply lalu revert menghasilkan state identik dengan sebelum apply)."
+        }
       ]
     },
     {
@@ -66,10 +182,30 @@
       "nama_tier": "Pembelajaran adaptif (paling berisiko secara desain)",
       "alasan": "Mengubah parameter LIVE tanpa supervisi manusia langsung. Sudah terbukti di audit sebelumnya paling banyak bug tersembunyi (cache tidak jalan, guardrail bocor, auto-revert gagal setelah restart). Cross-check ulang WAJIB fokus ke interaksi ANTAR file di tier ini, bukan cuma internal masing-masing.",
       "files": [
-        {"file": "learning/coin_swap.py", "status": "PENDING", "audit_state_ref": "learning/coin_swap.py", "fokus_cross_check": "Sudah difix bug key .env WATCHLIST vs UNIVERSE_WATCHLIST. Cross-check ulang: pastikan TIDAK ADA tempat lain (script shell start.sh/stop.sh, .env.example) yang masih pakai key lama."},
-        {"file": "learning/cross_learn.py", "status": "PENDING", "audit_state_ref": "learning/cross_learn.py", "fokus_cross_check": "Sudah difix cache tidak terpakai. Cross-check ulang: verifikasi cache TTL 30 menit tidak menyebabkan analytics.py memakai data peer yang sudah kadaluarsa saat generate suggestion penting."},
-        {"file": "learning/analytics.py", "status": "PENDING", "audit_state_ref": "learning/analytics.py", "fokus_cross_check": "compute_attribution() — konsumen utama cross_learn.py & sumber data untuk meta_learner.py generate_suggestions(). Cek attribution report yang dihasilkan benar2 dipakai meta_learner dengan struktur field yang sama persis (nama key dict dsb)."},
-        {"file": "learning/meta_learner.py", "status": "PENDING", "audit_state_ref": "learning/meta_learner.py", "fokus_cross_check": "Sudah difix 2 bug (cooldown weight_, auto-revert persistence). Cross-check ulang: apakah MASIH ada jalur lain yang bisa mengubah profiles/weights.py atau profiles/thresholds.py TANPA lewat guardrail meta_learner.py sama sekali (mis. langsung dari api_server.py endpoint config lain)?"}
+        {
+          "file": "learning/coin_swap.py",
+          "status": "PENDING",
+          "audit_state_ref": "learning/coin_swap.py",
+          "fokus_cross_check": "Sudah difix bug key .env WATCHLIST vs UNIVERSE_WATCHLIST. Cross-check ulang: pastikan TIDAK ADA tempat lain (script shell start.sh/stop.sh, .env.example) yang masih pakai key lama."
+        },
+        {
+          "file": "learning/cross_learn.py",
+          "status": "PENDING",
+          "audit_state_ref": "learning/cross_learn.py",
+          "fokus_cross_check": "Sudah difix cache tidak terpakai. Cross-check ulang: verifikasi cache TTL 30 menit tidak menyebabkan analytics.py memakai data peer yang sudah kadaluarsa saat generate suggestion penting."
+        },
+        {
+          "file": "learning/analytics.py",
+          "status": "PENDING",
+          "audit_state_ref": "learning/analytics.py",
+          "fokus_cross_check": "compute_attribution() — konsumen utama cross_learn.py & sumber data untuk meta_learner.py generate_suggestions(). Cek attribution report yang dihasilkan benar2 dipakai meta_learner dengan struktur field yang sama persis (nama key dict dsb)."
+        },
+        {
+          "file": "learning/meta_learner.py",
+          "status": "PENDING",
+          "audit_state_ref": "learning/meta_learner.py",
+          "fokus_cross_check": "Sudah difix 2 bug (cooldown weight_, auto-revert persistence). Cross-check ulang: apakah MASIH ada jalur lain yang bisa mengubah profiles/weights.py atau profiles/thresholds.py TANPA lewat guardrail meta_learner.py sama sekali (mis. langsung dari api_server.py endpoint config lain)?"
+        }
       ]
     },
     {
@@ -77,12 +213,42 @@
       "nama_tier": "Persistensi & antarmuka",
       "alasan": "Layer penyimpanan dan komunikasi keluar. Sudah lumayan diverifikasi cross-file selama audit awal, tapi field/kolom baru yang ditambahkan beberapa sesi terakhir (sentiment_score, since param, dst) perlu dicek ulang end-to-end.",
       "files": [
-        {"file": "database.py", "status": "PENDING", "audit_state_ref": "database.py", "fokus_cross_check": "Cek SEMUA kolom yang ditambahkan di sesi-sesi audit sebelumnya (sentiment_score, param since di get_trade_stats) benar2 dipakai konsisten di migration/schema, tidak ada mismatch tipe data antara model dataclass dan kolom SQL."},
-        {"file": "core/models.py", "status": "PENDING", "audit_state_ref": "core/models.py", "fokus_cross_check": "Dataclass definitions dipakai HAMPIR SEMUA file lain. Cek default_factory tidak ada yang mutable-default-bug tersembunyi, dan semua field yang diakses via getattr() di file lain benar2 ada di sini."},
-        {"file": "notifications.py", "status": "PENDING", "audit_state_ref": "notifications.py", "fokus_cross_check": "Cek SEMUA notify_* dipanggil dgn parameter yang benar dari main.py/telegram_bot.py — termasuk 2 fix trigger take_profit/stop_loss yang baru dibuat di main.py, pastikan notify_sl_tp_hit menangani kedua trigger dengan format pesan yang benar-benar berbeda dan jelas."},
-        {"file": "api_server.py", "status": "PENDING", "audit_state_ref": "api_server.py", "fokus_cross_check": "70 fungsi, endpoint terbanyak. Cek SEMUA endpoint yang dipanggil telegram_bot.py sudah 100% konsisten (sudah sebagian dicek saat audit telegram_bot.py — lanjutkan untuk endpoint yang dipakai dashboard/index.html yang BELUM pernah di-cross-check)."},
-        {"file": "telegram_bot.py", "status": "PENDING", "audit_state_ref": "telegram_bot.py", "fokus_cross_check": "Sudah difix 5 bug termasuk 2 cross-file kritis. Cross-check ulang: field response API lain (selain approve/reject) yang mungkin punya pola sama (field 'status' selalu sama, hasil asli di field lain)."},
-        {"file": "smoke_api.py", "status": "PENDING", "audit_state_ref": "smoke_api.py", "fokus_cross_check": "File kecil (18 baris) tapi pastikan endpoint yang di-smoke-test masih match dengan yang ada di api_server.py setelah semua perubahan sesi ini."}
+        {
+          "file": "database.py",
+          "status": "PENDING",
+          "audit_state_ref": "database.py",
+          "fokus_cross_check": "Cek SEMUA kolom yang ditambahkan di sesi-sesi audit sebelumnya (sentiment_score, param since di get_trade_stats) benar2 dipakai konsisten di migration/schema, tidak ada mismatch tipe data antara model dataclass dan kolom SQL."
+        },
+        {
+          "file": "core/models.py",
+          "status": "PENDING",
+          "audit_state_ref": "core/models.py",
+          "fokus_cross_check": "Dataclass definitions dipakai HAMPIR SEMUA file lain. Cek default_factory tidak ada yang mutable-default-bug tersembunyi, dan semua field yang diakses via getattr() di file lain benar2 ada di sini."
+        },
+        {
+          "file": "notifications.py",
+          "status": "PENDING",
+          "audit_state_ref": "notifications.py",
+          "fokus_cross_check": "Cek SEMUA notify_* dipanggil dgn parameter yang benar dari main.py/telegram_bot.py — termasuk 2 fix trigger take_profit/stop_loss yang baru dibuat di main.py, pastikan notify_sl_tp_hit menangani kedua trigger dengan format pesan yang benar-benar berbeda dan jelas."
+        },
+        {
+          "file": "api_server.py",
+          "status": "PENDING",
+          "audit_state_ref": "api_server.py",
+          "fokus_cross_check": "70 fungsi, endpoint terbanyak. Cek SEMUA endpoint yang dipanggil telegram_bot.py sudah 100% konsisten (sudah sebagian dicek saat audit telegram_bot.py — lanjutkan untuk endpoint yang dipakai dashboard/index.html yang BELUM pernah di-cross-check)."
+        },
+        {
+          "file": "telegram_bot.py",
+          "status": "PENDING",
+          "audit_state_ref": "telegram_bot.py",
+          "fokus_cross_check": "Sudah difix 5 bug termasuk 2 cross-file kritis. Cross-check ulang: field response API lain (selain approve/reject) yang mungkin punya pola sama (field 'status' selalu sama, hasil asli di field lain)."
+        },
+        {
+          "file": "smoke_api.py",
+          "status": "PENDING",
+          "audit_state_ref": "smoke_api.py",
+          "fokus_cross_check": "File kecil (18 baris) tapi pastikan endpoint yang di-smoke-test masih match dengan yang ada di api_server.py setelah semua perubahan sesi ini."
+        }
       ]
     },
     {
@@ -90,7 +256,12 @@
       "nama_tier": "Orkestrator",
       "alasan": "Bergantung pada semua tier di atas sudah benar. Sudah diaudit serius penuh di sesi sebelumnya (6 bug ditemukan & difix) — cross-check ulang di sini lebih ke arah memverifikasi INTERAKSI dengan tier lain pasca-fix, bukan membaca ulang dari nol.",
       "files": [
-        {"file": "main.py", "status": "PENDING", "audit_state_ref": "main.py", "fokus_cross_check": "Fokus HANYA ke titik-titik integrasi dengan file yang baru saja di-cross-check ulang di tier 1-6 — apakah ada bug baru yang muncul akibat fix di file lain (mis. signature berubah, field baru yang belum dibaca main.py)."}
+        {
+          "file": "main.py",
+          "status": "PENDING",
+          "audit_state_ref": "main.py",
+          "fokus_cross_check": "Fokus HANYA ke titik-titik integrasi dengan file yang baru saja di-cross-check ulang di tier 1-6 — apakah ada bug baru yang muncul akibat fix di file lain (mis. signature berubah, field baru yang belum dibaca main.py)."
+        }
       ]
     }
   ],

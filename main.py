@@ -2541,6 +2541,14 @@ class TradingBot:
             return
 
         actual_amount = float(trade.filled or trade.amount)
+        # [BUG-FIX cross-file, pasangan fix di execution.py._execute_iceberg]
+        # Sebelumnya entry_price SELALU pakai trade.executed_price, yaitu
+        # harga CHUNK PERTAMA saja untuk order iceberg (trade = trades[0]).
+        # amount sudah benar diagregasi dari semua chunk lewat parsing note
+        # di bawah, tapi entry_price tidak — sekarang iceberg_avg_price
+        # (rata-rata tertimbang harga eksekusi semua chunk) turut di-parse
+        # dan dipakai kalau ada, supaya cost basis posisi akurat.
+        entry_price = trade.executed_price
         if trade.notes and "iceberg_actual_filled=" in (trade.notes or ""):
             try:
                 tag    = next(p for p in trade.notes.split("|") if p.strip().startswith("iceberg_actual_filled="))
@@ -2550,12 +2558,21 @@ class TradingBot:
                     log.info("Iceberg actual_amount diambil dari notes: %s = %.8f", trade.symbol, actual_amount)
             except (StopIteration, ValueError, IndexError) as e:
                 log.warning("Gagal parse iceberg_actual_filled: %s — fallback %.8f", e, actual_amount)
+            try:
+                tag2 = next((p for p in trade.notes.split("|") if p.strip().startswith("iceberg_avg_price=")), None)
+                if tag2:
+                    parsed_price = float(tag2.split("=")[1])
+                    if parsed_price > 0:
+                        entry_price = parsed_price
+                        log.info("Iceberg entry_price diambil dari rata-rata tertimbang notes: %s = %.8f", trade.symbol, entry_price)
+            except (ValueError, IndexError) as e:
+                log.warning("Gagal parse iceberg_avg_price: %s — fallback executed_price %.8f", e, entry_price)
 
         try:
             await self.db.upsert_position(symbol, {
                 "entry_time":        datetime.now(timezone.utc).replace(tzinfo=None),
-                "entry_price":       round(trade.executed_price, 8),
-                "current_price":     round(trade.executed_price, 8),
+                "entry_price":       round(entry_price, 8),
+                "current_price":     round(entry_price, 8),
                 "amount":            round(actual_amount, 8),
                 "side":              "long",
                 "is_open":           True,
@@ -2614,10 +2631,19 @@ class TradingBot:
             log.warning("Entry params cache kosong untuk %s — re-compute dari profile.", symbol)
             atr_val = float(atr) if atr else 0.0
             try:
+                # [BUG-FIX] Konsisten dengan fix iceberg entry_price di atas —
+                # sebelumnya semua titik di bawah ini masih pakai
+                # trade.executed_price/trade.filled mentah (harga & amount
+                # CHUNK PERTAMA saja untuk order iceberg), bukan entry_price/
+                # actual_amount yang sudah benar diagregasi. Akibatnya untuk
+                # iceberg trade: tracker trailing-stop, log, dan notifikasi
+                # Telegram semua menampilkan/memakai harga & jumlah yang salah
+                # (cuma 1/N dari order sebenarnya) walau tabel positions sudah
+                # benar. Sekarang semua pakai entry_price & actual_amount.
                 p = self.strategy._resolve_params(
-                    symbol, float(trade.executed_price), atr_val, 1.0, 55.0,
+                    symbol, float(entry_price), atr_val, 1.0, 55.0,
                 )
-                atr_pct = (atr_val / float(trade.executed_price) * 100) if trade.executed_price else 0.0
+                atr_pct = (atr_val / float(entry_price) * 100) if entry_price else 0.0
                 prof = get_coin_profile(symbol)
                 exit_mode = (
                     ExitMode.RIDE_THE_WAVE
@@ -2647,17 +2673,17 @@ class TradingBot:
                 with self.strategy._lock:
                     tracker = self.strategy._pos_trackers.get(symbol)
                     if tracker:
-                        tracker.entry_price   = float(trade.executed_price)
-                        tracker.highest_price = float(trade.executed_price)
+                        tracker.entry_price   = float(entry_price)
+                        tracker.highest_price = float(entry_price)
                 log.debug(
                     "register_position skip %s — tracker sudah ada dari commander. "
                     "entry_price diupdate ke harga fill aktual: %.6f",
-                    symbol, float(trade.executed_price),
+                    symbol, float(entry_price),
                 )
             else:
                 self.strategy.register_position(
                     symbol=symbol,
-                    entry_price=float(trade.executed_price),
+                    entry_price=float(entry_price),
                     exit_mode=exit_mode,
                     p=p,
                 )
@@ -2677,12 +2703,12 @@ class TradingBot:
 
         log.info(
             "POSISI DIBUKA: %s | entry=%.6f amount=%.8f SL=%.6f TP=%.6f",
-            symbol, trade.executed_price, float(trade.filled or trade.amount),
+            symbol, entry_price, actual_amount,
             assessment.stop_loss or 0, assessment.take_profit or 0,
         )
         await self.db.save_log(
             "INFO", "main",
-            f"Posisi dibuka: {symbol} @ {trade.executed_price:.6f} "
+            f"Posisi dibuka: {symbol} @ {entry_price:.6f} "
             f"SL={assessment.stop_loss or 0:.6f} "
             f"TP={assessment.take_profit or 0:.6f}",
         )
@@ -2691,8 +2717,8 @@ class TradingBot:
         await self.notifier.notify_trade_opened(
             symbol=symbol,
             side="buy",
-            entry_price=float(trade.executed_price),
-            amount=float(trade.filled or trade.amount),
+            entry_price=float(entry_price),
+            amount=float(actual_amount),
             stop_loss=assessment.stop_loss,
             take_profit=assessment.take_profit,
             atr=float(atr) if atr else None,
@@ -2706,8 +2732,8 @@ class TradingBot:
             await self.notifier.notify_projection(
                 symbol=symbol,
                 side="buy",
-                entry_price=float(trade.executed_price),
-                amount=float(trade.filled or trade.amount),
+                entry_price=float(entry_price),
+                amount=float(actual_amount),
                 stop_loss=assessment.stop_loss,
                 take_profit=assessment.take_profit,
                 atr=float(atr) if atr else None,
