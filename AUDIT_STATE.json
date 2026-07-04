@@ -140,6 +140,9 @@
         "run_coin_swap_loop() dan run_position_sync_loop() pakai \"while True:\" bukan \"while self.is_running:\" seperti loop lain - stilistik inkonsisten tapi BUKAN bug shutdown karena asyncio.CancelledError adalah BaseException (bukan Exception) sejak Python 3.8, jadi tidak tertangkap oleh \"except Exception\" di dalam loop - task.cancel() saat stop() tetap berhasil menghentikan loop ini.",
         "IntelligenceCommander.process() (dipanggil dari run_strategy_loop) internal membuat SignalEvent BUY dengan score_breakdown berupa dict polos (bukan ScoreBreakdown dataclass) - tapi caller (run_strategy_loop) SELALU skip signal BUY dari path ini (if sig.signal_type==BUY: continue), jadi tidak pernah sampai ke _handle_buy. Guard hasattr yang ditambahkan tetap berguna sebagai defensif jangka panjang.",
         "run_strategy_loop: loop for-position tanpa sleep internal tapi ada await asyncio.sleep(CANDLE_POLL_INTERVAL) di akhir while-body (di luar try/except) - dipastikan tidak busy-loop."
+      ],
+      "bug_fixed_tambahan_dari_audit_file_lain": [
+        "BUG HUNT CROSS-CHECK dari execution.py (fix 2-arah, lihat entry execution.py): _handle_buy() sebelumnya pakai trade.executed_price/trade.filled MENTAH di 7 titik (re-compute params, tracker trailing-stop entry_price/highest_price, log POSISI DIBUKA, notify_trade_opened, notify_projection) -- untuk order iceberg ini cuma harga/amount CHUNK PERTAMA, bukan rata-rata/total sebenarnya. upsert_position() sudah benar duluan (pakai actual_amount hasil parsing note), tapi 7 titik lain belum konsisten. Fix: tambah parsing note iceberg_avg_price= (baru, pasangan iceberg_actual_filled yang sudah ada), lalu SEMUA 7 titik itu diseragamkan pakai entry_price & actual_amount yang benar."
       ]
     },
     "profiles/base_profile.py": {
