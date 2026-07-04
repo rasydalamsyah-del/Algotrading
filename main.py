@@ -1393,12 +1393,26 @@ class TradingBot:
                                 log.debug("Jalur Entry 2 error %s: %s", symbol, _te_err)
                                 return
                             # ── End Jalur Entry 2 ──
-                        log.info(
-                            "[Gate4.5] Commander APPROVE %s | kelly=%.2f%% gates_passed=%s",
-                            symbol,
-                            _cmd_decision.position_size_pct or 0.0,
-                            _cmd_decision.gates_passed,
-                        )
+                            # [BUG-FIX] Sebelumnya eksekusi jatuh terus ke log
+                            # "Commander APPROVE" di bawah walau baris ini
+                            # dicapai justru karena commander REJECT dan lolos
+                            # lewat bypass Jalur Entry 2 — log jadi menyesatkan
+                            # (bilang APPROVE padahal REJECT+bypass, dan
+                            # position_size_pct dari _cmd_decision yang REJECT
+                            # biasanya 0.0, bukan size sungguhan yang dipakai).
+                            # Sekarang beri log terpisah lalu skip log APPROVE.
+                            log.info(
+                                "[Gate4.5] Lanjut via Entry 2 bypass %s "
+                                "(bukan commander approve)",
+                                symbol,
+                            )
+                        else:
+                            log.info(
+                                "[Gate4.5] Commander APPROVE %s | kelly=%.2f%% gates_passed=%s",
+                                symbol,
+                                _cmd_decision.position_size_pct or 0.0,
+                                _cmd_decision.gates_passed,
+                            )
                     except Exception as _cmd_err:
                         log.warning(
                             "[Gate4.5] Commander error %s: %s — lanjut tanpa full gate",
@@ -1947,8 +1961,16 @@ class TradingBot:
                             est_pnl = 0.0
                             if pos.entry_price and pos.amount:
                                 est_pnl = (price - pos.entry_price) * pos.amount
+                            # [BUG-FIX] Sebelumnya trigger="take_profit" di-hardcode
+                            # untuk SEMUA ATG exit, padahal ATG bisa saja exit di
+                            # kondisi rugi (mis. momentum berbalik sebelum harga
+                            # sempat menyentuh SL asli). Notifikasi jadi salah:
+                            # user lihat "🎯 TAKE PROFIT HIT" padahal Est PnL
+                            # negatif. Sekarang trigger ditentukan dari tanda
+                            # est_pnl yang sebenarnya.
+                            _atg_trigger = "take_profit" if est_pnl >= 0 else "stop_loss"
                             await self.notifier.notify_sl_tp_hit(
-                                symbol=pos.symbol, trigger="take_profit",
+                                symbol=pos.symbol, trigger=_atg_trigger,
                                 price=price, entry_price=pos.entry_price, pnl=est_pnl,
                             )
                             await self._close_position_market(pos, price, _atg_result.exit_reason)
@@ -2069,9 +2091,21 @@ class TradingBot:
                         )
                         est_pnl = 0.0
                         if pos.entry_price and pos.amount:
-                            est_pnl = (price - pos.entry_price) * pos.amount
+                            est_pnl = (
+                                (price - pos.entry_price) * pos.amount
+                                if pos.side == "long"
+                                else (pos.entry_price - price) * pos.amount
+                            )
+                        # [BUG-FIX] Sama seperti ATG exit: trigger sebelumnya
+                        # di-hardcode "take_profit" untuk SEMUA trailing exit.
+                        # Trailing exit BIASANYA memang profitable (baru aktif
+                        # setelah harga bergerak favorable), tapi tidak
+                        # dijamin selalu positif di semua kondisi edge-case
+                        # (mis. gap harga). Tentukan dari tanda est_pnl supaya
+                        # notifikasi selalu akurat.
+                        _trail_trigger = "take_profit" if est_pnl >= 0 else "stop_loss"
                         await self.notifier.notify_sl_tp_hit(
-                            symbol=pos.symbol, trigger="take_profit",
+                            symbol=pos.symbol, trigger=_trail_trigger,
                             price=price, entry_price=pos.entry_price, pnl=est_pnl,
                         )
                         await self._close_position_market(pos, price, trailing_reason)
@@ -2293,7 +2327,6 @@ class TradingBot:
                     )
                     await self.notifier.notify_info(msg)
                 except Exception as e:
-                    log.warning("ShadowTrade: gagal kirim notif: %s", e)
                     log.warning("ShadowTrade: gagal kirim notif: %s", e)
 
         except Exception as e:
@@ -2685,10 +2718,14 @@ class TradingBot:
                 # memanggil score_breakdown.items() yang hanya ada di dict —
                 # AttributeError setiap kali notify_projection dipanggil dengan
                 # score_breakdown terisi. Fix: konversi ke dict via .to_dict().
+                # [HARDENING] Guard hanya cek "is not None" sebelumnya — kalau
+                # suatu saat score_breakdown berupa dict polos (bukan
+                # ScoreBreakdown dataclass), .to_dict() akan crash. Sekarang
+                # cek hasattr dulu supaya aman untuk kedua bentuk.
                 score_breakdown=(
                     signal.score_breakdown.to_dict()
-                    if signal.score_breakdown is not None
-                    else {}
+                    if hasattr(signal.score_breakdown, "to_dict")
+                    else (signal.score_breakdown or {})
                 ),
                 regime=signal.regime or "",
                 narrative=signal.scoring_narrative or "",
@@ -3127,6 +3164,34 @@ class TradingBot:
                                         await self.db.save_log("INFO","config_watcher","WS feed reinit OK.")
                                     except Exception as ws_ex:
                                         log.error("[ConfigWatcher] WS feed reinit error: %s", ws_ex)
+
+                                    # [BUG-FIX] Sebelumnya setelah self.exchange dan
+                                    # self.ws_feed diganti dengan instance BARU,
+                                    # komponen lain yang menyimpan REFERENSI ke
+                                    # instance LAMA (self.executor.exchange/.ws_feed,
+                                    # self._commander._exchange via inject_dependencies,
+                                    # self.strategy._ws_feed) tidak pernah diupdate.
+                                    # Akibatnya setelah ganti credential via /setconfig,
+                                    # order eksekusi & gate spread commander tetap
+                                    # memakai ExchangeConnector/WebSocketFeed LAMA yang
+                                    # sudah di-disconnect/stop — order berikutnya bisa
+                                    # gagal diam-diam atau memakai koneksi basi.
+                                    # Sekarang: propagate instance baru ke semua
+                                    # komponen yang menyimpannya.
+                                    if self.executor is not None:
+                                        self.executor.exchange = self.exchange
+                                        self.executor.ws_feed  = self.ws_feed
+                                        log.info("[ConfigWatcher] Executor exchange/ws_feed diperbarui.")
+                                    if self._commander is not None and hasattr(self._commander, "inject_dependencies"):
+                                        self._commander.inject_dependencies(
+                                            exchange_connector=self.ws_feed,
+                                            risk_manager=self.risk_manager,
+                                        )
+                                        log.info("[ConfigWatcher] Commander exchange connector diperbarui.")
+                                    if self.strategy is not None and hasattr(self.strategy, "_ws_feed"):
+                                        self.strategy._ws_feed = self.ws_feed
+                                        log.info("[ConfigWatcher] Strategy ws_feed diperbarui.")
+
                                     # Validasi watchlist per exchange baru
                                     invalid_symbols = []
                                     for sym in self.config["universe_watchlist"]:
