@@ -87,8 +87,8 @@
           "fokus_cross_check": "Position sizing (Kelly/fixed), max drawdown check, daily loss limit, correlation check. Cek arah masuk: siapa yang memanggil risk manager sebelum eksekusi (commander.py Gate, main.py). Cek arah keluar: apakah risk.py benar-benar baca portfolio_state/equity TERBARU (bukan snapshot basi).",
           "putaran": {
             "putaran_2_cross_check_dua_arah": {
-              "status": "PENDING",
-              "catatan": null
+              "status": "CROSS_CHECKED_FIXED",
+              "catatan": "Bug signifikan: _update_config() incomplete field refresh + main.py trigger condition tidak lengkap. Lihat AUDIT_STATE.json risk.py & main.py -> bug_fixed_tambahan_dari_audit_file_lain. Semua fungsi lain (evaluate_order, _compute_position_size, _compute_sl_tp, check_breakeven_sl, check_trailing_sl, metrics) diverifikasi caller-nya di main.py/simulate_test.py/api_server.py, signature & pemakaian return value konsisten, tidak ada masalah."
             },
             "putaran_3_validasi_matematika": {
               "status": "PENDING",

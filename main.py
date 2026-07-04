@@ -3138,7 +3138,26 @@ class TradingBot:
                             # Update ws_feed untuk subscribe koin baru
                             if self.ws_feed:
                                 await self.ws_feed.add_symbols(self.config["universe_watchlist"])
-                        if any(k in applied for k in ["max_drawdown_pct","risk_per_trade_pct","max_open_positions"]):
+                        # [BUG-FIX cross-file, pasangan fix di risk.py._update_config]
+                        # Sebelumnya trigger cuma cek 3 key (max_drawdown_pct,
+                        # risk_per_trade_pct, max_open_positions), padahal
+                        # RiskManager._update_config sebenarnya (setelah fix)
+                        # meng-cover 13 field. Kalau user ganti stop_loss_pct/
+                        # take_profit_pct/atr_multiplier_sl/dst via /setconfig,
+                        # self.config sudah keupdate & /getconfig menampilkan
+                        # nilai baru (seolah berhasil), tapi RiskManager TIDAK
+                        # PERNAH tahu karena trigger ini tidak mencakup key
+                        # tsb — order baru tetap pakai SL/TP lama sampai
+                        # restart penuh. Sekarang daftar diperluas mencakup
+                        # semua key yang benar-benar dipakai RiskManager.
+                        if any(k in applied for k in [
+                            "max_drawdown_pct", "risk_per_trade_pct", "max_open_positions",
+                            "daily_loss_limit_pct", "max_position_size_pct",
+                            "stop_loss_pct", "take_profit_pct",
+                            "atr_multiplier_sl", "atr_multiplier_tp",
+                            "trailing_atr_mult", "use_trailing_stop",
+                            "min_order_value_usdt", "max_loss_per_symbol",
+                        ]):
                             self.risk_manager._update_config(self.config)
                         if any(k in applied for k in ["telegram_enabled","telegram_bot_token","telegram_chat_id"]):
                             self.notifier._update_config(self.config)

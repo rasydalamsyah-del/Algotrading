@@ -3082,6 +3082,7 @@
           "calls_out": [
             "float",
             "int",
+            "bool",
             "log.info",
             "config.get"
           ],
@@ -3091,7 +3092,7 @@
           ]
         },
         "RiskManager.is_halted": {
-          "line": 113,
+          "line": 136,
           "async": false,
           "args": [
             "self"
@@ -3101,7 +3102,7 @@
           "referenced_in_files": []
         },
         "RiskManager.halt_reason": {
-          "line": 117,
+          "line": 140,
           "async": false,
           "args": [
             "self"
@@ -3111,7 +3112,7 @@
           "referenced_in_files": []
         },
         "RiskManager.halt_detail": {
-          "line": 123,
+          "line": 146,
           "async": false,
           "args": [
             "self"
@@ -3121,7 +3122,7 @@
           "referenced_in_files": []
         },
         "RiskManager.current_drawdown_pct": {
-          "line": 127,
+          "line": 150,
           "async": false,
           "args": [
             "self"
@@ -3133,7 +3134,7 @@
           "referenced_in_files": []
         },
         "RiskManager.daily_loss_pct": {
-          "line": 131,
+          "line": 154,
           "async": false,
           "args": [
             "self"
@@ -3145,7 +3146,7 @@
           "referenced_in_files": []
         },
         "RiskManager.daily_loss_limit_pct": {
-          "line": 135,
+          "line": 158,
           "async": false,
           "args": [
             "self"
@@ -3155,7 +3156,7 @@
           "referenced_in_files": []
         },
         "RiskManager.equity_at_day_start": {
-          "line": 139,
+          "line": 162,
           "async": false,
           "args": [
             "self"
@@ -3165,7 +3166,7 @@
           "referenced_in_files": []
         },
         "RiskManager._compute_dynamic_daily_limit": {
-          "line": 142,
+          "line": 165,
           "async": false,
           "args": [
             "self",
@@ -3181,7 +3182,7 @@
           "referenced_in_files": []
         },
         "RiskManager._compute_low_balance_threshold": {
-          "line": 155,
+          "line": 178,
           "async": false,
           "args": [
             "self"
@@ -3194,7 +3195,7 @@
           "referenced_in_files": []
         },
         "RiskManager.update_portfolio_state": {
-          "line": 194,
+          "line": 217,
           "async": false,
           "args": [
             "self",
@@ -3221,7 +3222,7 @@
           ]
         },
         "RiskManager.halt_trading": {
-          "line": 289,
+          "line": 312,
           "async": false,
           "args": [
             "self",
@@ -3239,7 +3240,7 @@
           ]
         },
         "RiskManager.resume_trading": {
-          "line": 298,
+          "line": 321,
           "async": false,
           "args": [
             "self"
@@ -3254,7 +3255,7 @@
           ]
         },
         "RiskManager._resume": {
-          "line": 307,
+          "line": 330,
           "async": false,
           "args": [
             "self"
@@ -3267,7 +3268,7 @@
           "referenced_in_files": []
         },
         "RiskManager._persist_halt": {
-          "line": 314,
+          "line": 337,
           "async": false,
           "args": [
             "self"
@@ -3281,7 +3282,7 @@
           "referenced_in_files": []
         },
         "RiskManager._clear_halt_persist": {
-          "line": 327,
+          "line": 350,
           "async": false,
           "args": [
             "self"
@@ -3295,7 +3296,7 @@
           "referenced_in_files": []
         },
         "RiskManager.record_symbol_loss": {
-          "line": 337,
+          "line": 360,
           "async": false,
           "args": [
             "self",
@@ -3314,7 +3315,7 @@
           ]
         },
         "RiskManager.is_symbol_halted": {
-          "line": 349,
+          "line": 372,
           "async": false,
           "args": [
             "self",
@@ -3327,7 +3328,7 @@
           "referenced_in_files": []
         },
         "RiskManager.reset_symbol_halts": {
-          "line": 352,
+          "line": 375,
           "async": false,
           "args": [
             "self"
@@ -3341,7 +3342,7 @@
           "referenced_in_files": []
         },
         "RiskManager.evaluate_order": {
-          "line": 357,
+          "line": 380,
           "async": true,
           "args": [
             "self",
@@ -3365,7 +3366,7 @@
           ]
         },
         "RiskManager._evaluate_order_locked": {
-          "line": 375,
+          "line": 398,
           "async": true,
           "args": [
             "self",
@@ -3393,7 +3394,7 @@
           "referenced_in_files": []
         },
         "RiskManager._compute_position_size": {
-          "line": 524,
+          "line": 547,
           "async": false,
           "args": [
             "self",
@@ -3412,7 +3413,7 @@
           ]
         },
         "RiskManager._compute_sl_tp": {
-          "line": 574,
+          "line": 597,
           "async": false,
           "args": [
             "self",
@@ -3429,7 +3430,7 @@
           "referenced_in_files": []
         },
         "RiskManager.check_breakeven_sl": {
-          "line": 619,
+          "line": 642,
           "async": false,
           "args": [
             "self",
@@ -3450,7 +3451,7 @@
           ]
         },
         "RiskManager.check_trailing_sl": {
-          "line": 656,
+          "line": 679,
           "async": false,
           "args": [
             "self",
@@ -3473,7 +3474,7 @@
           ]
         },
         "RiskManager.compute_sharpe_ratio": {
-          "line": 713,
+          "line": 736,
           "async": false,
           "args": [
             "pnl_list",
@@ -3494,7 +3495,7 @@
           ]
         },
         "RiskManager.compute_sortino_ratio": {
-          "line": 726,
+          "line": 749,
           "async": false,
           "args": [
             "pnl_list",
@@ -3515,7 +3516,7 @@
           ]
         },
         "RiskManager.compute_max_drawdown": {
-          "line": 742,
+          "line": 765,
           "async": false,
           "args": [
             "equity_curve"
@@ -3538,7 +3539,7 @@
           ]
         },
         "RiskManager.compute_calmar_ratio": {
-          "line": 761,
+          "line": 784,
           "async": false,
           "args": [
             "annualized_return_pct",
@@ -3551,7 +3552,7 @@
           ]
         },
         "RiskManager.compute_profit_factor": {
-          "line": 770,
+          "line": 793,
           "async": false,
           "args": [
             "pnl_list"
@@ -3568,7 +3569,7 @@
           ]
         },
         "RiskManager.compute_win_rate": {
-          "line": 780,
+          "line": 803,
           "async": false,
           "args": [
             "pnl_list"
@@ -3584,7 +3585,7 @@
           ]
         },
         "RiskManager.compute_expectancy": {
-          "line": 786,
+          "line": 809,
           "async": false,
           "args": [
             "pnl_list"
@@ -3599,7 +3600,7 @@
           ]
         },
         "RiskManager.compute_avg_win_loss_ratio": {
-          "line": 792,
+          "line": 815,
           "async": false,
           "args": [
             "pnl_list"
@@ -3615,7 +3616,7 @@
           ]
         },
         "RiskManager.get_system_health": {
-          "line": 799,
+          "line": 822,
           "async": false,
           "args": [
             "self"
@@ -16254,7 +16255,7 @@
           "referenced_in_files": []
         },
         "TradingBot.run": {
-          "line": 3250,
+          "line": 3269,
           "async": true,
           "args": [
             "self"
@@ -16290,7 +16291,7 @@
           ]
         },
         "TradingBot.run_position_sync_loop": {
-          "line": 3294,
+          "line": 3313,
           "async": true,
           "args": [
             "self"
@@ -16305,7 +16306,7 @@
           "referenced_in_files": []
         },
         "main": {
-          "line": 3312,
+          "line": 3331,
           "async": true,
           "args": [],
           "docstring": null,

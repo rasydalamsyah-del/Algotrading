@@ -92,19 +92,42 @@ class RiskManager:
 
     def _update_config(self, config: dict) -> None:
         """Hot-reload parameter risk dari config terbaru."""
+        # [BUG-FIX] Sebelumnya fungsi ini HANYA refresh 5 dari 13 field yang
+        # di-inisialisasi __init__ (max_drawdown_pct, risk_per_trade_pct,
+        # max_open_positions, daily_loss_limit_pct, max_position_size_pct).
+        # Field lain (stop_loss_pct, take_profit_pct, atr_multiplier_sl/tp,
+        # trailing_atr_mult, use_trailing_stop, min_order_value_usdt,
+        # max_loss_per_symbol) TIDAK PERNAH direfresh di sini — walau
+        # /setconfig berhasil menulis nilai baru ke self.config (main.py) dan
+        # /getconfig menampilkannya seolah berhasil, RiskManager tetap pakai
+        # nilai LAMA untuk hitung SL/TP order baru sampai bot di-restart
+        # penuh. Sekarang: semua field yang ada di __init__ ikut direfresh.
         old_risk = self._risk_per_trade_pct
         old_dd   = self._max_drawdown_pct
         old_pos  = self._max_open_positions
-        self._max_drawdown_pct   = float(config.get("max_drawdown_pct",   15.0))
-        self._risk_per_trade_pct = float(config.get("risk_per_trade_pct",  1.0))
-        self._max_open_positions = int(config.get("max_open_positions",    3))
-        self._daily_loss_limit_pct = float(config.get("daily_loss_limit_pct", 10.0))
+        self._max_drawdown_pct      = float(config.get("max_drawdown_pct",      15.0))
         self._max_position_size_pct = float(config.get("max_position_size_pct", 10.0))
+        self._max_open_positions    = int(config.get("max_open_positions",       3))
+        self._stop_loss_pct         = float(config.get("stop_loss_pct",          2.5))
+        self._take_profit_pct       = float(config.get("take_profit_pct",        5.0))
+        self._atr_sl_mult           = float(config.get("atr_multiplier_sl",      2.0))
+        self._atr_tp_mult           = float(config.get("atr_multiplier_tp",      3.5))
+        self._min_order_value_usdt  = float(config.get("min_order_value_usdt",  10.0))
+        self._daily_loss_limit_pct  = float(config.get("daily_loss_limit_pct",  10.0))
+        self._risk_per_trade_pct    = float(config.get("risk_per_trade_pct",     1.0))
+        self._trailing_atr_mult     = float(config.get("trailing_atr_mult",      1.5))
+        self._use_trailing_stop     = bool(config.get("use_trailing_stop",       True))
+        self._max_loss_per_symbol   = float(config.get("max_loss_per_symbol",    2.0))
         log.info(
-            "RiskManager config updated | MaxDD: %.1f→%.1f%% Risk/trade: %.2f→%.2f%% MaxOpen: %d→%d",
+            "RiskManager config updated | MaxDD: %.1f→%.1f%% Risk/trade: %.2f→%.2f%% "
+            "MaxOpen: %d→%d | SL:%.2f%% TP:%.2f%% ATR_SL:%.2fx ATR_TP:%.2fx "
+            "Trailing:%.2fx(%s)",
             old_dd, self._max_drawdown_pct,
             old_risk, self._risk_per_trade_pct,
             old_pos, self._max_open_positions,
+            self._stop_loss_pct, self._take_profit_pct,
+            self._atr_sl_mult, self._atr_tp_mult,
+            self._trailing_atr_mult, self._use_trailing_stop,
         )
 
 
