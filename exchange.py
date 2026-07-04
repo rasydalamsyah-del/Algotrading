@@ -380,6 +380,23 @@ class WebSocketFeed:
 
         self._running = False
         self._tasks:  List[asyncio.Task] = []
+        # [BUG-FIX] Task WS ticker (_watch_tickers_all atau per-symbol
+        # _watch_ticker) SEBELUMNYA mati PERMANEN setelah max_retries koneksi
+        # gagal berturut-turut, TANPA mekanisme restart apa pun. REST fallback
+        # (_poll_tickers, jalan tiap 10s) memang tetap menjaga data ticker
+        # tidak benar2 kosong, tapi efeknya: SATU burst gangguan WS sementara
+        # (mis. exchange maintenance singkat) men-downgrade SEMUA simbol
+        # (untuk _watch_tickers_all — jalur utama di Binance) ke REST-only
+        # polling SELAMANYA sampai bot di-restart manual, walau WS exchange
+        # sudah pulih normal beberapa menit kemudian. Ini juga menaikkan beban
+        # REST API secara signifikan (semua simbol lewat REST tiap 10s,
+        # bukan cuma yang benar2 degraded). Sekarang: _poll_tickers (loop
+        # yang sudah jalan terus tiap 10s) ikut memantau kesehatan task WS
+        # dan me-restart otomatis kalau task itu sudah 'done' (mati).
+        self._ws_ticker_task:    Optional[asyncio.Task] = None
+        self._ws_ticker_is_multiplexed: bool = False
+        self._ws_restart_count:  int = 0
+        self._ws_last_restart_ts: float = 0.0
 
         rest_cls = getattr(ccxt, exchange_id)
         self._rest_exchange: ccxt.Exchange = rest_cls({
@@ -408,7 +425,9 @@ class WebSocketFeed:
             log.info("Starting market feed (WS primary + REST fallback).")
             # Gunakan watch_tickers (multiplexed) kalau didukung, fallback ke per-symbol
             if hasattr(self._ex, "watch_tickers"):
-                self._tasks.append(asyncio.create_task(self._watch_tickers_all(), name="ws_tickers_all"))
+                self._ws_ticker_task = asyncio.create_task(self._watch_tickers_all(), name="ws_tickers_all")
+                self._ws_ticker_is_multiplexed = True
+                self._tasks.append(self._ws_ticker_task)
             else:
                 for symbol in self.symbols:
                     self._tasks.append(asyncio.create_task(self._watch_ticker(symbol), name=f"ws_ticker_{symbol}"))
@@ -424,6 +443,39 @@ class WebSocketFeed:
 
     async def _poll_tickers(self) -> None:
         while self._running:
+            # [BUG-FIX] Self-healing: cek apakah task WS ticker utama sudah
+            # mati (done) — kalau ya, restart dengan cooldown supaya tidak
+            # restart-loop rapat kalau exchange memang lagi down total.
+            if (
+                self._ws_ticker_is_multiplexed
+                and self._ws_ticker_task is not None
+                and self._ws_ticker_task.done()
+                and self._running
+            ):
+                now = time.time()
+                cooldown = min(30 * (2 ** self._ws_restart_count), 600)  # max 10 menit
+                if now - self._ws_last_restart_ts >= cooldown:
+                    self._ws_restart_count += 1
+                    self._ws_last_restart_ts = now
+                    log.warning(
+                        "WS ticker task mati (done) — restart otomatis "
+                        "#%d (cooldown %ds berikutnya kalau gagal lagi).",
+                        self._ws_restart_count, cooldown,
+                    )
+                    try:
+                        new_task = asyncio.create_task(
+                            self._watch_tickers_all(), name="ws_tickers_all"
+                        )
+                        self._ws_ticker_task = new_task
+                        self._tasks.append(new_task)
+                    except Exception as re_err:
+                        log.error("Gagal restart WS ticker task: %s", re_err)
+                else:
+                    log.debug(
+                        "WS ticker task mati, masih cooldown (%ds lagi)",
+                        cooldown - (now - self._ws_last_restart_ts),
+                    )
+
             tasks = [
                 self._poll_one_ticker(symbol)
                 for symbol in self.symbols
@@ -578,6 +630,7 @@ class WebSocketFeed:
                         if self.on_ticker:
                             await self.on_ticker(symbol, self.live_tickers[symbol])
                     retries = 0
+                    self._ws_restart_count = 0
             except asyncio.CancelledError:
                 break
             except Exception as e:

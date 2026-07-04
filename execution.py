@@ -311,11 +311,71 @@ class OrderExecutionManager:
                 "Limit %s unfilled setelah %ds — cancel, fallback market.",
                 order_id, self.FILL_TIMEOUT_SECS,
             )
+            # [BUG-FIX — edge case berbahaya] Sebelumnya: kalau cancel_order()
+            # throw exception, kode langsung ASUMSI "mungkin sudah filled"
+            # dan tetap lanjut submit MARKET ORDER BARU untuk full amount.
+            # Tapi exception di cancel_order bisa juga karena error jaringan
+            # SEMENTARA order aslinya MASIH HIDUP (belum filled, belum
+            # cancelled) di exchange. Kalau begitu, order lama itu bisa
+            # ke-fill belakangan SETELAH kita juga submit order market baru
+            # — DOUBLE FILL, posisi jadi 2x lipat dari yang diminta risk
+            # manager. Sekarang: setelah cancel gagal, verifikasi STATUS
+            # SEBENARNYA lewat fetch_order sebelum memutuskan apa pun.
+            cancel_failed = False
             try:
                 await self.exchange.cancel_order(order_id, signal.symbol)
             except Exception as ce:
-                log.warning("Cancel error (mungkin sudah filled): %s", ce)
-            
+                cancel_failed = True
+                log.warning(
+                    "Cancel error untuk order %s: %s — verifikasi status "
+                    "asli sebelum fallback market.", order_id, ce,
+                )
+
+            if cancel_failed:
+                try:
+                    verify_order = await self.exchange.fetch_order(order_id, signal.symbol)
+                    verify_status = verify_order.get("status", "")
+                except Exception as ve:
+                    log.critical(
+                        "TIDAK BISA verifikasi status order %s setelah cancel "
+                        "gagal (%s) — ABORT fallback market untuk cegah "
+                        "double-fill. Cek manual di exchange!",
+                        order_id, ve,
+                    )
+                    await self.db.save_log(
+                        "CRITICAL", "execution",
+                        f"Order {order_id} {signal.symbol} status tidak "
+                        f"terverifikasi setelah cancel gagal — order asli "
+                        f"mungkin masih hidup, TIDAK fallback ke market "
+                        f"untuk cegah double-fill. Perlu cek manual.",
+                    )
+                    return None
+
+                if verify_status in ("closed", "filled"):
+                    log.info(
+                        "Order %s ternyata SUDAH FILLED (bukan perlu "
+                        "fallback market) — proses fill asli.", order_id,
+                    )
+                    return await self._process_fill(
+                        verify_order, signal, assessment, limit_price
+                    )
+                if verify_status not in ("canceled", "expired", "rejected"):
+                    log.critical(
+                        "Order %s status='%s' (bukan cancelled/filled) "
+                        "setelah cancel gagal — order ASLI kemungkinan "
+                        "MASIH HIDUP di exchange. ABORT fallback market "
+                        "untuk cegah double-fill. Cek manual!",
+                        order_id, verify_status,
+                    )
+                    await self.db.save_log(
+                        "CRITICAL", "execution",
+                        f"Order {order_id} {signal.symbol} status='{verify_status}' "
+                        f"setelah cancel gagal — kemungkinan masih hidup, "
+                        f"TIDAK fallback ke market untuk cegah double-fill.",
+                    )
+                    return None
+                # verify_status sudah canceled/expired/rejected -> aman lanjut fallback
+
             current_price: Optional[float] = None
             if self.ws_feed and self.ws_feed.is_feed_healthy(signal.symbol):
                 current_price = self.ws_feed.get_mid_price(signal.symbol)

@@ -72,8 +72,8 @@
               "catatan": "Semua formula diverifikasi vs definisi standar: get_market_depth_slippage (VWAP, benar meski cara tulis agak redundan), _check_slippage drift calc (arah tanda benar untuk buy/sell), get_spread/get_mid_price (formula persen standar). Tidak ada bug matematis ditemukan."
             },
             "putaran_4_kondisi_khusus": {
-              "status": "PENDING",
-              "catatan": null
+              "status": "CROSS_CHECKED_FIXED",
+              "catatan": "Bug signifikan: cancel_order gagal tapi tetap fallback ke market order baru tanpa verifikasi status asli -- risiko double-fill. Fix: verifikasi fetch_order dulu sebelum bertindak."
             },
             "putaran_5_regresi_akhir": {
               "status": "PENDING",
@@ -95,8 +95,8 @@
               "catatan": "Bug signifikan: compute_calmar_ratio dipanggil (dari api_server.py) dengan return non-annualized (~5.2 hari) sebagai annualized_return_pct -- calmar ratio understated ~150x untuk skenario realistis. Fix di api_server.py (hitung CAGR dulu). Formula lain (Kelly-style position sizing, SL/TP calc, breakeven, trailing, win_rate, profit_factor, expectancy) diverifikasi benar. Sharpe/Sortino pakai PnL dolar mentah bukan % return -- didokumentasikan sebagai limitasi desain (bukan bug aktif karena risk_free_rate selalu 0)."
             },
             "putaran_4_kondisi_khusus": {
-              "status": "PENDING",
-              "catatan": null
+              "status": "CROSS_CHECKED_CLEAN",
+              "catatan": "Equity 0/negatif, konkurensi (asyncio.Lock sudah ada), division-by-zero drawdown (guard sudah ada) -- semua aman, tidak ada bug baru."
             },
             "putaran_5_regresi_akhir": {
               "status": "PENDING",
@@ -118,8 +118,8 @@
               "catatan": "Semua formula diverifikasi vs definisi standar: get_market_depth_slippage (VWAP, benar meski cara tulis agak redundan), _check_slippage drift calc (arah tanda benar untuk buy/sell), get_spread/get_mid_price (formula persen standar). Tidak ada bug matematis ditemukan."
             },
             "putaran_4_kondisi_khusus": {
-              "status": "PENDING",
-              "catatan": null
+              "status": "CROSS_CHECKED_FIXED",
+              "catatan": "Bug SIGNIFIKAN: _watch_tickers_all (jalur WS utama Binance, SEMUA simbol) mati permanen setelah max_retries, tanpa restart -- downgrade permanen ke REST-only sampai restart manual. Fix: self-healing restart otomatis dengan exponential backoff di _poll_tickers."
             },
             "putaran_5_regresi_akhir": {
               "status": "PENDING",
@@ -127,7 +127,8 @@
             }
           }
         }
-      ]
+      ],
+      "tier_1_status": "SEMUA FILE SELESAI PUTARAN 2-4 — siap lanjut ke Tier 2"
     },
     {
       "tier": 2,

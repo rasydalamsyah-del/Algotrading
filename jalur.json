@@ -2162,7 +2162,7 @@
           ]
         },
         "WebSocketFeed._stale_threshold": {
-          "line": 400,
+          "line": 417,
           "async": false,
           "args": [
             "self"
@@ -2176,7 +2176,7 @@
           "referenced_in_files": []
         },
         "WebSocketFeed.start": {
-          "line": 403,
+          "line": 420,
           "async": true,
           "args": [
             "self"
@@ -2188,8 +2188,8 @@
             "log.info",
             "asyncio.create_task",
             "self._poll_tickers",
-            "self._poll_orderbooks_rest",
             "self._watch_tickers_all",
+            "self._poll_orderbooks_rest",
             "self._watch_ticker"
           ],
           "referenced_in_files": [
@@ -2197,7 +2197,7 @@
           ]
         },
         "WebSocketFeed._poll_tickers": {
-          "line": 425,
+          "line": 444,
           "async": true,
           "args": [
             "self"
@@ -2205,17 +2205,25 @@
           "docstring": null,
           "calls_out": [
             "zip",
+            "self._ws_ticker_task.done",
+            "time.time",
+            "min",
             "self._poll_one_ticker",
             "asyncio.gather",
+            "log.warning",
+            "log.debug",
             "isinstance",
             "asyncio.sleep",
+            "asyncio.create_task",
+            "self._tasks.append",
             "self._poll_error_count.get",
-            "log.warning"
+            "self._watch_tickers_all",
+            "log.error"
           ],
           "referenced_in_files": []
         },
         "WebSocketFeed._poll_one_ticker": {
-          "line": 446,
+          "line": 498,
           "async": true,
           "args": [
             "self",
@@ -2234,7 +2242,7 @@
           "referenced_in_files": []
         },
         "WebSocketFeed.add_symbols": {
-          "line": 479,
+          "line": 531,
           "async": true,
           "args": [
             "self",
@@ -2258,7 +2266,7 @@
           ]
         },
         "WebSocketFeed.stop": {
-          "line": 531,
+          "line": 583,
           "async": true,
           "args": [
             "self"
@@ -2277,7 +2285,7 @@
           ]
         },
         "WebSocketFeed._watch_tickers_all": {
-          "line": 550,
+          "line": 602,
           "async": true,
           "args": [
             "self"
@@ -2296,7 +2304,7 @@
           "referenced_in_files": []
         },
         "WebSocketFeed._watch_ticker": {
-          "line": 591,
+          "line": 644,
           "async": true,
           "args": [
             "self",
@@ -2315,7 +2323,7 @@
           "referenced_in_files": []
         },
         "WebSocketFeed._poll_orderbooks_rest": {
-          "line": 637,
+          "line": 690,
           "async": true,
           "args": [
             "self"
@@ -2333,7 +2341,7 @@
           "referenced_in_files": []
         },
         "WebSocketFeed._watch_orderbook": {
-          "line": 665,
+          "line": 718,
           "async": true,
           "args": [
             "self",
@@ -2352,7 +2360,7 @@
           "referenced_in_files": []
         },
         "WebSocketFeed.get_price": {
-          "line": 700,
+          "line": 753,
           "async": false,
           "args": [
             "self",
@@ -2368,7 +2376,7 @@
           ]
         },
         "WebSocketFeed.get_orderbook": {
-          "line": 710,
+          "line": 763,
           "async": false,
           "args": [
             "self",
@@ -2383,7 +2391,7 @@
           ]
         },
         "WebSocketFeed.get_mid_price": {
-          "line": 713,
+          "line": 766,
           "async": false,
           "args": [
             "self",
@@ -2401,7 +2409,7 @@
           ]
         },
         "WebSocketFeed.get_spread": {
-          "line": 722,
+          "line": 775,
           "async": false,
           "args": [
             "self",
@@ -2419,7 +2427,7 @@
           ]
         },
         "WebSocketFeed.get_spread_absolute": {
-          "line": 730,
+          "line": 783,
           "async": false,
           "args": [
             "self",
@@ -2436,7 +2444,7 @@
           ]
         },
         "WebSocketFeed.get_current_spread_pct": {
-          "line": 736,
+          "line": 789,
           "async": false,
           "args": [
             "self",
@@ -2452,7 +2460,7 @@
           ]
         },
         "WebSocketFeed.get_quote_volume_24h": {
-          "line": 739,
+          "line": 792,
           "async": false,
           "args": [
             "self",
@@ -2469,7 +2477,7 @@
           ]
         },
         "WebSocketFeed.get_market_depth_slippage": {
-          "line": 748,
+          "line": 801,
           "async": false,
           "args": [
             "self",
@@ -2490,7 +2498,7 @@
           ]
         },
         "WebSocketFeed.is_feed_healthy": {
-          "line": 783,
+          "line": 836,
           "async": false,
           "args": [
             "self",
@@ -2510,7 +2518,7 @@
           ]
         },
         "WebSocketFeed.is_orderbook_healthy": {
-          "line": 793,
+          "line": 846,
           "async": false,
           "args": [
             "self",
@@ -2526,7 +2534,7 @@
           "referenced_in_files": []
         },
         "WebSocketFeed.get_feed_status": {
-          "line": 803,
+          "line": 856,
           "async": false,
           "args": [
             "self"
@@ -2551,7 +2559,7 @@
           ]
         },
         "_fetch_binance_tickers": {
-          "line": 843,
+          "line": 896,
           "async": false,
           "args": [],
           "docstring": "Hit Binance public API, return raw list ticker 24hr.",
@@ -2568,7 +2576,7 @@
           "referenced_in_files": []
         },
         "_fetch_binance_trading_symbols": {
-          "line": 864,
+          "line": 917,
           "async": false,
           "args": [],
           "docstring": "Fetch exchangeInfo, return set symbol yang statusnya TRADING saja.",
@@ -2588,7 +2596,7 @@
           "referenced_in_files": []
         },
         "scan_binance_universe": {
-          "line": 888,
+          "line": 941,
           "async": false,
           "args": [
             "min_volume_usdt",
@@ -2617,7 +2625,7 @@
           "referenced_in_files": []
         },
         "save_universe_json": {
-          "line": 940,
+          "line": 993,
           "async": false,
           "args": [
             "coins"
@@ -2634,7 +2642,7 @@
           "referenced_in_files": []
         },
         "load_universe_json": {
-          "line": 953,
+          "line": 1006,
           "async": false,
           "args": [],
           "docstring": "Baca universe.json, return list symbol string.",
@@ -2652,7 +2660,7 @@
           ]
         },
         "auto_scan_and_populate": {
-          "line": 970,
+          "line": 1023,
           "async": true,
           "args": [
             "db"
@@ -2859,7 +2867,10 @@
             "log.error",
             "self._process_fill",
             "self.exchange.cancel_order",
+            "verify_order.get",
+            "log.critical",
             "self.db.save_log",
+            "self.exchange.fetch_order",
             "self.exchange.fetch_ticker",
             "tk.get",
             "float"
@@ -2867,7 +2878,7 @@
           "referenced_in_files": []
         },
         "OrderExecutionManager._poll_fill": {
-          "line": 355,
+          "line": 415,
           "async": true,
           "args": [
             "self",
@@ -2886,7 +2897,7 @@
           "referenced_in_files": []
         },
         "OrderExecutionManager._execute_iceberg": {
-          "line": 381,
+          "line": 441,
           "async": true,
           "args": [
             "self",
@@ -2918,7 +2929,7 @@
           "referenced_in_files": []
         },
         "OrderExecutionManager._process_fill": {
-          "line": 523,
+          "line": 583,
           "async": true,
           "args": [
             "self",
@@ -2948,7 +2959,7 @@
           "referenced_in_files": []
         },
         "OrderExecutionManager._build_signal_origin": {
-          "line": 616,
+          "line": 676,
           "async": false,
           "args": [
             "self",
