@@ -678,6 +678,32 @@ def create_app(bot_getter) -> FastAPI:
         last_eq       = eq_curve[-1] if eq_curve else initial
         total_ret_pct = (last_eq - initial) / initial * 100
 
+        # [BUG-FIX] Sebelumnya total_ret_pct (return HANYA selama rentang
+        # waktu di `snaps`, yang dibatasi limit=500 snapshot — dengan
+        # SNAPSHOT_INTERVAL 15 menit di main.py, 500 snapshot ≈ 5.2 HARI
+        # saja) dikirim LANGSUNG ke compute_calmar_ratio() yang parameter
+        # pertamanya bernama eksplisit `annualized_return_pct`. Calmar ratio
+        # standar = annualized_return / max_drawdown — memakai return 5 hari
+        # sebagai pengganti annualized return membuat angkanya SANGAT jauh
+        # dari definisi aslinya (understated drastis untuk return positif
+        # kecil, atau salah arah kalau return negatif). Sekarang: hitung
+        # rentang hari sungguhan dari timestamp snapshot pertama-terakhir,
+        # lalu anualisasi total_ret_pct dengan rumus CAGR standar sebelum
+        # dikirim ke compute_calmar_ratio.
+        annualized_ret_pct = total_ret_pct
+        if len(snaps) >= 2 and initial > 0 and last_eq > 0:
+            days_spanned = (snaps[-1].timestamp - snaps[0].timestamp).total_seconds() / 86400.0
+            if days_spanned >= 1:
+                growth_factor = last_eq / initial
+                if growth_factor > 0:
+                    annualized_ret_pct = (
+                        (growth_factor ** (365.0 / days_spanned)) - 1
+                    ) * 100
+            # days_spanned < 1 (data historis masih sangat sedikit, < 1 hari):
+            # anualisasi CAGR tidak stabil untuk periode sangat pendek
+            # (bisa meledak ke angka ekstrem), jadi fallback ke total_ret_pct
+            # apa adanya sampai data cukup panjang.
+
         attribution_summary  = {}
         indicator_summary    = {}
         if getattr(b, "_analytics", None):
@@ -708,7 +734,7 @@ def create_app(bot_getter) -> FastAPI:
             "current_drawdown_pct": round(rm.current_drawdown_pct,                    4),
             "sharpe_ratio":         round(rm.compute_sharpe_ratio(pnl_list),           4),
             "sortino_ratio":        round(rm.compute_sortino_ratio(pnl_list),          4),
-            "calmar_ratio":         round(rm.compute_calmar_ratio(total_ret_pct, max_dd), 4),
+            "calmar_ratio":         round(rm.compute_calmar_ratio(annualized_ret_pct, max_dd), 4),
             "total_fees":           round(sum(t.fee_cost or 0 for t in trades),        6),
             "open_positions":       len(await b.db.get_open_positions()),
             "daily_loss_pct":       round(rm.daily_loss_pct,                           4),

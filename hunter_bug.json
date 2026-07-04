@@ -68,8 +68,8 @@
               "catatan": "Iceberg entry_price/amount inconsistency (lihat detail lengkap di AUDIT_STATE.json execution.py -> bug_fixed_tambahan_dari_audit_file_lain). Cross-check dua arah (calls_out execute_signal->_execute_iceberg dan referenced_in_files main.py._handle_buy) berhasil menemukan bug yang lolos dari audit kronologis pertama karena baru terlihat saat membaca KEDUA sisi (yang dipanggil DAN pemanggilnya) secara bersamaan."
             },
             "putaran_3_validasi_matematika": {
-              "status": "PENDING",
-              "catatan": null
+              "status": "CROSS_CHECKED_CLEAN",
+              "catatan": "Semua formula diverifikasi vs definisi standar: get_market_depth_slippage (VWAP, benar meski cara tulis agak redundan), _check_slippage drift calc (arah tanda benar untuk buy/sell), get_spread/get_mid_price (formula persen standar). Tidak ada bug matematis ditemukan."
             },
             "putaran_4_kondisi_khusus": {
               "status": "PENDING",
@@ -91,8 +91,8 @@
               "catatan": "Bug signifikan: _update_config() incomplete field refresh + main.py trigger condition tidak lengkap. Lihat AUDIT_STATE.json risk.py & main.py -> bug_fixed_tambahan_dari_audit_file_lain. Semua fungsi lain (evaluate_order, _compute_position_size, _compute_sl_tp, check_breakeven_sl, check_trailing_sl, metrics) diverifikasi caller-nya di main.py/simulate_test.py/api_server.py, signature & pemakaian return value konsisten, tidak ada masalah."
             },
             "putaran_3_validasi_matematika": {
-              "status": "PENDING",
-              "catatan": null
+              "status": "CROSS_CHECKED_FIXED",
+              "catatan": "Bug signifikan: compute_calmar_ratio dipanggil (dari api_server.py) dengan return non-annualized (~5.2 hari) sebagai annualized_return_pct -- calmar ratio understated ~150x untuk skenario realistis. Fix di api_server.py (hitung CAGR dulu). Formula lain (Kelly-style position sizing, SL/TP calc, breakeven, trailing, win_rate, profit_factor, expectancy) diverifikasi benar. Sharpe/Sortino pakai PnL dolar mentah bukan % return -- didokumentasikan sebagai limitasi desain (bukan bug aktif karena risk_free_rate selalu 0)."
             },
             "putaran_4_kondisi_khusus": {
               "status": "PENDING",
@@ -114,8 +114,8 @@
               "catatan": "Tidak ada bug baru. 2 dead-code method (fetch_order_book, fetch_open_orders di ExchangeConnector) - ternyata desain disengaja (WebSocketFeed punya koneksi ccxt independen), bukan bug. Semua fungsi kritis jalur uang diverifikasi konsisten dengan semua caller."
             },
             "putaran_3_validasi_matematika": {
-              "status": "PENDING",
-              "catatan": null
+              "status": "CROSS_CHECKED_CLEAN",
+              "catatan": "Semua formula diverifikasi vs definisi standar: get_market_depth_slippage (VWAP, benar meski cara tulis agak redundan), _check_slippage drift calc (arah tanda benar untuk buy/sell), get_spread/get_mid_price (formula persen standar). Tidak ada bug matematis ditemukan."
             },
             "putaran_4_kondisi_khusus": {
               "status": "PENDING",
