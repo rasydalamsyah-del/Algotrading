@@ -7,7 +7,50 @@
       "cara_pakai": "Untuk tiap file di list ini, field 'audit_state_ref' menunjuk ke key yang sama persis di AUDIT_STATE.json['file_sudah_diaudit_dan_fix']. Sebelum cross-check ulang, baca dulu bug_fixed/cross_file_check/catatan_investigasi yang SUDAH ditemukan supaya tidak mengulang kerja yang sama — fokus ke hal yang BELUM tercakup di sana.",
       "setelah_cross_check": "Update 'status' di sini jadi CROSS_CHECKED, isi 'bug_baru_ditemukan' kalau ada. Kalau ada bug baru & difix, WAJIB juga update entry yang sama di AUDIT_STATE.json (field bug_fixed atau bug_fixed_tambahan_dari_audit_file_lain) supaya kedua file tetap sinkron sebagai satu sumber kebenaran."
     },
-    "cara_pakai_bersama_jalur_json": "jalur.json berisi peta pemanggilan detail (siapa memanggil siapa, fungsi apa dipanggil, dipanggil dari mana). Sebelum cross-check tiap file di list ini, WAJIB baca entry file tsb di jalur.json dulu: (1) daftar 'calls_out' — fungsi/method APA SAJA yang dipanggil file ini ke file lain, verifikasi signature & tipe return-nya masih cocok; (2) daftar 'called_by' — SIAPA SAJA yang memanggil fungsi di file ini, verifikasi tiap caller benar-benar memakai return value/efek samping dengan cara yang konsisten dengan implementasi saat ini. Bug hunter TIDAK BOLEH hanya baca 1 arah (hanya kode yang dipanggil) — kedua arah (pemanggil & yang dipanggil) harus dicek."
+    "cara_pakai_bersama_jalur_json": "jalur.json berisi peta pemanggilan detail (siapa memanggil siapa, fungsi apa dipanggil, dipanggil dari mana). Sebelum cross-check tiap file di list ini, WAJIB baca entry file tsb di jalur.json dulu: (1) daftar 'calls_out' — fungsi/method APA SAJA yang dipanggil file ini ke file lain, verifikasi signature & tipe return-nya masih cocok; (2) daftar 'called_by' — SIAPA SAJA yang memanggil fungsi di file ini, verifikasi tiap caller benar-benar memakai return value/efek samping dengan cara yang konsisten dengan implementasi saat ini. Bug hunter TIDAK BOLEH hanya baca 1 arah (hanya kode yang dipanggil) — kedua arah (pemanggil & yang dipanggil) harus dicek.",
+    "putaran_definisi": {
+      "putaran_1_audit_kronologis": {
+        "deskripsi": "Audit pertama, file-per-file, dari dalam ke luar (main.py terakhir). Fokus: benar secara internal + fungsi yang DIPANGGIL ada & cocok.",
+        "dilacak_di": "AUDIT_STATE.json (bukan di sini) — semua 37 file sudah selesai putaran ini.",
+        "berlaku_untuk": "semua file"
+      },
+      "putaran_2_cross_check_dua_arah": {
+        "deskripsi": "Cross-check dua arah pakai jalur.json: untuk tiap fungsi publik, verifikasi SEMUA caller (bukan cuma callee) masih konsisten dengan implementasi saat ini. Cari pola: stale reference, field response ambigu, parameter hantu, guardrail bocor.",
+        "dilacak_di": "hunter_bug.json (field putaran.putaran_2_cross_check_dua_arah per file)",
+        "berlaku_untuk": "semua file"
+      },
+      "putaran_3_validasi_matematika": {
+        "deskripsi": "Bandingkan rumus/kalkulasi di kode BARIS PER BARIS dengan definisi matematis baku (RSI, ATR, Kelly criterion, position sizing, slippage %, dll). Cari: off-by-one di window/period, tanda plus/minus terbalik, pembagian nol, skala salah (0-100 vs 0-1), lookahead bias (pakai candle belum closed).",
+        "dilacak_di": "hunter_bug.json (field putaran.putaran_3_validasi_matematika per file)",
+        "berlaku_untuk": "file dengan kalkulasi/formula signifikan saja (lihat field 'relevan_putaran_3' per file) — file murni I/O/orkestrasi/notifikasi TIDAK relevan untuk putaran ini, ditandai SKIP_TIDAK_RELEVAN"
+      },
+      "putaran_4_kondisi_khusus": {
+        "deskripsi": "Uji edge-case: harga 0/negatif, data historis belum cukup (cold start), semua posisi ditutup bersamaan, reconnect setelah exchange down lama, race condition multi-task/multi-proses, file .env/.json korup, exchange API berubah response shape.",
+        "dilacak_di": "hunter_bug.json (field putaran.putaran_4_kondisi_khusus per file)",
+        "berlaku_untuk": "semua file, tapi kedalaman beda-beda sesuai risiko"
+      },
+      "putaran_5_regresi_akhir": {
+        "deskripsi": "Setelah putaran 2-4 selesai untuk SEMUA file, lakukan satu kali lagi cross-check menyeluruh (ulangi putaran 2 secara ringkas) untuk menangkap regresi yang mungkin muncul akibat fix-fix di putaran 3/4 yang saling bersinggungan antar file.",
+        "dilacak_di": "hunter_bug.json (field putaran.putaran_5_regresi_akhir per file)",
+        "berlaku_untuk": "semua file, dilakukan PALING TERAKHIR setelah semua tier selesai putaran 2-4"
+      }
+    },
+    "strategi_urutan_kerja": {
+      "pendekatan": "HYBRID: depth-first PER TIER, bukan per-file individual, bukan juga breadth-first murni per-putaran untuk semua 34 file sekaligus.",
+      "alasan": [
+        "Breadth-first murni (1 putaran untuk SEMUA file dulu) buang waktu: putaran 3 (matematika) tidak relevan untuk file seperti telegram_bot.py/api_server.py, sementara file Tier 1 (uang) baru dapat sedikit kedalaman.",
+        "Depth-first murni (1 file semua 5 putaran, baru pindah) bikin file di Tier 6-7 (main.py, telegram_bot.py) menunggu sangat lama walau mereka juga menyentuh keputusan finansial.",
+        "Hybrid: Tier 1 (jalur uang) diselesaikan SEMUA putaran relevan dulu (2, 3, 4) sebelum pindah ke Tier 2, karena blast radius tertinggi. Setelah semua tier selesai putaran 2-4, baru putaran 5 (regresi akhir) dijalankan untuk SEMUA file sebagai penutup."
+      ],
+      "urutan_kerja": [
+        "1. Untuk tier saat ini: selesaikan putaran 2 (cross-check dua arah) untuk SEMUA file di tier itu.",
+        "2. Untuk tier yang sama: lanjut putaran 3 (matematika) untuk file yang relevan (skip yang tidak relevan).",
+        "3. Untuk tier yang sama: lanjut putaran 4 (kondisi khusus).",
+        "4. Pindah ke tier berikutnya, ulangi langkah 1-3.",
+        "5. Setelah SEMUA tier selesai langkah 1-4: jalankan putaran 5 (regresi akhir) untuk semua file secara berurutan tier yang sama."
+      ]
+    },
+    "catatan_migrasi": "Struktur field 'status'/'bug_baru_ditemukan' per-file (versi awal hunter_bug.json) sudah dimigrasi jadi matriks 'putaran' dengan 4 sub-status (putaran 2-5). Putaran 1 dilacak terpisah di AUDIT_STATE.json karena itu audit kronologis yang sudah selesai duluan untuk semua 37 file sebelum hunter_bug.json ini dibuat."
   },
   "urutan_prioritas": [
     {
@@ -17,22 +60,72 @@
       "files": [
         {
           "file": "execution.py",
-          "status": "CROSS_CHECKED_FIXED",
           "audit_state_ref": "execution.py",
           "fokus_cross_check": "Order placement (market/limit), slippage guard, retry logic, partial fill handling, exchange error handling. Cek SEMUA pemanggil (main.py._handle_buy, _do_close_position, _close_position_market) benar-benar memproses return value (order id, filled amount, avg price) dengan benar — bukan cuma asumsi order selalu penuh.",
-          "bug_baru_ditemukan": "Iceberg entry_price/amount inconsistency (lihat detail lengkap di AUDIT_STATE.json execution.py -> bug_fixed_tambahan_dari_audit_file_lain). Cross-check dua arah (calls_out execute_signal->_execute_iceberg dan referenced_in_files main.py._handle_buy) berhasil menemukan bug yang lolos dari audit kronologis pertama karena baru terlihat saat membaca KEDUA sisi (yang dipanggil DAN pemanggilnya) secara bersamaan."
+          "putaran": {
+            "putaran_2_cross_check_dua_arah": {
+              "status": "CROSS_CHECKED_FIXED",
+              "catatan": "Iceberg entry_price/amount inconsistency (lihat detail lengkap di AUDIT_STATE.json execution.py -> bug_fixed_tambahan_dari_audit_file_lain). Cross-check dua arah (calls_out execute_signal->_execute_iceberg dan referenced_in_files main.py._handle_buy) berhasil menemukan bug yang lolos dari audit kronologis pertama karena baru terlihat saat membaca KEDUA sisi (yang dipanggil DAN pemanggilnya) secara bersamaan."
+            },
+            "putaran_3_validasi_matematika": {
+              "status": "PENDING",
+              "catatan": null
+            },
+            "putaran_4_kondisi_khusus": {
+              "status": "PENDING",
+              "catatan": null
+            },
+            "putaran_5_regresi_akhir": {
+              "status": "PENDING",
+              "catatan": null
+            }
+          }
         },
         {
           "file": "risk.py",
-          "status": "PENDING",
           "audit_state_ref": "risk.py",
-          "fokus_cross_check": "Position sizing (Kelly/fixed), max drawdown check, daily loss limit, correlation check. Cek arah masuk: siapa yang memanggil risk manager sebelum eksekusi (commander.py Gate, main.py). Cek arah keluar: apakah risk.py benar-benar baca portfolio_state/equity TERBARU (bukan snapshot basi)."
+          "fokus_cross_check": "Position sizing (Kelly/fixed), max drawdown check, daily loss limit, correlation check. Cek arah masuk: siapa yang memanggil risk manager sebelum eksekusi (commander.py Gate, main.py). Cek arah keluar: apakah risk.py benar-benar baca portfolio_state/equity TERBARU (bukan snapshot basi).",
+          "putaran": {
+            "putaran_2_cross_check_dua_arah": {
+              "status": "PENDING",
+              "catatan": null
+            },
+            "putaran_3_validasi_matematika": {
+              "status": "PENDING",
+              "catatan": null
+            },
+            "putaran_4_kondisi_khusus": {
+              "status": "PENDING",
+              "catatan": null
+            },
+            "putaran_5_regresi_akhir": {
+              "status": "PENDING",
+              "catatan": null
+            }
+          }
         },
         {
           "file": "exchange.py",
-          "status": "PENDING",
           "audit_state_ref": "exchange.py",
-          "fokus_cross_check": "ExchangeConnector (REST) & WebSocketFeed (real-time price/spread/orderbook). Cek reconnect logic, rate limit handling, precision/rounding harga-jumlah sebelum kirim order. PENTING: sudah ditemukan bug __dict__ vs method class di commander.py yang berakar dari sini — cek APAKAH ada pola serupa (getattr salah) di tempat lain yang memanggil method WebSocketFeed/ExchangeConnector."
+          "fokus_cross_check": "ExchangeConnector (REST) & WebSocketFeed (real-time price/spread/orderbook). Cek reconnect logic, rate limit handling, precision/rounding harga-jumlah sebelum kirim order. PENTING: sudah ditemukan bug __dict__ vs method class di commander.py yang berakar dari sini — cek APAKAH ada pola serupa (getattr salah) di tempat lain yang memanggil method WebSocketFeed/ExchangeConnector.",
+          "putaran": {
+            "putaran_2_cross_check_dua_arah": {
+              "status": "PENDING",
+              "catatan": null
+            },
+            "putaran_3_validasi_matematika": {
+              "status": "PENDING",
+              "catatan": null
+            },
+            "putaran_4_kondisi_khusus": {
+              "status": "PENDING",
+              "catatan": null
+            },
+            "putaran_5_regresi_akhir": {
+              "status": "PENDING",
+              "catatan": null
+            }
+          }
         }
       ]
     },
@@ -43,57 +136,210 @@
       "files": [
         {
           "file": "ta_compat.py",
-          "status": "PENDING",
           "audit_state_ref": "ta_compat.py",
-          "fokus_cross_check": "Layer kompatibilitas pandas-ta. Cek SEMUA fungsi indikator yang dibungkus di sini benar-benar meneruskan parameter (period, source column) dengan benar ke pandas-ta, dan menangani NaN/kolom hilang tanpa crash diam-diam (mis. return 0 padahal harusnya NaN/None)."
+          "fokus_cross_check": "Layer kompatibilitas pandas-ta. Cek SEMUA fungsi indikator yang dibungkus di sini benar-benar meneruskan parameter (period, source column) dengan benar ke pandas-ta, dan menangani NaN/kolom hilang tanpa crash diam-diam (mis. return 0 padahal harusnya NaN/None).",
+          "putaran": {
+            "putaran_2_cross_check_dua_arah": {
+              "status": "PENDING",
+              "catatan": null
+            },
+            "putaran_3_validasi_matematika": {
+              "status": "PENDING",
+              "catatan": null
+            },
+            "putaran_4_kondisi_khusus": {
+              "status": "PENDING",
+              "catatan": null
+            },
+            "putaran_5_regresi_akhir": {
+              "status": "PENDING",
+              "catatan": null
+            }
+          }
         },
         {
           "file": "indicators/trend.py",
-          "status": "PENDING",
           "audit_state_ref": "indicators/trend.py",
-          "fokus_cross_check": "EMA/SMA/Supertrend/ADX dll. Cek off-by-one di window/period, penggunaan .iloc[-1] vs .iloc[-2] yang konsisten (candle terakhir CLOSED vs BELUM CLOSED — bug klasik lookahead bias)."
+          "fokus_cross_check": "EMA/SMA/Supertrend/ADX dll. Cek off-by-one di window/period, penggunaan .iloc[-1] vs .iloc[-2] yang konsisten (candle terakhir CLOSED vs BELUM CLOSED — bug klasik lookahead bias).",
+          "putaran": {
+            "putaran_2_cross_check_dua_arah": {
+              "status": "PENDING",
+              "catatan": null
+            },
+            "putaran_3_validasi_matematika": {
+              "status": "PENDING",
+              "catatan": null
+            },
+            "putaran_4_kondisi_khusus": {
+              "status": "PENDING",
+              "catatan": null
+            },
+            "putaran_5_regresi_akhir": {
+              "status": "PENDING",
+              "catatan": null
+            }
+          }
         },
         {
           "file": "indicators/momentum.py",
-          "status": "PENDING",
           "audit_state_ref": "indicators/momentum.py",
-          "fokus_cross_check": "RSI/MACD/Stochastic dll. Sama seperti trend.py — cek lookahead bias & pembagian dengan nol (RSI saat avg_loss=0)."
+          "fokus_cross_check": "RSI/MACD/Stochastic dll. Sama seperti trend.py — cek lookahead bias & pembagian dengan nol (RSI saat avg_loss=0).",
+          "putaran": {
+            "putaran_2_cross_check_dua_arah": {
+              "status": "PENDING",
+              "catatan": null
+            },
+            "putaran_3_validasi_matematika": {
+              "status": "PENDING",
+              "catatan": null
+            },
+            "putaran_4_kondisi_khusus": {
+              "status": "PENDING",
+              "catatan": null
+            },
+            "putaran_5_regresi_akhir": {
+              "status": "PENDING",
+              "catatan": null
+            }
+          }
         },
         {
           "file": "indicators/oscillators.py",
-          "status": "PENDING",
           "audit_state_ref": "indicators/oscillators.py",
-          "fokus_cross_check": "Cek normalisasi skala (0-100 vs 0-1) konsisten dgn caller di intelligence/scorer.py — mismatch skala adalah bug yang sangat mudah lolos review manual."
+          "fokus_cross_check": "Cek normalisasi skala (0-100 vs 0-1) konsisten dgn caller di intelligence/scorer.py — mismatch skala adalah bug yang sangat mudah lolos review manual.",
+          "putaran": {
+            "putaran_2_cross_check_dua_arah": {
+              "status": "PENDING",
+              "catatan": null
+            },
+            "putaran_3_validasi_matematika": {
+              "status": "PENDING",
+              "catatan": null
+            },
+            "putaran_4_kondisi_khusus": {
+              "status": "PENDING",
+              "catatan": null
+            },
+            "putaran_5_regresi_akhir": {
+              "status": "PENDING",
+              "catatan": null
+            }
+          }
         },
         {
           "file": "indicators/volatility.py",
-          "status": "PENDING",
           "audit_state_ref": "indicators/volatility.py",
-          "fokus_cross_check": "ATR dan turunannya dipakai LANGSUNG untuk hitung SL/TP price di strategy.py/risk.py — bug kecil di sini = SL/TP salah tempat = kerugian nyata. Prioritas tinggi walau masuk tier 2."
+          "fokus_cross_check": "ATR dan turunannya dipakai LANGSUNG untuk hitung SL/TP price di strategy.py/risk.py — bug kecil di sini = SL/TP salah tempat = kerugian nyata. Prioritas tinggi walau masuk tier 2.",
+          "putaran": {
+            "putaran_2_cross_check_dua_arah": {
+              "status": "PENDING",
+              "catatan": null
+            },
+            "putaran_3_validasi_matematika": {
+              "status": "PENDING",
+              "catatan": null
+            },
+            "putaran_4_kondisi_khusus": {
+              "status": "PENDING",
+              "catatan": null
+            },
+            "putaran_5_regresi_akhir": {
+              "status": "PENDING",
+              "catatan": null
+            }
+          }
         },
         {
           "file": "indicators/strength.py",
-          "status": "PENDING",
           "audit_state_ref": "indicators/strength.py",
-          "fokus_cross_check": "Cek formula kombinasi multi-indikator tidak dobel-hitung komponen yang sama dengan bobot berbeda tanpa sadar."
+          "fokus_cross_check": "Cek formula kombinasi multi-indikator tidak dobel-hitung komponen yang sama dengan bobot berbeda tanpa sadar.",
+          "putaran": {
+            "putaran_2_cross_check_dua_arah": {
+              "status": "PENDING",
+              "catatan": null
+            },
+            "putaran_3_validasi_matematika": {
+              "status": "PENDING",
+              "catatan": null
+            },
+            "putaran_4_kondisi_khusus": {
+              "status": "PENDING",
+              "catatan": null
+            },
+            "putaran_5_regresi_akhir": {
+              "status": "PENDING",
+              "catatan": null
+            }
+          }
         },
         {
           "file": "indicators/structure.py",
-          "status": "PENDING",
           "audit_state_ref": "indicators/structure.py",
-          "fokus_cross_check": "Support/resistance, swing high/low. File terbesar di kategori indicators (1048 baris) — cek deteksi swing point tidak bocor data masa depan (harus pakai candle yang sudah confirmed)."
+          "fokus_cross_check": "Support/resistance, swing high/low. File terbesar di kategori indicators (1048 baris) — cek deteksi swing point tidak bocor data masa depan (harus pakai candle yang sudah confirmed).",
+          "putaran": {
+            "putaran_2_cross_check_dua_arah": {
+              "status": "PENDING",
+              "catatan": null
+            },
+            "putaran_3_validasi_matematika": {
+              "status": "PENDING",
+              "catatan": null
+            },
+            "putaran_4_kondisi_khusus": {
+              "status": "PENDING",
+              "catatan": null
+            },
+            "putaran_5_regresi_akhir": {
+              "status": "PENDING",
+              "catatan": null
+            }
+          }
         },
         {
           "file": "indicators/patterns.py",
-          "status": "PENDING",
           "audit_state_ref": "indicators/patterns.py",
-          "fokus_cross_check": "Candlestick pattern recognition. Cek pola deteksi tidak overlap/kontradiksi (mis. bullish & bearish pattern true bersamaan tanpa prioritas jelas)."
+          "fokus_cross_check": "Candlestick pattern recognition. Cek pola deteksi tidak overlap/kontradiksi (mis. bullish & bearish pattern true bersamaan tanpa prioritas jelas).",
+          "putaran": {
+            "putaran_2_cross_check_dua_arah": {
+              "status": "PENDING",
+              "catatan": null
+            },
+            "putaran_3_validasi_matematika": {
+              "status": "PENDING",
+              "catatan": null
+            },
+            "putaran_4_kondisi_khusus": {
+              "status": "PENDING",
+              "catatan": null
+            },
+            "putaran_5_regresi_akhir": {
+              "status": "PENDING",
+              "catatan": null
+            }
+          }
         },
         {
           "file": "indicators/orderbook.py",
-          "status": "PENDING",
           "audit_state_ref": "indicators/orderbook.py",
-          "fokus_cross_check": "Analisis orderbook real-time (dipakai _get_ob_danger_level di main.py). Cek staleness check — apakah ada validasi orderbook snapshot tidak terlalu basi sebelum dipakai untuk keputusan Gate 3."
+          "fokus_cross_check": "Analisis orderbook real-time (dipakai _get_ob_danger_level di main.py). Cek staleness check — apakah ada validasi orderbook snapshot tidak terlalu basi sebelum dipakai untuk keputusan Gate 3.",
+          "putaran": {
+            "putaran_2_cross_check_dua_arah": {
+              "status": "PENDING",
+              "catatan": null
+            },
+            "putaran_3_validasi_matematika": {
+              "status": "PENDING",
+              "catatan": null
+            },
+            "putaran_4_kondisi_khusus": {
+              "status": "PENDING",
+              "catatan": null
+            },
+            "putaran_5_regresi_akhir": {
+              "status": "PENDING",
+              "catatan": null
+            }
+          }
         }
       ]
     },
@@ -104,45 +350,164 @@
       "files": [
         {
           "file": "intelligence/scorer.py",
-          "status": "PENDING",
           "audit_state_ref": "intelligence/scorer.py",
-          "fokus_cross_check": "Kombinasi weighted-score dari semua indikator jadi total_score. Cek bobot dari profiles/weights.py benar-benar dibaca ulang tiap cycle (bukan di-cache basi), dan penjumlahan weighted score konsisten dengan skala yang dipakai threshold di profiles/thresholds.py."
+          "fokus_cross_check": "Kombinasi weighted-score dari semua indikator jadi total_score. Cek bobot dari profiles/weights.py benar-benar dibaca ulang tiap cycle (bukan di-cache basi), dan penjumlahan weighted score konsisten dengan skala yang dipakai threshold di profiles/thresholds.py.",
+          "putaran": {
+            "putaran_2_cross_check_dua_arah": {
+              "status": "PENDING",
+              "catatan": null
+            },
+            "putaran_3_validasi_matematika": {
+              "status": "PENDING",
+              "catatan": null
+            },
+            "putaran_4_kondisi_khusus": {
+              "status": "PENDING",
+              "catatan": null
+            },
+            "putaran_5_regresi_akhir": {
+              "status": "PENDING",
+              "catatan": null
+            }
+          }
         },
         {
           "file": "intelligence/classifier.py",
-          "status": "PENDING",
           "audit_state_ref": "intelligence/classifier.py",
-          "fokus_cross_check": "Klasifikasi regime (trending/ranging/volatile). Dipakai is_regime_transition() yang baru saja dipakai fix Jalur Entry 2 di main.py — cek konsistensi definisi transisi regime antara sini dan caller-nya."
+          "fokus_cross_check": "Klasifikasi regime (trending/ranging/volatile). Dipakai is_regime_transition() yang baru saja dipakai fix Jalur Entry 2 di main.py — cek konsistensi definisi transisi regime antara sini dan caller-nya.",
+          "putaran": {
+            "putaran_2_cross_check_dua_arah": {
+              "status": "PENDING",
+              "catatan": null
+            },
+            "putaran_3_validasi_matematika": {
+              "status": "PENDING",
+              "catatan": null
+            },
+            "putaran_4_kondisi_khusus": {
+              "status": "PENDING",
+              "catatan": null
+            },
+            "putaran_5_regresi_akhir": {
+              "status": "PENDING",
+              "catatan": null
+            }
+          }
         },
         {
           "file": "intelligence/validator.py",
-          "status": "PENDING",
           "audit_state_ref": "intelligence/validator.py",
-          "fokus_cross_check": "File terbesar di intelligence/ (1809 baris, 36 fungsi). Validasi sinyal sebelum eksekusi — cek SEMUA validator benar2 dipanggil dari commander.py/strategy.py, tidak ada validator yang didefinisikan tapi tidak pernah dipanggil (dead validation = false sense of security)."
+          "fokus_cross_check": "File terbesar di intelligence/ (1809 baris, 36 fungsi). Validasi sinyal sebelum eksekusi — cek SEMUA validator benar2 dipanggil dari commander.py/strategy.py, tidak ada validator yang didefinisikan tapi tidak pernah dipanggil (dead validation = false sense of security).",
+          "putaran": {
+            "putaran_2_cross_check_dua_arah": {
+              "status": "PENDING",
+              "catatan": null
+            },
+            "putaran_3_validasi_matematika": {
+              "status": "SKIP_TIDAK_RELEVAN",
+              "catatan": "File ini tidak mengandung kalkulasi/formula matematis signifikan (murni I/O, orkestrasi, atau notifikasi)."
+            },
+            "putaran_4_kondisi_khusus": {
+              "status": "PENDING",
+              "catatan": null
+            },
+            "putaran_5_regresi_akhir": {
+              "status": "PENDING",
+              "catatan": null
+            }
+          }
         },
         {
           "file": "intelligence/observer.py",
-          "status": "PENDING",
           "audit_state_ref": "intelligence/observer.py",
-          "fokus_cross_check": "Observasi/monitoring pasif. Cek tidak ada side-effect tersembunyi yang mengubah state trading (observer harusnya read-only)."
+          "fokus_cross_check": "Observasi/monitoring pasif. Cek tidak ada side-effect tersembunyi yang mengubah state trading (observer harusnya read-only).",
+          "putaran": {
+            "putaran_2_cross_check_dua_arah": {
+              "status": "PENDING",
+              "catatan": null
+            },
+            "putaran_3_validasi_matematika": {
+              "status": "SKIP_TIDAK_RELEVAN",
+              "catatan": "File ini tidak mengandung kalkulasi/formula matematis signifikan (murni I/O, orkestrasi, atau notifikasi)."
+            },
+            "putaran_4_kondisi_khusus": {
+              "status": "PENDING",
+              "catatan": null
+            },
+            "putaran_5_regresi_akhir": {
+              "status": "PENDING",
+              "catatan": null
+            }
+          }
         },
         {
           "file": "intelligence/trade_guardian.py",
-          "status": "PENDING",
           "audit_state_ref": "intelligence/trade_guardian.py",
-          "fokus_cross_check": "ATG (Adaptive Trailing Guard) — baru ditemukan bug notifikasi trigger salah di main.py yang MENGGUNAKAN exit_reason dari sini. Cek exit_reason yang dikembalikan trade_guardian.py punya cukup informasi (mis. apakah exit karena profit-protect atau loss-cut) untuk konsumen di main.py menentukan trigger yang benar TANPA perlu hitung ulang tanda PnL secara terpisah."
+          "fokus_cross_check": "ATG (Adaptive Trailing Guard) — baru ditemukan bug notifikasi trigger salah di main.py yang MENGGUNAKAN exit_reason dari sini. Cek exit_reason yang dikembalikan trade_guardian.py punya cukup informasi (mis. apakah exit karena profit-protect atau loss-cut) untuk konsumen di main.py menentukan trigger yang benar TANPA perlu hitung ulang tanda PnL secara terpisah.",
+          "putaran": {
+            "putaran_2_cross_check_dua_arah": {
+              "status": "PENDING",
+              "catatan": null
+            },
+            "putaran_3_validasi_matematika": {
+              "status": "PENDING",
+              "catatan": null
+            },
+            "putaran_4_kondisi_khusus": {
+              "status": "PENDING",
+              "catatan": null
+            },
+            "putaran_5_regresi_akhir": {
+              "status": "PENDING",
+              "catatan": null
+            }
+          }
         },
         {
           "file": "intelligence/position_sync.py",
-          "status": "PENDING",
           "audit_state_ref": "intelligence/position_sync.py",
-          "fokus_cross_check": "Adopsi posisi Binance yang tidak ke-track. Cek race condition dengan run_sl_tp_monitor & run_scanner_loop yang jalan bersamaan — apakah ada locking/dedup supaya posisi yang sedang di-adopt tidak diproses ganda oleh loop lain."
+          "fokus_cross_check": "Adopsi posisi Binance yang tidak ke-track. Cek race condition dengan run_sl_tp_monitor & run_scanner_loop yang jalan bersamaan — apakah ada locking/dedup supaya posisi yang sedang di-adopt tidak diproses ganda oleh loop lain.",
+          "putaran": {
+            "putaran_2_cross_check_dua_arah": {
+              "status": "PENDING",
+              "catatan": null
+            },
+            "putaran_3_validasi_matematika": {
+              "status": "SKIP_TIDAK_RELEVAN",
+              "catatan": "File ini tidak mengandung kalkulasi/formula matematis signifikan (murni I/O, orkestrasi, atau notifikasi)."
+            },
+            "putaran_4_kondisi_khusus": {
+              "status": "PENDING",
+              "catatan": null
+            },
+            "putaran_5_regresi_akhir": {
+              "status": "PENDING",
+              "catatan": null
+            }
+          }
         },
         {
           "file": "strategy.py",
-          "status": "PENDING",
           "audit_state_ref": "strategy.py",
-          "fokus_cross_check": "File besar (1751 baris, 43 fungsi) — generate_signals, check_trailing_exit, SL/TP calculation. Cek SEMUA method dipanggil dari main.py dengan parameter yang benar (terutama df/confirmation_df/confirmation_timeframe di commander.process vs strategy.generate_signals langsung — dua jalur berbeda yang harus konsisten hasilnya)."
+          "fokus_cross_check": "File besar (1751 baris, 43 fungsi) — generate_signals, check_trailing_exit, SL/TP calculation. Cek SEMUA method dipanggil dari main.py dengan parameter yang benar (terutama df/confirmation_df/confirmation_timeframe di commander.process vs strategy.generate_signals langsung — dua jalur berbeda yang harus konsisten hasilnya).",
+          "putaran": {
+            "putaran_2_cross_check_dua_arah": {
+              "status": "PENDING",
+              "catatan": null
+            },
+            "putaran_3_validasi_matematika": {
+              "status": "PENDING",
+              "catatan": null
+            },
+            "putaran_4_kondisi_khusus": {
+              "status": "PENDING",
+              "catatan": null
+            },
+            "putaran_5_regresi_akhir": {
+              "status": "PENDING",
+              "catatan": null
+            }
+          }
         }
       ]
     },
@@ -153,27 +518,95 @@
       "files": [
         {
           "file": "profiles/base_profile.py",
-          "status": "PENDING",
           "audit_state_ref": "profiles/base_profile.py",
-          "fokus_cross_check": "Definisi dataclass profile & default value. Cek default yang dipakai saat coin belum punya profile spesifik tidak terlalu agresif/longgar dibanding intent aslinya."
+          "fokus_cross_check": "Definisi dataclass profile & default value. Cek default yang dipakai saat coin belum punya profile spesifik tidak terlalu agresif/longgar dibanding intent aslinya.",
+          "putaran": {
+            "putaran_2_cross_check_dua_arah": {
+              "status": "PENDING",
+              "catatan": null
+            },
+            "putaran_3_validasi_matematika": {
+              "status": "SKIP_TIDAK_RELEVAN",
+              "catatan": "File ini tidak mengandung kalkulasi/formula matematis signifikan (murni I/O, orkestrasi, atau notifikasi)."
+            },
+            "putaran_4_kondisi_khusus": {
+              "status": "PENDING",
+              "catatan": null
+            },
+            "putaran_5_regresi_akhir": {
+              "status": "PENDING",
+              "catatan": null
+            }
+          }
         },
         {
           "file": "profiles/weights.py",
-          "status": "PENDING",
           "audit_state_ref": "profiles/weights.py",
-          "fokus_cross_check": "PENTING: file ini di-EDIT LANGSUNG (string manipulation) oleh learning/meta_learner.py._apply_weight_change() saat runtime! Cek format file masih persis sesuai yang diharapkan regex/string-replace di meta_learner.py — perubahan struktur file ini bisa DIAM-DIAM merusak auto-tuning tanpa error yang jelas."
+          "fokus_cross_check": "PENTING: file ini di-EDIT LANGSUNG (string manipulation) oleh learning/meta_learner.py._apply_weight_change() saat runtime! Cek format file masih persis sesuai yang diharapkan regex/string-replace di meta_learner.py — perubahan struktur file ini bisa DIAM-DIAM merusak auto-tuning tanpa error yang jelas.",
+          "putaran": {
+            "putaran_2_cross_check_dua_arah": {
+              "status": "PENDING",
+              "catatan": null
+            },
+            "putaran_3_validasi_matematika": {
+              "status": "SKIP_TIDAK_RELEVAN",
+              "catatan": "File ini tidak mengandung kalkulasi/formula matematis signifikan (murni I/O, orkestrasi, atau notifikasi)."
+            },
+            "putaran_4_kondisi_khusus": {
+              "status": "PENDING",
+              "catatan": null
+            },
+            "putaran_5_regresi_akhir": {
+              "status": "PENDING",
+              "catatan": null
+            }
+          }
         },
         {
           "file": "profiles/thresholds.py",
-          "status": "PENDING",
           "audit_state_ref": "profiles/thresholds.py",
-          "fokus_cross_check": "get_dynamic_threshold() dipakai scorer.py & validator.py — cek kedua caller memakai return value dengan asumsi skala/tipe yang sama persis."
+          "fokus_cross_check": "get_dynamic_threshold() dipakai scorer.py & validator.py — cek kedua caller memakai return value dengan asumsi skala/tipe yang sama persis.",
+          "putaran": {
+            "putaran_2_cross_check_dua_arah": {
+              "status": "PENDING",
+              "catatan": null
+            },
+            "putaran_3_validasi_matematika": {
+              "status": "PENDING",
+              "catatan": null
+            },
+            "putaran_4_kondisi_khusus": {
+              "status": "PENDING",
+              "catatan": null
+            },
+            "putaran_5_regresi_akhir": {
+              "status": "PENDING",
+              "catatan": null
+            }
+          }
         },
         {
           "file": "profiles/registry.py",
-          "status": "PENDING",
           "audit_state_ref": "profiles/registry.py",
-          "fokus_cross_check": "get_coin_profile()/apply_parameter_override()/revert_parameter_override() — dipakai main.py, api_server.py, meta_learner.py, simulate_test.py. Cek apply/revert benar-benar симetris (apply lalu revert menghasilkan state identik dengan sebelum apply)."
+          "fokus_cross_check": "get_coin_profile()/apply_parameter_override()/revert_parameter_override() — dipakai main.py, api_server.py, meta_learner.py, simulate_test.py. Cek apply/revert benar-benar симetris (apply lalu revert menghasilkan state identik dengan sebelum apply).",
+          "putaran": {
+            "putaran_2_cross_check_dua_arah": {
+              "status": "PENDING",
+              "catatan": null
+            },
+            "putaran_3_validasi_matematika": {
+              "status": "SKIP_TIDAK_RELEVAN",
+              "catatan": "File ini tidak mengandung kalkulasi/formula matematis signifikan (murni I/O, orkestrasi, atau notifikasi)."
+            },
+            "putaran_4_kondisi_khusus": {
+              "status": "PENDING",
+              "catatan": null
+            },
+            "putaran_5_regresi_akhir": {
+              "status": "PENDING",
+              "catatan": null
+            }
+          }
         }
       ]
     },
@@ -184,27 +617,95 @@
       "files": [
         {
           "file": "learning/coin_swap.py",
-          "status": "PENDING",
           "audit_state_ref": "learning/coin_swap.py",
-          "fokus_cross_check": "Sudah difix bug key .env WATCHLIST vs UNIVERSE_WATCHLIST. Cross-check ulang: pastikan TIDAK ADA tempat lain (script shell start.sh/stop.sh, .env.example) yang masih pakai key lama."
+          "fokus_cross_check": "Sudah difix bug key .env WATCHLIST vs UNIVERSE_WATCHLIST. Cross-check ulang: pastikan TIDAK ADA tempat lain (script shell start.sh/stop.sh, .env.example) yang masih pakai key lama.",
+          "putaran": {
+            "putaran_2_cross_check_dua_arah": {
+              "status": "PENDING",
+              "catatan": null
+            },
+            "putaran_3_validasi_matematika": {
+              "status": "PENDING",
+              "catatan": null
+            },
+            "putaran_4_kondisi_khusus": {
+              "status": "PENDING",
+              "catatan": null
+            },
+            "putaran_5_regresi_akhir": {
+              "status": "PENDING",
+              "catatan": null
+            }
+          }
         },
         {
           "file": "learning/cross_learn.py",
-          "status": "PENDING",
           "audit_state_ref": "learning/cross_learn.py",
-          "fokus_cross_check": "Sudah difix cache tidak terpakai. Cross-check ulang: verifikasi cache TTL 30 menit tidak menyebabkan analytics.py memakai data peer yang sudah kadaluarsa saat generate suggestion penting."
+          "fokus_cross_check": "Sudah difix cache tidak terpakai. Cross-check ulang: verifikasi cache TTL 30 menit tidak menyebabkan analytics.py memakai data peer yang sudah kadaluarsa saat generate suggestion penting.",
+          "putaran": {
+            "putaran_2_cross_check_dua_arah": {
+              "status": "PENDING",
+              "catatan": null
+            },
+            "putaran_3_validasi_matematika": {
+              "status": "PENDING",
+              "catatan": null
+            },
+            "putaran_4_kondisi_khusus": {
+              "status": "PENDING",
+              "catatan": null
+            },
+            "putaran_5_regresi_akhir": {
+              "status": "PENDING",
+              "catatan": null
+            }
+          }
         },
         {
           "file": "learning/analytics.py",
-          "status": "PENDING",
           "audit_state_ref": "learning/analytics.py",
-          "fokus_cross_check": "compute_attribution() — konsumen utama cross_learn.py & sumber data untuk meta_learner.py generate_suggestions(). Cek attribution report yang dihasilkan benar2 dipakai meta_learner dengan struktur field yang sama persis (nama key dict dsb)."
+          "fokus_cross_check": "compute_attribution() — konsumen utama cross_learn.py & sumber data untuk meta_learner.py generate_suggestions(). Cek attribution report yang dihasilkan benar2 dipakai meta_learner dengan struktur field yang sama persis (nama key dict dsb).",
+          "putaran": {
+            "putaran_2_cross_check_dua_arah": {
+              "status": "PENDING",
+              "catatan": null
+            },
+            "putaran_3_validasi_matematika": {
+              "status": "PENDING",
+              "catatan": null
+            },
+            "putaran_4_kondisi_khusus": {
+              "status": "PENDING",
+              "catatan": null
+            },
+            "putaran_5_regresi_akhir": {
+              "status": "PENDING",
+              "catatan": null
+            }
+          }
         },
         {
           "file": "learning/meta_learner.py",
-          "status": "PENDING",
           "audit_state_ref": "learning/meta_learner.py",
-          "fokus_cross_check": "Sudah difix 2 bug (cooldown weight_, auto-revert persistence). Cross-check ulang: apakah MASIH ada jalur lain yang bisa mengubah profiles/weights.py atau profiles/thresholds.py TANPA lewat guardrail meta_learner.py sama sekali (mis. langsung dari api_server.py endpoint config lain)?"
+          "fokus_cross_check": "Sudah difix 2 bug (cooldown weight_, auto-revert persistence). Cross-check ulang: apakah MASIH ada jalur lain yang bisa mengubah profiles/weights.py atau profiles/thresholds.py TANPA lewat guardrail meta_learner.py sama sekali (mis. langsung dari api_server.py endpoint config lain)?",
+          "putaran": {
+            "putaran_2_cross_check_dua_arah": {
+              "status": "PENDING",
+              "catatan": null
+            },
+            "putaran_3_validasi_matematika": {
+              "status": "PENDING",
+              "catatan": null
+            },
+            "putaran_4_kondisi_khusus": {
+              "status": "PENDING",
+              "catatan": null
+            },
+            "putaran_5_regresi_akhir": {
+              "status": "PENDING",
+              "catatan": null
+            }
+          }
         }
       ]
     },
@@ -215,39 +716,141 @@
       "files": [
         {
           "file": "database.py",
-          "status": "PENDING",
           "audit_state_ref": "database.py",
-          "fokus_cross_check": "Cek SEMUA kolom yang ditambahkan di sesi-sesi audit sebelumnya (sentiment_score, param since di get_trade_stats) benar2 dipakai konsisten di migration/schema, tidak ada mismatch tipe data antara model dataclass dan kolom SQL."
+          "fokus_cross_check": "Cek SEMUA kolom yang ditambahkan di sesi-sesi audit sebelumnya (sentiment_score, param since di get_trade_stats) benar2 dipakai konsisten di migration/schema, tidak ada mismatch tipe data antara model dataclass dan kolom SQL.",
+          "putaran": {
+            "putaran_2_cross_check_dua_arah": {
+              "status": "PENDING",
+              "catatan": null
+            },
+            "putaran_3_validasi_matematika": {
+              "status": "SKIP_TIDAK_RELEVAN",
+              "catatan": "File ini tidak mengandung kalkulasi/formula matematis signifikan (murni I/O, orkestrasi, atau notifikasi)."
+            },
+            "putaran_4_kondisi_khusus": {
+              "status": "PENDING",
+              "catatan": null
+            },
+            "putaran_5_regresi_akhir": {
+              "status": "PENDING",
+              "catatan": null
+            }
+          }
         },
         {
           "file": "core/models.py",
-          "status": "PENDING",
           "audit_state_ref": "core/models.py",
-          "fokus_cross_check": "Dataclass definitions dipakai HAMPIR SEMUA file lain. Cek default_factory tidak ada yang mutable-default-bug tersembunyi, dan semua field yang diakses via getattr() di file lain benar2 ada di sini."
+          "fokus_cross_check": "Dataclass definitions dipakai HAMPIR SEMUA file lain. Cek default_factory tidak ada yang mutable-default-bug tersembunyi, dan semua field yang diakses via getattr() di file lain benar2 ada di sini.",
+          "putaran": {
+            "putaran_2_cross_check_dua_arah": {
+              "status": "PENDING",
+              "catatan": null
+            },
+            "putaran_3_validasi_matematika": {
+              "status": "SKIP_TIDAK_RELEVAN",
+              "catatan": "File ini tidak mengandung kalkulasi/formula matematis signifikan (murni I/O, orkestrasi, atau notifikasi)."
+            },
+            "putaran_4_kondisi_khusus": {
+              "status": "PENDING",
+              "catatan": null
+            },
+            "putaran_5_regresi_akhir": {
+              "status": "PENDING",
+              "catatan": null
+            }
+          }
         },
         {
           "file": "notifications.py",
-          "status": "PENDING",
           "audit_state_ref": "notifications.py",
-          "fokus_cross_check": "Cek SEMUA notify_* dipanggil dgn parameter yang benar dari main.py/telegram_bot.py — termasuk 2 fix trigger take_profit/stop_loss yang baru dibuat di main.py, pastikan notify_sl_tp_hit menangani kedua trigger dengan format pesan yang benar-benar berbeda dan jelas."
+          "fokus_cross_check": "Cek SEMUA notify_* dipanggil dgn parameter yang benar dari main.py/telegram_bot.py — termasuk 2 fix trigger take_profit/stop_loss yang baru dibuat di main.py, pastikan notify_sl_tp_hit menangani kedua trigger dengan format pesan yang benar-benar berbeda dan jelas.",
+          "putaran": {
+            "putaran_2_cross_check_dua_arah": {
+              "status": "PENDING",
+              "catatan": null
+            },
+            "putaran_3_validasi_matematika": {
+              "status": "SKIP_TIDAK_RELEVAN",
+              "catatan": "File ini tidak mengandung kalkulasi/formula matematis signifikan (murni I/O, orkestrasi, atau notifikasi)."
+            },
+            "putaran_4_kondisi_khusus": {
+              "status": "PENDING",
+              "catatan": null
+            },
+            "putaran_5_regresi_akhir": {
+              "status": "PENDING",
+              "catatan": null
+            }
+          }
         },
         {
           "file": "api_server.py",
-          "status": "PENDING",
           "audit_state_ref": "api_server.py",
-          "fokus_cross_check": "70 fungsi, endpoint terbanyak. Cek SEMUA endpoint yang dipanggil telegram_bot.py sudah 100% konsisten (sudah sebagian dicek saat audit telegram_bot.py — lanjutkan untuk endpoint yang dipakai dashboard/index.html yang BELUM pernah di-cross-check)."
+          "fokus_cross_check": "70 fungsi, endpoint terbanyak. Cek SEMUA endpoint yang dipanggil telegram_bot.py sudah 100% konsisten (sudah sebagian dicek saat audit telegram_bot.py — lanjutkan untuk endpoint yang dipakai dashboard/index.html yang BELUM pernah di-cross-check).",
+          "putaran": {
+            "putaran_2_cross_check_dua_arah": {
+              "status": "PENDING",
+              "catatan": null
+            },
+            "putaran_3_validasi_matematika": {
+              "status": "SKIP_TIDAK_RELEVAN",
+              "catatan": "File ini tidak mengandung kalkulasi/formula matematis signifikan (murni I/O, orkestrasi, atau notifikasi)."
+            },
+            "putaran_4_kondisi_khusus": {
+              "status": "PENDING",
+              "catatan": null
+            },
+            "putaran_5_regresi_akhir": {
+              "status": "PENDING",
+              "catatan": null
+            }
+          }
         },
         {
           "file": "telegram_bot.py",
-          "status": "PENDING",
           "audit_state_ref": "telegram_bot.py",
-          "fokus_cross_check": "Sudah difix 5 bug termasuk 2 cross-file kritis. Cross-check ulang: field response API lain (selain approve/reject) yang mungkin punya pola sama (field 'status' selalu sama, hasil asli di field lain)."
+          "fokus_cross_check": "Sudah difix 5 bug termasuk 2 cross-file kritis. Cross-check ulang: field response API lain (selain approve/reject) yang mungkin punya pola sama (field 'status' selalu sama, hasil asli di field lain).",
+          "putaran": {
+            "putaran_2_cross_check_dua_arah": {
+              "status": "PENDING",
+              "catatan": null
+            },
+            "putaran_3_validasi_matematika": {
+              "status": "SKIP_TIDAK_RELEVAN",
+              "catatan": "File ini tidak mengandung kalkulasi/formula matematis signifikan (murni I/O, orkestrasi, atau notifikasi)."
+            },
+            "putaran_4_kondisi_khusus": {
+              "status": "PENDING",
+              "catatan": null
+            },
+            "putaran_5_regresi_akhir": {
+              "status": "PENDING",
+              "catatan": null
+            }
+          }
         },
         {
           "file": "smoke_api.py",
-          "status": "PENDING",
           "audit_state_ref": "smoke_api.py",
-          "fokus_cross_check": "File kecil (18 baris) tapi pastikan endpoint yang di-smoke-test masih match dengan yang ada di api_server.py setelah semua perubahan sesi ini."
+          "fokus_cross_check": "File kecil (18 baris) tapi pastikan endpoint yang di-smoke-test masih match dengan yang ada di api_server.py setelah semua perubahan sesi ini.",
+          "putaran": {
+            "putaran_2_cross_check_dua_arah": {
+              "status": "PENDING",
+              "catatan": null
+            },
+            "putaran_3_validasi_matematika": {
+              "status": "SKIP_TIDAK_RELEVAN",
+              "catatan": "File ini tidak mengandung kalkulasi/formula matematis signifikan (murni I/O, orkestrasi, atau notifikasi)."
+            },
+            "putaran_4_kondisi_khusus": {
+              "status": "PENDING",
+              "catatan": null
+            },
+            "putaran_5_regresi_akhir": {
+              "status": "PENDING",
+              "catatan": null
+            }
+          }
         }
       ]
     },
@@ -258,9 +861,26 @@
       "files": [
         {
           "file": "main.py",
-          "status": "PENDING",
           "audit_state_ref": "main.py",
-          "fokus_cross_check": "Fokus HANYA ke titik-titik integrasi dengan file yang baru saja di-cross-check ulang di tier 1-6 — apakah ada bug baru yang muncul akibat fix di file lain (mis. signature berubah, field baru yang belum dibaca main.py)."
+          "fokus_cross_check": "Fokus HANYA ke titik-titik integrasi dengan file yang baru saja di-cross-check ulang di tier 1-6 — apakah ada bug baru yang muncul akibat fix di file lain (mis. signature berubah, field baru yang belum dibaca main.py).",
+          "putaran": {
+            "putaran_2_cross_check_dua_arah": {
+              "status": "PENDING",
+              "catatan": null
+            },
+            "putaran_3_validasi_matematika": {
+              "status": "PENDING",
+              "catatan": null
+            },
+            "putaran_4_kondisi_khusus": {
+              "status": "PENDING",
+              "catatan": null
+            },
+            "putaran_5_regresi_akhir": {
+              "status": "PENDING",
+              "catatan": null
+            }
+          }
         }
       ]
     }

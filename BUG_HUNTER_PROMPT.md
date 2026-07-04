@@ -28,11 +28,30 @@ Baca 3 file berikut SEBELUM melakukan apa pun, dalam urutan ini:
    dan bisa membingungkan (seolah bug baru padahal sudah lama diketahui & difix).
 2. **`hunter_bug.json`** — urutan prioritas cross-check berdasarkan BLAST RADIUS
    (jalur uang dulu → fondasi matematika → keputusan → config → pembelajaran
-   adaptif → persistensi → orkestrator), BUKAN urutan kronologis. Field `status`
-   per file menunjukkan progress cross-check (PENDING/IN_PROGRESS/CROSS_CHECKED_CLEAN/
-   CROSS_CHECKED_FIXED). Field `fokus_cross_check` per file adalah HIPOTESIS AWAL —
-   titik paling rawan yang sudah teridentifikasi — pakai sebagai starting point,
-   BUKAN daftar lengkap (tetap harus baca keseluruhan jalur fungsi file itu).
+   adaptif → persistensi → orkestrator), BUKAN urutan kronologis. Setiap file
+   punya field `putaran` (matriks 4 sub-putaran, lihat `_meta.putaran_definisi`
+   untuk deskripsi lengkap tiap putaran):
+   - `putaran_2_cross_check_dua_arah` — cek caller+callee dua arah pakai jalur.json.
+   - `putaran_3_validasi_matematika` — cocokkan rumus/kalkulasi vs definisi baku
+     (SKIP_TIDAK_RELEVAN untuk file tanpa kalkulasi signifikan, lihat
+     `_meta.putaran_definisi` untuk daftarnya).
+   - `putaran_4_kondisi_khusus` — edge case (harga 0, cold start, race condition, dll).
+   - `putaran_5_regresi_akhir` — ulang cross-check ringkas SETELAH semua tier
+     selesai putaran 2-4, untuk menangkap regresi antar-fix.
+   Putaran 1 (audit kronologis pertama) dilacak di `AUDIT_STATE.json`, sudah
+   selesai untuk semua 37 file sebelum sistem putaran ini dibuat.
+
+   **STRATEGI URUTAN KERJA** (baca `_meta.strategi_urutan_kerja` untuk detail):
+   HYBRID depth-first PER TIER — bukan per-file individual, bukan juga
+   breadth-first murni. Untuk tier yang sedang dikerjakan: selesaikan putaran 2
+   untuk SEMUA file di tier itu dulu, baru putaran 3 (skip file yang
+   SKIP_TIDAK_RELEVAN), baru putaran 4 — SEMUA untuk tier yang sama — baru pindah
+   ke tier berikutnya. Putaran 5 dijalankan PALING TERAKHIR untuk semua file,
+   setelah semua tier selesai putaran 2-4.
+
+   Field `fokus_cross_check` per file adalah HIPOTESIS AWAL — titik paling rawan
+   yang sudah teridentifikasi — pakai sebagai starting point, BUKAN daftar
+   lengkap (tetap harus baca keseluruhan jalur fungsi file itu).
 3. **`jalur.json`** — peta pemanggilan NYATA hasil ekstraksi AST dari kode asli
    (bukan ditulis manual, jadi akurat). Untuk tiap fungsi/method di 34 file:
    - `calls_out`: fungsi/method APA SAJA yang dipanggil fungsi ini (akurat, dari
@@ -46,10 +65,21 @@ Baca 3 file berikut SEBELUM melakukan apa pun, dalam urutan ini:
 python3 -c "
 import json
 d = json.load(open('hunter_bug.json'))
+# Strategi hybrid: cari tier PALING AWAL yang masih punya file belum selesai
+# putaran 2, 3 (yang relevan), atau 4 -- selesaikan tier itu dulu sebelum pindah.
 for tier in d['urutan_prioritas']:
-    pending = [f['file'] for f in tier['files'] if f['status'] == 'PENDING']
-    if pending:
-        print(f\"Tier {tier['tier']} ({tier['nama_tier']}): {pending}\")
+    belum_p2 = [f['file'] for f in tier['files'] if f['putaran']['putaran_2_cross_check_dua_arah']['status'] == 'PENDING']
+    belum_p3 = [f['file'] for f in tier['files'] if f['putaran']['putaran_3_validasi_matematika']['status'] == 'PENDING']
+    belum_p4 = [f['file'] for f in tier['files'] if f['putaran']['putaran_4_kondisi_khusus']['status'] == 'PENDING']
+    if belum_p2 or belum_p3 or belum_p4:
+        print(f\"Tier {tier['tier']} ({tier['nama_tier']}) BELUM SELESAI:\")
+        if belum_p2: print(f'  Putaran 2 (cross-check dua arah) pending: {belum_p2}')
+        if belum_p3: print(f'  Putaran 3 (matematika) pending: {belum_p3}')
+        if belum_p4: print(f'  Putaran 4 (kondisi khusus) pending: {belum_p4}')
+        print('  -> KERJAKAN TIER INI DULU sebelum pindah ke tier berikutnya.')
+        break
+else:
+    print('Semua tier selesai putaran 2-4 -> saatnya putaran 5 (regresi akhir) untuk semua file.')
 "
 ```
 
@@ -165,9 +195,10 @@ Sama seperti audit pertama: pahami tujuan, class utama, state, error handling.
 5. Update **KEDUA** file tracking:
    - `AUDIT_STATE.json`: tambahkan ke `bug_fixed_tambahan_dari_audit_file_lain`
      pada entry file yang terdampak (pola yang sama seperti sesi-sesi sebelumnya).
-   - `hunter_bug.json`: update `status` file ini jadi `CROSS_CHECKED_FIXED` atau
-     `CROSS_CHECKED_CLEAN`, isi field `bug_baru_ditemukan` (tambahkan field ini
-     kalau belum ada) dengan ringkasan singkat + referensi ke commit.
+   - `hunter_bug.json`: update field `putaran.<nama_putaran_yang_sedang_dikerjakan>.status`
+     file ini jadi `CROSS_CHECKED_FIXED` atau `CROSS_CHECKED_CLEAN` (isi `catatan`
+     dengan ringkasan singkat + referensi commit). Jangan sentuh putaran lain yang
+     belum dikerjakan — biarkan tetap `PENDING`/`SKIP_TIDAK_RELEVAN`.
 6. Commit & push (SELALU `git fetch` dulu):
    ```bash
    git fetch origin
