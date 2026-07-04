@@ -118,7 +118,11 @@
             "conn.execute",
             "text"
           ],
-          "referenced_in_files": []
+          "referenced_in_files": [
+            "learning/coin_swap.py",
+            "main.py",
+            "simulate_test.py"
+          ]
         },
         "DatabaseManager.close": {
           "line": 393,
@@ -132,7 +136,13 @@
             "self._engine.dispose"
           ],
           "referenced_in_files": [
-            "main.py"
+            "exchange.py",
+            "learning/coin_swap.py",
+            "learning/cross_learn.py",
+            "main.py",
+            "profiles/registry.py",
+            "simulate_test.py",
+            "telegram_bot.py"
           ]
         },
         "DatabaseManager._session": {
@@ -145,7 +155,9 @@
           "calls_out": [
             "self._session_factory"
           ],
-          "referenced_in_files": []
+          "referenced_in_files": [
+            "main.py"
+          ]
         },
         "DatabaseManager.get_bot_state": {
           "line": 400,
@@ -163,7 +175,10 @@
             "<call>.where",
             "select"
           ],
-          "referenced_in_files": []
+          "referenced_in_files": [
+            "exchange.py",
+            "main.py"
+          ]
         },
         "DatabaseManager.set_bot_state": {
           "line": 410,
@@ -186,7 +201,11 @@
             "BotState",
             "select"
           ],
-          "referenced_in_files": []
+          "referenced_in_files": [
+            "api_server.py",
+            "exchange.py",
+            "risk.py"
+          ]
         },
         "DatabaseManager.clear_bot_state": {
           "line": 424,
@@ -204,7 +223,10 @@
             "<call>.where",
             "delete"
           ],
-          "referenced_in_files": []
+          "referenced_in_files": [
+            "main.py",
+            "risk.py"
+          ]
         },
         "DatabaseManager.save_trade": {
           "line": 432,
@@ -228,7 +250,9 @@
             "<call>.where",
             "select"
           ],
-          "referenced_in_files": []
+          "referenced_in_files": [
+            "execution.py"
+          ]
         },
         "DatabaseManager.get_trade_by_order_id": {
           "line": 448,
@@ -271,7 +295,12 @@
             "select",
             "result.scalars"
           ],
-          "referenced_in_files": []
+          "referenced_in_files": [
+            "api_server.py",
+            "intelligence/validator.py",
+            "main.py",
+            "simulate_test.py"
+          ]
         },
         "DatabaseManager.get_trade_stats": {
           "line": 475,
@@ -305,7 +334,9 @@
             "select"
           ],
           "referenced_in_files": [
-            "learning/meta_learner.py"
+            "intelligence/commander.py",
+            "learning/meta_learner.py",
+            "simulate_test.py"
           ]
         },
         "DatabaseManager.update_trade_pnl": {
@@ -347,7 +378,9 @@
             "s.commit",
             "select"
           ],
-          "referenced_in_files": []
+          "referenced_in_files": [
+            "execution.py"
+          ]
         },
         "DatabaseManager.get_trades_with_regime": {
           "line": 564,
@@ -384,7 +417,9 @@
             "select",
             "func.upper"
           ],
-          "referenced_in_files": []
+          "referenced_in_files": [
+            "learning/analytics.py"
+          ]
         },
         "DatabaseManager.get_win_rate_by_profile_regime": {
           "line": 660,
@@ -450,6 +485,7 @@
             "trade_result.scalars"
           ],
           "referenced_in_files": [
+            "learning/analytics.py",
             "main.py"
           ]
         },
@@ -476,7 +512,10 @@
             "<call>.where",
             "select"
           ],
-          "referenced_in_files": []
+          "referenced_in_files": [
+            "intelligence/position_sync.py",
+            "main.py"
+          ]
         },
         "DatabaseManager.update_position_sl": {
           "line": 809,
@@ -496,7 +535,9 @@
             "round",
             "update"
           ],
-          "referenced_in_files": []
+          "referenced_in_files": [
+            "main.py"
+          ]
         },
         "DatabaseManager.update_position_highest_price": {
           "line": 819,
@@ -516,7 +557,9 @@
             "round",
             "update"
           ],
-          "referenced_in_files": []
+          "referenced_in_files": [
+            "main.py"
+          ]
         },
         "DatabaseManager.update_position_price": {
           "line": 827,
@@ -538,7 +581,9 @@
             "round",
             "update"
           ],
-          "referenced_in_files": []
+          "referenced_in_files": [
+            "main.py"
+          ]
         },
         "DatabaseManager.get_open_positions": {
           "line": 846,
@@ -556,7 +601,14 @@
             "result.scalars",
             "select"
           ],
-          "referenced_in_files": []
+          "referenced_in_files": [
+            "api_server.py",
+            "intelligence/commander.py",
+            "intelligence/position_sync.py",
+            "learning/coin_swap.py",
+            "main.py",
+            "simulate_test.py"
+          ]
         },
         "DatabaseManager.get_open_position_by_symbol": {
           "line": 853,
@@ -573,7 +625,10 @@
             "<call>.where",
             "select"
           ],
-          "referenced_in_files": []
+          "referenced_in_files": [
+            "api_server.py",
+            "main.py"
+          ]
         },
         "DatabaseManager.mark_position_closing": {
           "line": 863,
@@ -591,7 +646,9 @@
             "<call>.where",
             "update"
           ],
-          "referenced_in_files": []
+          "referenced_in_files": [
+            "main.py"
+          ]
         },
         "DatabaseManager.update_position_entry_fee": {
           "line": 872,
@@ -611,7 +668,9 @@
             "round",
             "update"
           ],
-          "referenced_in_files": []
+          "referenced_in_files": [
+            "main.py"
+          ]
         },
         "DatabaseManager.get_closing_positions": {
           "line": 881,
@@ -629,7 +688,9 @@
             "result.scalars",
             "select"
           ],
-          "referenced_in_files": []
+          "referenced_in_files": [
+            "main.py"
+          ]
         },
         "DatabaseManager.close_position": {
           "line": 891,
@@ -655,7 +716,8 @@
             "update"
           ],
           "referenced_in_files": [
-            "api_server.py"
+            "api_server.py",
+            "main.py"
           ]
         },
         "DatabaseManager.save_snapshot": {
@@ -682,7 +744,9 @@
             "desc",
             "select"
           ],
-          "referenced_in_files": []
+          "referenced_in_files": [
+            "main.py"
+          ]
         },
         "DatabaseManager.get_equity_curve": {
           "line": 953,
@@ -748,7 +812,11 @@
             "BotLog",
             "s.commit"
           ],
-          "referenced_in_files": []
+          "referenced_in_files": [
+            "api_server.py",
+            "execution.py",
+            "main.py"
+          ]
         },
         "DatabaseManager.get_recent_logs": {
           "line": 985,
@@ -770,7 +838,9 @@
             "desc",
             "select"
           ],
-          "referenced_in_files": []
+          "referenced_in_files": [
+            "api_server.py"
+          ]
         },
         "DatabaseManager._prune_logs": {
           "line": 994,
@@ -815,7 +885,9 @@
             "s.commit",
             "round"
           ],
-          "referenced_in_files": []
+          "referenced_in_files": [
+            "exchange.py"
+          ]
         },
         "DatabaseManager.get_api_metrics": {
           "line": 1028,
@@ -836,7 +908,9 @@
             "desc",
             "select"
           ],
-          "referenced_in_files": []
+          "referenced_in_files": [
+            "api_server.py"
+          ]
         },
         "DatabaseManager.get_avg_latency_ms": {
           "line": 1037,
@@ -860,7 +934,9 @@
             "q.order_by",
             "desc"
           ],
-          "referenced_in_files": []
+          "referenced_in_files": [
+            "api_server.py"
+          ]
         },
         "DatabaseManager._prune_metrics": {
           "line": 1049,
@@ -901,7 +977,9 @@
             "select",
             "func.count"
           ],
-          "referenced_in_files": []
+          "referenced_in_files": [
+            "main.py"
+          ]
         },
         "DatabaseManager.save_market_regime": {
           "line": 1072,
@@ -927,7 +1005,9 @@
             "s.commit",
             "round"
           ],
-          "referenced_in_files": []
+          "referenced_in_files": [
+            "strategy.py"
+          ]
         },
         "DatabaseManager.get_regime_history": {
           "line": 1100,
@@ -1046,7 +1126,11 @@
             "s.refresh",
             "round"
           ],
-          "referenced_in_files": []
+          "referenced_in_files": [
+            "intelligence/commander.py",
+            "intelligence/scorer.py",
+            "strategy.py"
+          ]
         },
         "DatabaseManager.link_signal_to_trade": {
           "line": 1241,
@@ -1099,7 +1183,9 @@
             "select",
             "func.upper"
           ],
-          "referenced_in_files": []
+          "referenced_in_files": [
+            "main.py"
+          ]
         },
         "DatabaseManager.get_signal_scores": {
           "line": 1342,
@@ -1148,7 +1234,8 @@
             "select"
           ],
           "referenced_in_files": [
-            "api_server.py"
+            "api_server.py",
+            "main.py"
           ]
         },
         "DatabaseManager.get_latest_regime": {
@@ -1169,7 +1256,10 @@
             "<call>.where",
             "select"
           ],
-          "referenced_in_files": []
+          "referenced_in_files": [
+            "api_server.py",
+            "intelligence/classifier.py"
+          ]
         },
         "DatabaseManager.get_indicator_effectiveness": {
           "line": 1435,
@@ -1213,6 +1303,7 @@
             "select"
           ],
           "referenced_in_files": [
+            "api_server.py",
             "learning/meta_learner.py"
           ]
         },
@@ -1291,7 +1382,9 @@
             "PerformanceSnapshot",
             "select"
           ],
-          "referenced_in_files": []
+          "referenced_in_files": [
+            "learning/analytics.py"
+          ]
         },
         "DatabaseManager.get_latest_snapshot": {
           "line": 1604,
@@ -1312,7 +1405,11 @@
             "_utcnow",
             "select"
           ],
-          "referenced_in_files": []
+          "referenced_in_files": [
+            "api_server.py",
+            "learning/analytics.py",
+            "simulate_test.py"
+          ]
         },
         "DatabaseManager.get_all_snapshots": {
           "line": 1648,
@@ -1360,7 +1457,10 @@
             "s.refresh",
             "float"
           ],
-          "referenced_in_files": []
+          "referenced_in_files": [
+            "learning/meta_learner.py",
+            "profiles/registry.py"
+          ]
         },
         "DatabaseManager.update_parameter_outcome": {
           "line": 1716,
@@ -1383,7 +1483,9 @@
             "json.dumps",
             "update"
           ],
-          "referenced_in_files": []
+          "referenced_in_files": [
+            "learning/meta_learner.py"
+          ]
         },
         "DatabaseManager.get_parameter_history": {
           "line": 1738,
@@ -1408,7 +1510,10 @@
             "result.scalars"
           ],
           "referenced_in_files": [
-            "api_server.py"
+            "api_server.py",
+            "learning/analytics.py",
+            "learning/meta_learner.py",
+            "profiles/registry.py"
           ]
         },
         "DatabaseManager.get_pending_outcomes": {
@@ -1499,7 +1604,9 @@
             "<call>.where",
             "delete"
           ],
-          "referenced_in_files": []
+          "referenced_in_files": [
+            "main.py"
+          ]
         },
         "DatabaseManager.get_active_universe_overrides": {
           "line": 1923,
@@ -1516,7 +1623,11 @@
             "<call>.where",
             "select"
           ],
-          "referenced_in_files": []
+          "referenced_in_files": [
+            "exchange.py",
+            "learning/coin_swap.py",
+            "main.py"
+          ]
         },
         "DatabaseManager.upsert_universe_override": {
           "line": 1933,
@@ -1540,7 +1651,12 @@
             "WatchlistOverride",
             "select"
           ],
-          "referenced_in_files": []
+          "referenced_in_files": [
+            "api_server.py",
+            "exchange.py",
+            "learning/coin_swap.py",
+            "main.py"
+          ]
         },
         "DatabaseManager.deactivate_universe_override": {
           "line": 1963,
@@ -1560,7 +1676,11 @@
             "_utcnow",
             "update"
           ],
-          "referenced_in_files": []
+          "referenced_in_files": [
+            "exchange.py",
+            "learning/coin_swap.py",
+            "main.py"
+          ]
         }
       }
     },
@@ -1667,7 +1787,12 @@
             "log.critical",
             "self._ex.fetch_balance"
           ],
-          "referenced_in_files": []
+          "referenced_in_files": [
+            "intelligence/position_sync.py",
+            "learning/coin_swap.py",
+            "learning/cross_learn.py",
+            "main.py"
+          ]
         },
         "ExchangeConnector.disconnect": {
           "line": 96,
@@ -1680,7 +1805,9 @@
             "log.info",
             "self._ex.close"
           ],
-          "referenced_in_files": []
+          "referenced_in_files": [
+            "main.py"
+          ]
         },
         "ExchangeConnector.get_market_info": {
           "line": 101,
@@ -1698,7 +1825,9 @@
             "limits.get"
           ],
           "referenced_in_files": [
-            "api_server.py"
+            "api_server.py",
+            "execution.py",
+            "main.py"
           ]
         },
         "ExchangeConnector.amount_to_precision": {
@@ -1745,7 +1874,10 @@
             "<call>.get",
             "self._markets.get"
           ],
-          "referenced_in_files": []
+          "referenced_in_files": [
+            "execution.py",
+            "main.py"
+          ]
         },
         "ExchangeConnector.get_maker_fee": {
           "line": 134,
@@ -1790,7 +1922,9 @@
             "float",
             "balance.get"
           ],
-          "referenced_in_files": []
+          "referenced_in_files": [
+            "main.py"
+          ]
         },
         "ExchangeConnector.fetch_ohlcv": {
           "line": 155,
@@ -1808,7 +1942,12 @@
             "self._log_lat",
             "self._retry"
           ],
-          "referenced_in_files": []
+          "referenced_in_files": [
+            "api_server.py",
+            "intelligence/position_sync.py",
+            "main.py",
+            "telegram_bot.py"
+          ]
         },
         "ExchangeConnector.fetch_ticker": {
           "line": 171,
@@ -1823,7 +1962,12 @@
             "self._log_lat",
             "self._retry"
           ],
-          "referenced_in_files": []
+          "referenced_in_files": [
+            "api_server.py",
+            "execution.py",
+            "intelligence/position_sync.py",
+            "main.py"
+          ]
         },
         "ExchangeConnector.fetch_order_book": {
           "line": 180,
@@ -1854,7 +1998,11 @@
             "getattr",
             "self._retry"
           ],
-          "referenced_in_files": []
+          "referenced_in_files": [
+            "intelligence/position_sync.py",
+            "main.py",
+            "risk.py"
+          ]
         },
         "ExchangeConnector.fetch_open_orders": {
           "line": 200,
@@ -1911,7 +2059,9 @@
             "self._log_lat",
             "self._retry"
           ],
-          "referenced_in_files": []
+          "referenced_in_files": [
+            "execution.py"
+          ]
         },
         "ExchangeConnector.fetch_order": {
           "line": 248,
@@ -1927,7 +2077,9 @@
             "self._log_lat",
             "self._retry"
           ],
-          "referenced_in_files": []
+          "referenced_in_files": [
+            "execution.py"
+          ]
         },
         "ExchangeConnector._log_lat": {
           "line": 257,
@@ -2101,7 +2253,9 @@
             "self._watch_ticker",
             "self._watch_orderbook"
           ],
-          "referenced_in_files": []
+          "referenced_in_files": [
+            "main.py"
+          ]
         },
         "WebSocketFeed.stop": {
           "line": 531,
@@ -2209,7 +2363,9 @@
             "<call>.get",
             "self.live_tickers.get"
           ],
-          "referenced_in_files": []
+          "referenced_in_files": [
+            "main.py"
+          ]
         },
         "WebSocketFeed.get_orderbook": {
           "line": 710,
@@ -2239,7 +2395,10 @@
             "t.get",
             "float"
           ],
-          "referenced_in_files": []
+          "referenced_in_files": [
+            "api_server.py",
+            "execution.py"
+          ]
         },
         "WebSocketFeed.get_spread": {
           "line": 722,
@@ -2254,7 +2413,10 @@
             "t.get",
             "float"
           ],
-          "referenced_in_files": []
+          "referenced_in_files": [
+            "api_server.py",
+            "execution.py"
+          ]
         },
         "WebSocketFeed.get_spread_absolute": {
           "line": 730,
@@ -2269,7 +2431,9 @@
             "t.get",
             "float"
           ],
-          "referenced_in_files": []
+          "referenced_in_files": [
+            "api_server.py"
+          ]
         },
         "WebSocketFeed.get_current_spread_pct": {
           "line": 736,
@@ -2282,7 +2446,10 @@
           "calls_out": [
             "self.get_spread"
           ],
-          "referenced_in_files": []
+          "referenced_in_files": [
+            "main.py",
+            "strategy.py"
+          ]
         },
         "WebSocketFeed.get_quote_volume_24h": {
           "line": 739,
@@ -2297,7 +2464,9 @@
             "t.get",
             "float"
           ],
-          "referenced_in_files": []
+          "referenced_in_files": [
+            "execution.py"
+          ]
         },
         "WebSocketFeed.get_market_depth_slippage": {
           "line": 748,
@@ -2316,7 +2485,9 @@
             "min",
             "abs"
           ],
-          "referenced_in_files": []
+          "referenced_in_files": [
+            "execution.py"
+          ]
         },
         "WebSocketFeed.is_feed_healthy": {
           "line": 783,
@@ -2332,7 +2503,11 @@
             "time.time",
             "self._last_ticker_upd.get"
           ],
-          "referenced_in_files": []
+          "referenced_in_files": [
+            "api_server.py",
+            "execution.py",
+            "main.py"
+          ]
         },
         "WebSocketFeed.is_orderbook_healthy": {
           "line": 793,
@@ -2371,7 +2546,9 @@
             "self._last_ticker_upd.get",
             "self._last_ob_upd.get"
           ],
-          "referenced_in_files": []
+          "referenced_in_files": [
+            "api_server.py"
+          ]
         },
         "_fetch_binance_tickers": {
           "line": 843,
@@ -2609,7 +2786,9 @@
             "self._execute_market",
             "self._execute_limit"
           ],
-          "referenced_in_files": []
+          "referenced_in_files": [
+            "main.py"
+          ]
         },
         "OrderExecutionManager._check_slippage": {
           "line": 193,
@@ -2907,6 +3086,7 @@
             "config.get"
           ],
           "referenced_in_files": [
+            "main.py",
             "notifications.py"
           ]
         },
@@ -3036,7 +3216,9 @@
             "_utcnow",
             "self._resume"
           ],
-          "referenced_in_files": []
+          "referenced_in_files": [
+            "main.py"
+          ]
         },
         "RiskManager.halt_trading": {
           "line": 289,
@@ -3051,7 +3233,10 @@
             "log.critical",
             "self._persist_halt"
           ],
-          "referenced_in_files": []
+          "referenced_in_files": [
+            "api_server.py",
+            "main.py"
+          ]
         },
         "RiskManager.resume_trading": {
           "line": 298,
@@ -3064,7 +3249,9 @@
             "self._resume",
             "log.warning"
           ],
-          "referenced_in_files": []
+          "referenced_in_files": [
+            "api_server.py"
+          ]
         },
         "RiskManager._resume": {
           "line": 307,
@@ -3122,7 +3309,9 @@
             "abs",
             "max"
           ],
-          "referenced_in_files": []
+          "referenced_in_files": [
+            "main.py"
+          ]
         },
         "RiskManager.is_symbol_halted": {
           "line": 349,
@@ -3170,6 +3359,7 @@
             "self._evaluate_order_locked"
           ],
           "referenced_in_files": [
+            "intelligence/commander.py",
             "main.py",
             "simulate_test.py"
           ]
@@ -3217,7 +3407,9 @@
             "log.warning",
             "min"
           ],
-          "referenced_in_files": []
+          "referenced_in_files": [
+            "simulate_test.py"
+          ]
         },
         "RiskManager._compute_sl_tp": {
           "line": 574,
@@ -3252,7 +3444,10 @@
             "all",
             "log.info"
           ],
-          "referenced_in_files": []
+          "referenced_in_files": [
+            "main.py",
+            "simulate_test.py"
+          ]
         },
         "RiskManager.check_trailing_sl": {
           "line": 656,
@@ -3272,7 +3467,10 @@
             "log.debug",
             "round"
           ],
-          "referenced_in_files": []
+          "referenced_in_files": [
+            "main.py",
+            "simulate_test.py"
+          ]
         },
         "RiskManager.compute_sharpe_ratio": {
           "line": 713,
@@ -3291,7 +3489,9 @@
             "np.sqrt",
             "excess.mean"
           ],
-          "referenced_in_files": []
+          "referenced_in_files": [
+            "api_server.py"
+          ]
         },
         "RiskManager.compute_sortino_ratio": {
           "line": 726,
@@ -3310,7 +3510,9 @@
             "np.sqrt",
             "excess.mean"
           ],
-          "referenced_in_files": []
+          "referenced_in_files": [
+            "api_server.py"
+          ]
         },
         "RiskManager.compute_max_drawdown": {
           "line": 742,
@@ -3331,7 +3533,9 @@
             "isinstance",
             "math.isinf"
           ],
-          "referenced_in_files": []
+          "referenced_in_files": [
+            "api_server.py"
+          ]
         },
         "RiskManager.compute_calmar_ratio": {
           "line": 761,
@@ -3342,7 +3546,9 @@
           ],
           "docstring": null,
           "calls_out": [],
-          "referenced_in_files": []
+          "referenced_in_files": [
+            "api_server.py"
+          ]
         },
         "RiskManager.compute_profit_factor": {
           "line": 770,
@@ -3357,7 +3563,9 @@
             "round",
             "float"
           ],
-          "referenced_in_files": []
+          "referenced_in_files": [
+            "api_server.py"
+          ]
         },
         "RiskManager.compute_win_rate": {
           "line": 780,
@@ -3370,7 +3578,10 @@
             "sum",
             "len"
           ],
-          "referenced_in_files": []
+          "referenced_in_files": [
+            "api_server.py",
+            "main.py"
+          ]
         },
         "RiskManager.compute_expectancy": {
           "line": 786,
@@ -3383,7 +3594,9 @@
             "sum",
             "len"
           ],
-          "referenced_in_files": []
+          "referenced_in_files": [
+            "api_server.py"
+          ]
         },
         "RiskManager.compute_avg_win_loss_ratio": {
           "line": 792,
@@ -3397,7 +3610,9 @@
             "sum",
             "len"
           ],
-          "referenced_in_files": []
+          "referenced_in_files": [
+            "api_server.py"
+          ]
         },
         "RiskManager.get_system_health": {
           "line": 799,
@@ -3594,7 +3809,10 @@
           ],
           "docstring": null,
           "calls_out": [],
-          "referenced_in_files": []
+          "referenced_in_files": [
+            "intelligence/commander.py",
+            "main.py"
+          ]
         },
         "BaseStrategy.get_scored_signal": {
           "line": 244,
@@ -3609,7 +3827,10 @@
           ],
           "docstring": null,
           "calls_out": [],
-          "referenced_in_files": []
+          "referenced_in_files": [
+            "intelligence/commander.py",
+            "main.py"
+          ]
         },
         "BaseStrategy.sync_position_state": {
           "line": 254,
@@ -3621,7 +3842,9 @@
           ],
           "docstring": null,
           "calls_out": [],
-          "referenced_in_files": []
+          "referenced_in_files": [
+            "main.py"
+          ]
         },
         "BaseStrategy.is_active": {
           "line": 262,
@@ -3643,7 +3866,9 @@
           "calls_out": [
             "log.warning"
           ],
-          "referenced_in_files": []
+          "referenced_in_files": [
+            "api_server.py"
+          ]
         },
         "BaseStrategy.resume": {
           "line": 269,
@@ -3655,7 +3880,9 @@
           "calls_out": [
             "log.info"
           ],
-          "referenced_in_files": []
+          "referenced_in_files": [
+            "api_server.py"
+          ]
         },
         "BaseStrategy.enrich": {
           "line": 273,
@@ -3778,7 +4005,9 @@
             "self._last_regime.pop",
             "log.debug"
           ],
-          "referenced_in_files": []
+          "referenced_in_files": [
+            "main.py"
+          ]
         },
         "VolumetricBreakoutStrategy._try_init_pipeline": {
           "line": 420,
@@ -3828,7 +4057,10 @@
           "calls_out": [
             "self._profiles.get"
           ],
-          "referenced_in_files": []
+          "referenced_in_files": [
+            "intelligence/commander.py",
+            "main.py"
+          ]
         },
         "VolumetricBreakoutStrategy.get_symbol_timeframe": {
           "line": 479,
@@ -3841,7 +4073,10 @@
           "calls_out": [
             "self._profiles.get"
           ],
-          "referenced_in_files": []
+          "referenced_in_files": [
+            "api_server.py",
+            "main.py"
+          ]
         },
         "VolumetricBreakoutStrategy._resolve_params": {
           "line": 492,
@@ -3863,7 +4098,10 @@
             "adaptive.get",
             "log.debug"
           ],
-          "referenced_in_files": []
+          "referenced_in_files": [
+            "intelligence/commander.py",
+            "main.py"
+          ]
         },
         "VolumetricBreakoutStrategy.sync_position_state": {
           "line": 549,
@@ -3889,7 +4127,9 @@
             "_utcnow",
             "getattr"
           ],
-          "referenced_in_files": []
+          "referenced_in_files": [
+            "main.py"
+          ]
         },
         "VolumetricBreakoutStrategy._detect_exit_mode": {
           "line": 606,
@@ -3952,7 +4192,9 @@
             "self._pos_trackers.get",
             "log.info"
           ],
-          "referenced_in_files": []
+          "referenced_in_files": [
+            "main.py"
+          ]
         },
         "VolumetricBreakoutStrategy._handle_regime_transition": {
           "line": 708,
@@ -3975,7 +4217,9 @@
             "getattr",
             "now.isoformat"
           ],
-          "referenced_in_files": []
+          "referenced_in_files": [
+            "main.py"
+          ]
         },
         "VolumetricBreakoutStrategy.register_position": {
           "line": 802,
@@ -3998,7 +4242,10 @@
             "_utcnow",
             "p.get"
           ],
-          "referenced_in_files": []
+          "referenced_in_files": [
+            "intelligence/commander.py",
+            "main.py"
+          ]
         },
         "VolumetricBreakoutStrategy.unregister_position": {
           "line": 845,
@@ -4013,7 +4260,9 @@
             "self._last_entry_params.pop",
             "self._pending_entry.discard"
           ],
-          "referenced_in_files": []
+          "referenced_in_files": [
+            "main.py"
+          ]
         },
         "VolumetricBreakoutStrategy.get_exit_mode": {
           "line": 852,
@@ -4039,7 +4288,9 @@
           "calls_out": [
             "self._pos_trackers.get"
           ],
-          "referenced_in_files": []
+          "referenced_in_files": [
+            "main.py"
+          ]
         },
         "VolumetricBreakoutStrategy.get_scored_signal": {
           "line": 861,
@@ -4078,7 +4329,10 @@
             "self._notifier.notify_regime_change",
             "self.get_symbol_timeframe"
           ],
-          "referenced_in_files": []
+          "referenced_in_files": [
+            "intelligence/commander.py",
+            "main.py"
+          ]
         },
         "VolumetricBreakoutStrategy.generate_signals": {
           "line": 1056,
@@ -4094,7 +4348,10 @@
             "self._generate_signals_v7",
             "self._generate_signals_legacy"
           ],
-          "referenced_in_files": []
+          "referenced_in_files": [
+            "intelligence/commander.py",
+            "main.py"
+          ]
         },
         "VolumetricBreakoutStrategy._generate_signals_v7": {
           "line": 1076,
@@ -4240,7 +4497,9 @@
             "log.info",
             "self._profiles.get"
           ],
-          "referenced_in_files": []
+          "referenced_in_files": [
+            "main.py"
+          ]
         },
         "get_strategy": {
           "line": 1736,
@@ -4436,7 +4695,9 @@
             "self._process_pending_deletes",
             "log.debug"
           ],
-          "referenced_in_files": []
+          "referenced_in_files": [
+            "main.py"
+          ]
         },
         "WhaleNotifier.notify_whale": {
           "line": 97,
@@ -4462,7 +4723,9 @@
             "min",
             "accelerated.append"
           ],
-          "referenced_in_files": []
+          "referenced_in_files": [
+            "main.py"
+          ]
         },
         "NotificationManager.__init__": {
           "line": 140,
@@ -4515,6 +4778,7 @@
             "log.info"
           ],
           "referenced_in_files": [
+            "main.py",
             "risk.py"
           ]
         },
@@ -4544,7 +4808,9 @@
             "side.upper",
             "_utcnow"
           ],
-          "referenced_in_files": []
+          "referenced_in_files": [
+            "main.py"
+          ]
         },
         "NotificationManager.notify_trade_closed": {
           "line": 262,
@@ -4567,7 +4833,9 @@
             "<call>.strftime",
             "_utcnow"
           ],
-          "referenced_in_files": []
+          "referenced_in_files": [
+            "main.py"
+          ]
         },
         "NotificationManager.notify_sl_tp_hit": {
           "line": 310,
@@ -4587,7 +4855,8 @@
             "_utcnow"
           ],
           "referenced_in_files": [
-            "intelligence/trade_guardian.py"
+            "intelligence/trade_guardian.py",
+            "main.py"
           ]
         },
         "NotificationManager.notify_bot_halted": {
@@ -4604,7 +4873,9 @@
             "<call>.strftime",
             "_utcnow"
           ],
-          "referenced_in_files": []
+          "referenced_in_files": [
+            "main.py"
+          ]
         },
         "NotificationManager.notify_bot_resumed": {
           "line": 359,
@@ -4618,7 +4889,9 @@
             "<call>.strftime",
             "_utcnow"
           ],
-          "referenced_in_files": []
+          "referenced_in_files": [
+            "main.py"
+          ]
         },
         "NotificationManager.notify_panic": {
           "line": 372,
@@ -4657,7 +4930,9 @@
             "<call>.strftime",
             "_utcnow"
           ],
-          "referenced_in_files": []
+          "referenced_in_files": [
+            "main.py"
+          ]
         },
         "NotificationManager.notify_error": {
           "line": 432,
@@ -4673,7 +4948,9 @@
             "<call>.strftime",
             "_utcnow"
           ],
-          "referenced_in_files": []
+          "referenced_in_files": [
+            "main.py"
+          ]
         },
         "NotificationManager.notify_info": {
           "line": 450,
@@ -4686,7 +4963,10 @@
           "calls_out": [
             "self._send"
           ],
-          "referenced_in_files": []
+          "referenced_in_files": [
+            "learning/coin_swap.py",
+            "main.py"
+          ]
         },
         "NotificationManager.notify_whale": {
           "line": 456,
@@ -4703,7 +4983,9 @@
           "calls_out": [
             "self._whale_notifier.notify_whale"
           ],
-          "referenced_in_files": []
+          "referenced_in_files": [
+            "main.py"
+          ]
         },
         "NotificationManager.notify_regime_change": {
           "line": 479,
@@ -4720,7 +5002,9 @@
             "regime_emoji.get",
             "self._send"
           ],
-          "referenced_in_files": []
+          "referenced_in_files": [
+            "strategy.py"
+          ]
         },
         "NotificationManager.notify_projection": {
           "line": 504,
@@ -4759,7 +5043,9 @@
             "narrative.replace",
             "_utcnow"
           ],
-          "referenced_in_files": []
+          "referenced_in_files": [
+            "main.py"
+          ]
         },
         "NotificationManager._send": {
           "line": 672,
@@ -5446,7 +5732,9 @@
             "_utcnow",
             "_bd_raw"
           ],
-          "referenced_in_files": []
+          "referenced_in_files": [
+            "main.py"
+          ]
         },
         "IntelligenceCommander.inject_dependencies": {
           "line": 1100,
@@ -5460,7 +5748,9 @@
           "calls_out": [
             "log.info"
           ],
-          "referenced_in_files": []
+          "referenced_in_files": [
+            "main.py"
+          ]
         }
       }
     },
@@ -5964,7 +6254,9 @@
             "t.get"
           ],
           "referenced_in_files": [
-            "learning/cross_learn.py"
+            "api_server.py",
+            "learning/cross_learn.py",
+            "learning/meta_learner.py"
           ]
         },
         "AnalyticsEngine.compute_all_profiles": {
@@ -6280,7 +6572,9 @@
             "self._engine.compute_attribution"
           ],
           "referenced_in_files": [
-            "learning/cross_learn.py"
+            "api_server.py",
+            "learning/cross_learn.py",
+            "learning/meta_learner.py"
           ]
         },
         "PerformanceAnalytics.compute_all_profiles": {
@@ -6315,6 +6609,7 @@
             "len"
           ],
           "referenced_in_files": [
+            "api_server.py",
             "main.py"
           ]
         },
@@ -6348,7 +6643,9 @@
             "datetime.now",
             "self.compute_all_profiles"
           ],
-          "referenced_in_files": []
+          "referenced_in_files": [
+            "api_server.py"
+          ]
         },
         "PerformanceAnalytics.refresh_snapshots": {
           "line": 1055,
@@ -6362,7 +6659,9 @@
           "calls_out": [
             "self.run_full_analysis"
           ],
-          "referenced_in_files": []
+          "referenced_in_files": [
+            "main.py"
+          ]
         },
         "PerformanceAnalytics.load_persistent_parameters": {
           "line": 1065,
@@ -6380,7 +6679,9 @@
             "log.warning",
             "_row_get"
           ],
-          "referenced_in_files": []
+          "referenced_in_files": [
+            "main.py"
+          ]
         },
         "PerformanceAnalytics.format_report_telegram": {
           "line": 1098,
@@ -6431,7 +6732,9 @@
             "__import__",
             "t.get"
           ],
-          "referenced_in_files": []
+          "referenced_in_files": [
+            "main.py"
+          ]
         },
         "PerformanceAnalytics.get_cross_learn_summary": {
           "line": 1150,
@@ -6633,7 +6936,9 @@
             "os.path.exists",
             "_utcnow"
           ],
-          "referenced_in_files": []
+          "referenced_in_files": [
+            "main.py"
+          ]
         },
         "CoinSwapEngine.run_cycle": {
           "line": 214,
@@ -6684,7 +6989,9 @@
             "out_stat.get",
             "bot_instance.notifier.notify_info"
           ],
-          "referenced_in_files": []
+          "referenced_in_files": [
+            "main.py"
+          ]
         },
         "CoinSwapEngine._restart_bots": {
           "line": 391,
@@ -6751,7 +7058,9 @@
             "list",
             "reversed"
           ],
-          "referenced_in_files": []
+          "referenced_in_files": [
+            "api_server.py"
+          ]
         },
         "CoinSwapEngine.check_triggered_swap": {
           "line": 482,
@@ -7023,7 +7332,10 @@
             "len",
             "log.error"
           ],
-          "referenced_in_files": []
+          "referenced_in_files": [
+            "learning/analytics.py",
+            "learning/meta_learner.py"
+          ]
         },
         "CrossLearnReader.get_peer_signal_scores": {
           "line": 224,
@@ -7055,7 +7367,10 @@
             "_normalize_score",
             "float"
           ],
-          "referenced_in_files": []
+          "referenced_in_files": [
+            "learning/analytics.py",
+            "learning/meta_learner.py"
+          ]
         },
         "CrossLearnReader.get_peer_regime_stats": {
           "line": 331,
@@ -7080,7 +7395,10 @@
             "round",
             "float"
           ],
-          "referenced_in_files": []
+          "referenced_in_files": [
+            "learning/analytics.py",
+            "learning/meta_learner.py"
+          ]
         },
         "CrossLearnReader.get_summary": {
           "line": 393,
@@ -7098,7 +7416,11 @@
             "cur.fetchall",
             "round"
           ],
-          "referenced_in_files": []
+          "referenced_in_files": [
+            "api_server.py",
+            "learning/analytics.py",
+            "main.py"
+          ]
         },
         "get_cross_learn_reader": {
           "line": 446,
@@ -7231,7 +7553,9 @@
             "self.check_pending_outcomes",
             "self._auto_apply_eligible"
           ],
-          "referenced_in_files": []
+          "referenced_in_files": [
+            "main.py"
+          ]
         },
         "MetaLearner.run_cross_cycle": {
           "line": 224,
@@ -7264,7 +7588,9 @@
             "peer_regimes.keys",
             "log.warning"
           ],
-          "referenced_in_files": []
+          "referenced_in_files": [
+            "main.py"
+          ]
         },
         "MetaLearner.generate_suggestions": {
           "line": 297,
@@ -7368,6 +7694,7 @@
             "result.append"
           ],
           "referenced_in_files": [
+            "api_server.py",
             "database.py"
           ]
         },
@@ -7604,7 +7931,9 @@
             "self._revert_suggestion",
             "abs"
           ],
-          "referenced_in_files": []
+          "referenced_in_files": [
+            "database.py"
+          ]
         },
         "MetaLearner._find_indicator_eff": {
           "line": 1189,
@@ -8437,7 +8766,8 @@
           ],
           "referenced_in_files": [
             "intelligence/validator.py",
-            "profiles/base_profile.py"
+            "profiles/base_profile.py",
+            "profiles/registry.py"
           ]
         },
         "ProfileThreshold.to_coinprofile_kwargs": {
@@ -8450,7 +8780,9 @@
           "calls_out": [
             "list"
           ],
-          "referenced_in_files": []
+          "referenced_in_files": [
+            "profiles/registry.py"
+          ]
         },
         "_build_parameter_bounds": {
           "line": 661,
@@ -9771,7 +10103,39 @@
           "calls_out": [
             "time.monotonic"
           ],
-          "referenced_in_files": []
+          "referenced_in_files": [
+            "constants.py",
+            "core/models.py",
+            "database.py",
+            "exchange.py",
+            "execution.py",
+            "indicators/orderbook.py",
+            "indicators/patterns.py",
+            "indicators/structure.py",
+            "indicators/trend.py",
+            "intelligence/classifier.py",
+            "intelligence/commander.py",
+            "intelligence/observer.py",
+            "intelligence/position_sync.py",
+            "intelligence/scorer.py",
+            "intelligence/trade_guardian.py",
+            "intelligence/validator.py",
+            "learning/analytics.py",
+            "learning/coin_swap.py",
+            "learning/cross_learn.py",
+            "learning/meta_learner.py",
+            "main.py",
+            "notifications.py",
+            "profiles/base_profile.py",
+            "profiles/registry.py",
+            "profiles/thresholds.py",
+            "profiles/weights.py",
+            "risk.py",
+            "simulate_test.py",
+            "strategy.py",
+            "ta_compat.py",
+            "telegram_bot.py"
+          ]
         },
         "_MetricCache.set": {
           "line": 236,
@@ -9792,8 +10156,7 @@
             "main.py",
             "profiles/registry.py",
             "profiles/weights.py",
-            "strategy.py",
-            "tools/build_jalur.py"
+            "strategy.py"
           ]
         },
         "_get_api_key_from_env": {
@@ -10242,7 +10605,11 @@
           "calls_out": [
             "all"
           ],
-          "referenced_in_files": []
+          "referenced_in_files": [
+            "intelligence/classifier.py",
+            "intelligence/observer.py",
+            "intelligence/validator.py"
+          ]
         },
         "MomentumIndicators.is_valid": {
           "line": 206,
@@ -10252,7 +10619,11 @@
           ],
           "docstring": null,
           "calls_out": [],
-          "referenced_in_files": []
+          "referenced_in_files": [
+            "intelligence/classifier.py",
+            "intelligence/observer.py",
+            "intelligence/validator.py"
+          ]
         },
         "StrengthIndicators.is_valid": {
           "line": 227,
@@ -10262,7 +10633,11 @@
           ],
           "docstring": null,
           "calls_out": [],
-          "referenced_in_files": []
+          "referenced_in_files": [
+            "intelligence/classifier.py",
+            "intelligence/observer.py",
+            "intelligence/validator.py"
+          ]
         },
         "VolatilityIndicators.is_valid": {
           "line": 253,
@@ -10272,7 +10647,11 @@
           ],
           "docstring": null,
           "calls_out": [],
-          "referenced_in_files": []
+          "referenced_in_files": [
+            "intelligence/classifier.py",
+            "intelligence/observer.py",
+            "intelligence/validator.py"
+          ]
         },
         "PatternIndicators.is_valid": {
           "line": 270,
@@ -10282,7 +10661,11 @@
           ],
           "docstring": null,
           "calls_out": [],
-          "referenced_in_files": []
+          "referenced_in_files": [
+            "intelligence/classifier.py",
+            "intelligence/observer.py",
+            "intelligence/validator.py"
+          ]
         },
         "OscillatorIndicators.is_valid": {
           "line": 293,
@@ -10292,7 +10675,11 @@
           ],
           "docstring": null,
           "calls_out": [],
-          "referenced_in_files": []
+          "referenced_in_files": [
+            "intelligence/classifier.py",
+            "intelligence/observer.py",
+            "intelligence/validator.py"
+          ]
         },
         "StructureIndicators.is_valid": {
           "line": 363,
@@ -10302,7 +10689,11 @@
           ],
           "docstring": null,
           "calls_out": [],
-          "referenced_in_files": []
+          "referenced_in_files": [
+            "intelligence/classifier.py",
+            "intelligence/observer.py",
+            "intelligence/validator.py"
+          ]
         },
         "OrderbookIndicators.is_valid": {
           "line": 394,
@@ -10312,7 +10703,11 @@
           ],
           "docstring": null,
           "calls_out": [],
-          "referenced_in_files": []
+          "referenced_in_files": [
+            "intelligence/classifier.py",
+            "intelligence/observer.py",
+            "intelligence/validator.py"
+          ]
         },
         "IndicatorSet.is_fully_valid": {
           "line": 423,
@@ -10328,7 +10723,9 @@
             "self.volatility.is_valid",
             "self.patterns.is_valid"
           ],
-          "referenced_in_files": []
+          "referenced_in_files": [
+            "intelligence/observer.py"
+          ]
         },
         "IndicatorSet.has_critical_errors": {
           "line": 432,
@@ -10341,7 +10738,9 @@
             "any",
             "err.lower"
           ],
-          "referenced_in_files": []
+          "referenced_in_files": [
+            "intelligence/observer.py"
+          ]
         },
         "IndicatorSet.add_error": {
           "line": 439,
@@ -10355,7 +10754,9 @@
           "calls_out": [
             "self.calculation_errors.append"
           ],
-          "referenced_in_files": []
+          "referenced_in_files": [
+            "intelligence/observer.py"
+          ]
         },
         "ObservationReport.is_tradeable": {
           "line": 456,
@@ -10367,7 +10768,9 @@
           "calls_out": [
             "self.primary_tf_indicators.has_critical_errors"
           ],
-          "referenced_in_files": []
+          "referenced_in_files": [
+            "strategy.py"
+          ]
         },
         "ScoreBreakdown.total": {
           "line": 490,
@@ -10379,7 +10782,9 @@
           "calls_out": [
             "round"
           ],
-          "referenced_in_files": []
+          "referenced_in_files": [
+            "intelligence/scorer.py"
+          ]
         },
         "ScoreBreakdown.to_dict": {
           "line": 503,
@@ -10392,6 +10797,7 @@
             "self.total"
           ],
           "referenced_in_files": [
+            "main.py",
             "profiles/base_profile.py"
           ]
         },
@@ -10452,7 +10858,10 @@
           "calls_out": [
             "self.validation_notes.append"
           ],
-          "referenced_in_files": []
+          "referenced_in_files": [
+            "intelligence/scorer.py",
+            "intelligence/validator.py"
+          ]
         },
         "ScoredSignal.to_dict": {
           "line": 570,
@@ -10467,6 +10876,7 @@
             "self.scored_at.isoformat"
           ],
           "referenced_in_files": [
+            "main.py",
             "profiles/base_profile.py"
           ]
         },
@@ -10523,7 +10933,9 @@
           "calls_out": [
             "self.gates_passed.append"
           ],
-          "referenced_in_files": []
+          "referenced_in_files": [
+            "intelligence/commander.py"
+          ]
         },
         "TradeDecision.add_gate_failed": {
           "line": 629,
@@ -10537,7 +10949,9 @@
           "calls_out": [
             "self.gates_failed.append"
           ],
-          "referenced_in_files": []
+          "referenced_in_files": [
+            "intelligence/commander.py"
+          ]
         },
         "TradeDecision.to_summary": {
           "line": 632,
@@ -10626,7 +11040,9 @@
           "calls_out": [
             "<expr>.get"
           ],
-          "referenced_in_files": []
+          "referenced_in_files": [
+            "learning/meta_learner.py"
+          ]
         },
         "validate_score": {
           "line": 763,
@@ -10771,7 +11187,9 @@
             "recent_rsi.max",
             "len"
           ],
-          "referenced_in_files": []
+          "referenced_in_files": [
+            "ta_compat.py"
+          ]
         },
         "_rsi_zone_exit": {
           "line": 116,
@@ -11373,7 +11791,9 @@
             "wfs.pop",
             "min"
           ],
-          "referenced_in_files": []
+          "referenced_in_files": [
+            "main.py"
+          ]
         },
         "calculate_orderbook": {
           "line": 426,
@@ -11588,7 +12008,9 @@
             "len",
             "<expr>.to_numpy"
           ],
-          "referenced_in_files": []
+          "referenced_in_files": [
+            "ta_compat.py"
+          ]
         },
         "calculate_willr_trend": {
           "line": 222,
@@ -11634,7 +12056,9 @@
             "float",
             "len"
           ],
-          "referenced_in_files": []
+          "referenced_in_files": [
+            "ta_compat.py"
+          ]
         },
         "calculate_roc_slow": {
           "line": 280,
@@ -11677,7 +12101,9 @@
             "roc_vals.append",
             "log.debug"
           ],
-          "referenced_in_files": []
+          "referenced_in_files": [
+            "ta_compat.py"
+          ]
         },
         "score_roc": {
           "line": 332,
@@ -12491,7 +12917,9 @@
             "abs",
             "pd.isna"
           ],
-          "referenced_in_files": []
+          "referenced_in_files": [
+            "ta_compat.py"
+          ]
         },
         "score_ichimoku": {
           "line": 160,
@@ -13602,7 +14030,9 @@
           "calls_out": [
             "classify_from_observation"
           ],
-          "referenced_in_files": []
+          "referenced_in_files": [
+            "strategy.py"
+          ]
         },
         "restore_regimes_from_db": {
           "line": 334,
@@ -13871,7 +14301,9 @@
             "_OBSERVATION_CACHE.items",
             "key.startswith"
           ],
-          "referenced_in_files": []
+          "referenced_in_files": [
+            "api_server.py"
+          ]
         },
         "MarketObserver.observe": {
           "line": 461,
@@ -14779,6 +15211,7 @@
           ],
           "referenced_in_files": [
             "profiles/base_profile.py",
+            "profiles/registry.py",
             "profiles/thresholds.py"
           ]
         }
@@ -15483,7 +15916,9 @@
             "float",
             "log.warning"
           ],
-          "referenced_in_files": []
+          "referenced_in_files": [
+            "api_server.py"
+          ]
         },
         "TradingBot._try_shadow_trade": {
           "line": 2174,
@@ -15681,7 +16116,9 @@
             "self._do_close_position",
             "self._closing_symbols.discard"
           ],
-          "referenced_in_files": []
+          "referenced_in_files": [
+            "api_server.py"
+          ]
         },
         "TradingBot._do_close_position": {
           "line": 2770,
@@ -15845,7 +16282,11 @@
             "self.stop",
             "self.notifier.start_background_tasks"
           ],
-          "referenced_in_files": []
+          "referenced_in_files": [
+            "intelligence/validator.py",
+            "simulate_test.py",
+            "telegram_bot.py"
+          ]
         },
         "TradingBot.run_position_sync_loop": {
           "line": 3268,
@@ -15883,9 +16324,7 @@
             "server.serve",
             "bot.stop"
           ],
-          "referenced_in_files": [
-            "tools/build_jalur.py"
-          ]
+          "referenced_in_files": []
         }
       }
     },
@@ -15913,7 +16352,10 @@
             "_MAP.get",
             "getattr"
           ],
-          "referenced_in_files": []
+          "referenced_in_files": [
+            "profiles/registry.py",
+            "profiles/thresholds.py"
+          ]
         },
         "ParameterBounds.is_within_bounds": {
           "line": 75,
@@ -15928,7 +16370,9 @@
             "self.get_bounds",
             "float"
           ],
-          "referenced_in_files": []
+          "referenced_in_files": [
+            "profiles/registry.py"
+          ]
         },
         "CoinProfile.max_hold_seconds": {
           "line": 137,
@@ -15996,6 +16440,7 @@
           ],
           "referenced_in_files": [
             "intelligence/validator.py",
+            "profiles/registry.py",
             "profiles/thresholds.py"
           ]
         },
@@ -16035,7 +16480,8 @@
           "docstring": null,
           "calls_out": [],
           "referenced_in_files": [
-            "core/models.py"
+            "core/models.py",
+            "main.py"
           ]
         },
         "CoinProfile.summary_line": {
@@ -16064,7 +16510,9 @@
             "min",
             "round"
           ],
-          "referenced_in_files": []
+          "referenced_in_files": [
+            "strategy.py"
+          ]
         }
       }
     },
@@ -16464,7 +16912,12 @@
             "_require",
             "pd.Series"
           ],
-          "referenced_in_files": []
+          "referenced_in_files": [
+            "main.py",
+            "simulate_test.py",
+            "strategy.py",
+            "telegram_bot.py"
+          ]
         },
         "_TAAccessor.dema": {
           "line": 247,
@@ -16555,7 +17008,10 @@
             "pv.rolling",
             "<expr>.rolling"
           ],
-          "referenced_in_files": []
+          "referenced_in_files": [
+            "core/models.py",
+            "intelligence/validator.py"
+          ]
         },
         "_TAAccessor.vwap": {
           "line": 336,
@@ -16582,7 +17038,11 @@
             "<expr>.groupby",
             "df.index.tz_convert"
           ],
-          "referenced_in_files": []
+          "referenced_in_files": [
+            "main.py",
+            "simulate_test.py",
+            "strategy.py"
+          ]
         },
         "_TAAccessor.vwap_bands": {
           "line": 373,
@@ -16661,7 +17121,10 @@
             "pd.Series",
             "<expr>.rolling"
           ],
-          "referenced_in_files": []
+          "referenced_in_files": [
+            "core/models.py",
+            "indicators/structure.py"
+          ]
         },
         "_TAAccessor.ichimoku": {
           "line": 519,
@@ -16732,7 +17195,12 @@
             "pd.Series",
             "log.warning"
           ],
-          "referenced_in_files": []
+          "referenced_in_files": [
+            "main.py",
+            "simulate_test.py",
+            "strategy.py",
+            "telegram_bot.py"
+          ]
         },
         "_TAAccessor.rsi_slope": {
           "line": 691,
@@ -16950,7 +17418,12 @@
             "pd.Series",
             "_true_range"
           ],
-          "referenced_in_files": []
+          "referenced_in_files": [
+            "main.py",
+            "simulate_test.py",
+            "strategy.py",
+            "telegram_bot.py"
+          ]
         },
         "_TAAccessor.atr_pct": {
           "line": 1028,
@@ -17248,6 +17721,7 @@
             "self.vwap_bands"
           ],
           "referenced_in_files": [
+            "api_server.py",
             "constants.py",
             "indicators/oscillators.py",
             "indicators/structure.py"

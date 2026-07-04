@@ -142,9 +142,10 @@ def build_reverse_index(per_file_data):
     """
     # Kumpulkan semua nama fungsi terdefinisi beserta file asalnya
     all_py_files = []
-    for dirpath, _, filenames in os.walk(ROOT):
-        if "/.git" in dirpath:
+    for dirpath, dirnames, filenames in os.walk(ROOT):
+        if "/.git" in dirpath or dirpath.rstrip("/").endswith("/tools") or "/tools/" in dirpath:
             continue
+        dirnames[:] = [d for d in dirnames if d not in (".git", "tools", "__pycache__")]
         for fn in filenames:
             if fn.endswith(".py"):
                 full = os.path.join(dirpath, fn)
@@ -167,7 +168,18 @@ def build_reverse_index(per_file_data):
             short = full_name.split(".")[-1]
             if len(short) < 4 or short.startswith("_") and len(short) < 6:
                 pass  # tetap dicek, cuma nama pendek/underscore sering noisy -- biarkan tapi ditandai
-            pattern = re.compile(r"(?<![\w.])" + re.escape(short) + r"\s*\(")
+            # [BUG-FIX] Sebelumnya regex negative lookbehind "(?<![\w.])" ikut
+            # meng-exclude karakter titik SEBELUM nama fungsi — padahal pola
+            # pemanggilan method paling umum justru PERSIS "self.executor.
+            # execute_signal(" yang punya titik tepat sebelum nama fungsi.
+            # Akibatnya SEMUA pemanggilan method via dot-notation (mayoritas
+            # pemanggilan di codebase ini!) gagal terdeteksi -> referenced_in_files
+            # kosong padahal caller-nya nyata ada (kefatalan: false negative,
+            # bug hunter bisa salah simpulkan "tidak ada caller" padahal ada).
+            # Sekarang: hanya exclude word-char sebelum nama (supaya tidak match
+            # sebagai substring nama lain, mis. "get" di dalam "reset"), titik
+            # tetap diizinkan karena itu justru pola valid.
+            pattern = re.compile(r"(?<![\w])" + re.escape(short) + r"\s*\(")
             hits = []
             for other_rel, content in file_contents.items():
                 if other_rel == relpath:
