@@ -840,6 +840,30 @@ class OrderExecutionManager:
 
         return trade
 
+    @staticmethod
+    def _safe_float(value, field_name: str = "metadata"):
+        """
+        [BUG-FIX] Ditemukan lewat eksperimen: metadata dari signal bisa
+        berisi tipe data tak terduga (string non-numerik, dll) akibat data
+        yang tidak sesuai format dari modul upstream. _build_signal_origin()
+        HANYA membangun label deskriptif (bukan logic trading kritis) --
+        crash di sini TIDAK BOLEH menggagalkan pencatatan trade yang SUDAH
+        benar-benar tereksekusi di exchange. Kalau konversi gagal, log
+        warning dan anggap token itu tidak ada (dilewati), bukan crash
+        total yang menghentikan seluruh proses pencatatan trade.
+        """
+        if value is None:
+            return None
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            log.warning(
+                "_build_signal_origin: metadata['%s']=%r bertipe tidak "
+                "valid untuk dikonversi float -- token dilewati.",
+                field_name, value,
+            )
+            return None
+
     def _build_signal_origin(self, signal: SignalEvent) -> str:
         meta   = signal.metadata or {}
         tokens: List[str] = []
@@ -848,7 +872,7 @@ class OrderExecutionManager:
         adaptive_mode = meta.get("adaptive_mode", "")
         exit_mode_val = meta.get("exit_mode", "")
         entry_trigger = meta.get("entry_trigger", "")
-        atr_ratio     = meta.get("atr_ratio")
+        atr_ratio     = self._safe_float(meta.get("atr_ratio"), "atr_ratio")
 
         if coin_profile:
             tokens.append(f"Profile({coin_profile})")
@@ -858,28 +882,33 @@ class OrderExecutionManager:
             tokens.append(f"Mode({exit_mode_val})")
         if entry_trigger and entry_trigger != "None":
             tokens.append(f"Trigger({entry_trigger})")
-        if atr_ratio is not None and float(atr_ratio) != 1.0:
-            tokens.append(f"ATRRatio({float(atr_ratio):.2f})")
+        if atr_ratio is not None and atr_ratio != 1.0:
+            tokens.append(f"ATRRatio({atr_ratio:.2f})")
 
         if meta.get("breakout_ok"):
-            d = meta.get("breakout_dist_pct")
-            tokens.append(f"Breakout({d:.3f}%)" if d else "Breakout")
+            d = self._safe_float(meta.get("breakout_dist_pct"), "breakout_dist_pct")
+            # [BUG-FIX] Sebelumnya "if d else" -- d=0.0 (breakout persis di
+            # level, nilai VALID) dianggap falsy dan kehilangan angkanya.
+            tokens.append(f"Breakout({d:.3f}%)" if d is not None else "Breakout")
         if meta.get("golden_cross"):
             tokens.append("GoldenCross")
-        if meta.get("vol_ratio") is not None:
-            tokens.append(f"Vol({float(meta['vol_ratio']):.2f}x)")
-        if meta.get("rsi") is not None:
-            tokens.append(f"RSI({float(meta['rsi']):.1f})")
-        if meta.get("atr_pct") is not None:
-            tokens.append(f"ATR%({float(meta['atr_pct']):.3f})")
+        vol_ratio = self._safe_float(meta.get("vol_ratio"), "vol_ratio")
+        if vol_ratio is not None:
+            tokens.append(f"Vol({vol_ratio:.2f}x)")
+        rsi = self._safe_float(meta.get("rsi"), "rsi")
+        if rsi is not None:
+            tokens.append(f"RSI({rsi:.1f})")
+        atr_pct = self._safe_float(meta.get("atr_pct"), "atr_pct")
+        if atr_pct is not None:
+            tokens.append(f"ATR%({atr_pct:.3f})")
 
         if meta.get("exit_reason"):
             exit_str = str(meta["exit_reason"])[:80]
             tokens.append(f"Exit({exit_str})")
 
-        sent = meta.get("sentiment_score")
-        if sent is not None and float(sent) != 0.0:
-            tokens.append(f"Sent({float(sent):.3f})")
+        sent = self._safe_float(meta.get("sentiment_score"), "sentiment_score")
+        if sent is not None and sent != 0.0:
+            tokens.append(f"Sent({sent:.3f})")
 
         sv = meta.get("strategy_version", f"v{APP_VERSION}")
         # [BUG-FIX] Sebelumnya: sv.startswith("v") akan AttributeError kalau

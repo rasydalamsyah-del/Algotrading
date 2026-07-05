@@ -3161,6 +3161,26 @@ class TradingBot:
                             self.risk_manager._update_config(self.config)
                         if any(k in applied for k in ["telegram_enabled","telegram_bot_token","telegram_chat_id"]):
                             self.notifier._update_config(self.config)
+                        # [BUG-FIX — ditemukan saat re-audit execution.py,
+                        # pola IDENTIK dengan bug RiskManager._update_config
+                        # di atas] max_slippage_pct ADA di self.config (jadi
+                        # /setconfig max_slippage_pct=X berhasil masuk ke
+                        # `applied` dan /getconfig menampilkan nilai baru,
+                        # seolah sudah berlaku), TAPI OrderExecutionManager
+                        # menyimpannya sebagai atribut instance biasa
+                        # (self.max_slippage_pct, di-copy SEKALI saat
+                        # construct), bukan dibaca ulang dari self.config
+                        # tiap kali dipakai. Tanpa trigger ini, threshold
+                        # slippage guard yang BENAR-BENAR dipakai tetap nilai
+                        # LAMA sampai restart penuh, walau operator sudah
+                        # yakin sudah mengubahnya. Sekarang: propagate
+                        # langsung ke atribut executor.
+                        if "max_slippage_pct" in applied and self.executor is not None:
+                            self.executor.max_slippage_pct = self.config["max_slippage_pct"]
+                            log.info(
+                                "[ConfigWatcher] Executor max_slippage_pct diperbarui: %.4f%%",
+                                self.config["max_slippage_pct"],
+                            )
                         if any(k in applied for k in ["api_key","api_secret","exchange_id","testnet"]):
                             try:
                                 log.info("[ConfigWatcher] Validasi credential baru sebelum reinit...")

@@ -217,7 +217,7 @@
       ]
     },
     "execution.py": {
-      "status": "DONE_TAPI_ADA_TEMUAN_BARU_PENDING (lihat temuan_reaudit_2026_07_05)",
+      "status": "DONE_RE_AUDIT_TUNTAS (9 temuan total, semua difix + dites, 20/20 eksperimen PASS)",
       "bug_fixed": [
         "iceberg_chunk_tidak_cek_min_amount_min_cost",
         "type_hint_max_slippage_override"
@@ -275,7 +275,45 @@
         ],
         "rencana_fix_disarankan_1_dan_2": "Tambahkan pengecekan eksplisit order.get('status') di _execute_market -- kalau bukan closed/filled, jangan langsung anggap gagal total (beri toleransi/polling singkat mirip _poll_fill untuk kasus eventual-consistency), dan ganti pola 'or' jadi pengecekan 'is not None' eksplisit untuk field filled. WAJIB root-cause fix, bukan tambal try/except.",
         "referensi_dokumen": "HANDOFF_NEXT_SESSION_DETAIL.md Bagian 5.6, 5.7, 5.8, 6.5",
-        "ringkasan_fix": "SEMUA 5 temuan sudah diperbaiki root-cause (bukan tambal sulam) dan diverifikasi lewat 6 skenario eksperimen (order belum filled ditolak, order normal tetap tercatat benar, eventual-consistency via polling singkat berhasil, slippage fail-closed saat blackout, strategy_version non-string tidak crash, precision rounding sebelum validasi min_amount) PLUS 1 test regresi iceberg (4 chunk, weighted-avg-price benar) -- total 7/7 test PASS. Bug pola sama (filled=0 falsy) yang ternyata JUGA ada di _execute_iceberg (bukan cuma _process_fill) ikut ditemukan & difix sesuai aturan 'cek pola sama di seluruh file' (Bagian 6.5.2 poin 7 HANDOFF_NEXT_SESSION_DETAIL.md). Ditambahkan method baru _verify_order_filled() sebagai helper bersama _execute_market dan _execute_iceberg untuk verifikasi status order sebelum dianggap fill sukses (root-cause fix, bukan duplikasi tambal-sulam)."
+        "ringkasan_fix": "SEMUA 5 temuan sudah diperbaiki root-cause (bukan tambal sulam) dan diverifikasi lewat 6 skenario eksperimen (order belum filled ditolak, order normal tetap tercatat benar, eventual-consistency via polling singkat berhasil, slippage fail-closed saat blackout, strategy_version non-string tidak crash, precision rounding sebelum validasi min_amount) PLUS 1 test regresi iceberg (4 chunk, weighted-avg-price benar) -- total 7/7 test PASS. Bug pola sama (filled=0 falsy) yang ternyata JUGA ada di _execute_iceberg (bukan cuma _process_fill) ikut ditemukan & difix sesuai aturan 'cek pola sama di seluruh file' (Bagian 6.5.2 poin 7 HANDOFF_NEXT_SESSION_DETAIL.md). Ditambahkan method baru _verify_order_filled() sebagai helper bersama _execute_market dan _execute_iceberg untuk verifikasi status order sebelum dianggap fill sukses (root-cause fix, bukan duplikasi tambal-sulam).",
+        "penutupan_celah_2026_07_05": {
+          "konteks": "User mempertanyakan apakah execution.py BENAR-BENAR sudah dibedah tuntas semua fungsi/sudut pandang. Self-audit jujur menemukan 7 celah nyata yang belum ditutup meski 5 temuan awal sudah difix. Semua celah ditutup di iterasi ini.",
+          "temuan_tambahan": [
+            {
+              "id": 6,
+              "lokasi": "main.py run_config_watcher (baris ~3162-3175)",
+              "masalah": "max_slippage_pct ADA di self.config (bisa di-/setconfig, /getconfig menampilkan nilai baru seolah berhasil), TAPI TIDAK PERNAH dipropagate ke OrderExecutionManager.max_slippage_pct (disimpan sebagai atribut instance yang di-copy sekali saat construct, bukan dibaca ulang dari config). Pola IDENTIK dengan bug RiskManager._update_config yang sudah difix sebelumnya, tapi lolos untuk max_slippage_pct.",
+              "severity": "SEDANG-TINGGI (threshold slippage guard bisa stale tanpa disadari operator)",
+              "status_fix": "SUDAH DIFIX + DITES (eksperimen membuktikan sebelum/sesudah)",
+              "bukti": "Eksperimen: config ter-update ke 1.5 tapi executor.max_slippage_pct tetap 0.5 tanpa fix; dengan fix keduanya 1.5."
+            },
+            {
+              "id": 7,
+              "lokasi": "_build_signal_origin -- atr_ratio, vol_ratio, rsi, atr_pct, sentiment_score (5 titik)",
+              "masalah": "Semua field metadata numerik ini memanggil float(...) tanpa guard tipe data -- kalau salah satu bertipe string non-numerik (data corrupt/tidak terduga dari modul upstream), crash ValueError SEBELUM save_trade(), menggagalkan pencatatan trade yang sudah tereksekusi. Ditemukan lewat eksperimen aktif 'menjebol' fungsi dengan input aneh (bukan cuma baca kode).",
+              "severity": "RENDAH-SEDANG (jarang terjadi, dampak besar kalau kejadian)",
+              "status_fix": "SUDAH DIFIX + DITES -- ditambah helper _safe_float() dipakai konsisten di semua 5 titik"
+            },
+            {
+              "id": 8,
+              "lokasi": "_build_signal_origin -- breakout_dist_pct (baris ~866)",
+              "masalah": "'if d else Breakout' -- d=0.0 (breakout persis di level, nilai VALID) dianggap falsy, angka hilang dari label. Pola falsy yang sama dengan bug utama #2, ditemukan saat sweep pola yang sama di seluruh file (checklist 6.5.2 poin 7).",
+              "severity": "SANGAT RENDAH (cuma label log, tidak berdampak ke uang)",
+              "status_fix": "SUDAH DIFIX + DITES"
+            }
+          ],
+          "celah_yang_ditutup": [
+            "_execute_limit jalur normal (via _poll_fill asli, bukan _execute_market) -- diuji, tetap benar",
+            "_execute_limit fallback-ke-market saat blackout harga total -- diuji, sekarang benar diblokir (bukan lolos diam-diam)",
+            "_execute_limit fallback-ke-market dengan harga tersedia -- diuji regresi, tetap jalan normal",
+            "_execute_iceberg -- chunk gagal verifikasi status di-skip, chunk lain lanjut -- diuji, benar",
+            "_process_fill -- fee fallback ke get_taker_fee saat fee dict kosong -- diuji, benar",
+            "_process_fill -- slippage_pct arah SELL dihitung benar (positif saat merugikan) -- diuji, benar",
+            "_check_slippage WS-branch (get_market_depth_slippage, drift calc) -- diverifikasi ulang manual (VWAP walk-the-book benar, arah drift buy/sell benar) -- tidak ada bug",
+            "__init__ / hot-reload config -- ditemukan bug #6 (lihat di atas), sudah difix"
+          ],
+          "total_eksperimen_sesi_ini": "20 skenario, 20/20 PASS (setelah semua fix, termasuk regresi)"
+        }
       }
     },
     "risk.py": {
