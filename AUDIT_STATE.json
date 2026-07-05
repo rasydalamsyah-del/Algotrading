@@ -334,7 +334,45 @@
       "catatan_investigasi_tambahan": [
         "compute_sharpe_ratio/compute_sortino_ratio menerima pnl_list berisi PnL DOLAR mentah (dari api_server.py: [float(t.realized_pnl) for t in closed]), bukan persentase return relatif terhadap equity/posisi -- secara akademis Sharpe ratio didefinisikan atas RETURN (dimensionless/%), bukan nilai absolut. NAMUN karena risk_free_rate selalu dipanggil dengan default 0.0 (tidak ada caller yang mengisi non-zero), dan rasio mean/std bersifat scale-invariant untuk penskalaan seragam, hasil rasio ini TETAP valid untuk perbandingan relatif (before/after suatu perubahan) meski tidak bisa dibandingkan literal dengan Sharpe ratio standar industri (yang berbasis % return). Tidak difix karena butuh keputusan desain (normalisasi terhadap apa -- equity saat itu? position value?) yang di luar scope investigasi murni. Didokumentasikan sebagai limitasi, bukan bug aktif.",
         "BUG HUNT PUTARAN 4 (kondisi khusus): equity=0/negatif, konkurensi evaluate_order (sudah ada asyncio.Lock self._evaluate_lock yang benar menyerialisasi), division-by-zero drawdown (sudah ada guard if self._peak_equity > 0) -- semua sudah tertangani dengan baik, tidak ditemukan bug baru untuk risk.py di putaran ini."
-      ]
+      ],
+      "temuan_reaudit_2026_07_05": {
+        "konteks": "Re-audit total risk.py dengan metode ketat (baca semua 33 fungsi/method baris-per-baris, cross-check ke SEMUA caller di main.py, verifikasi klaim komentar lama, eksperimen pembuktian untuk temuan signifikan).",
+        "temuan": [
+          {
+            "id": 1,
+            "lokasi": "_compute_position_size (parameter 'side' tidak pernah dipakai)",
+            "masalah": "side diterima tapi diabaikan total -- SELL (yang di bot spot ini SELALU berarti MENUTUP posisi existing, tidak ada short) ikut kena cap max_position_size_pct yang seharusnya cuma untuk BUY (membuka posisi baru). Kalau nilai posisi yang mau ditutup > max_position_size_pct% dari equity SAAT INI, close order ke-CAP, meninggalkan sisa koin tidak terjual. Comment lama di _evaluate_order_locked baris ~452 yang bilang 'evaluate_order(side=sell) tidak pernah dipanggil' TERBUKTI SUDAH TIDAK AKURAT -- main.py baris 2836 memanggilnya untuk flow close position (fix dari sesi sebelumnya yang tidak sinkron dengan comment di risk.py).",
+            "severity": "KRITIS (posisi bisa gagal ditutup penuh, sisa koin stray)",
+            "status_fix": "SUDAH DIFIX + DITES",
+            "bukti": "Eksperimen: posisi $500 (equity $2000, max_position_size_pct=10% -> cap $200) -- sebelum fix approved_size=200 (sisa $300 tidak terjual), sesudah fix approved_size=500 (full close). 5 test regresi lain (BUY masih ter-cap, ATR sizing BUY, trim balance SELL, SELL saldo 0 tetap rejected) semua PASS."
+          },
+          {
+            "id": 2,
+            "lokasi": "_evaluate_order_locked -- SL floor guard + falsy check assessment final",
+            "masalah": "Override SL hanya untuk sl_pct > max_sl_pct (SL terlalu LEBAR), TIDAK ada floor untuk sl<=0 (harga stop tidak masuk akal). Dikombinasikan bug 'stop_loss=round(sl,8) if sl else None' (falsy-check, sl=0.0 valid data tapi falsy) -- pada kombinasi parameter tertentu (ATR besar relatif harga + max_position_size_pct longgar >=40%), order BUY bisa APPROVED dengan stop_loss=None sama sekali -- posisi terbuka tanpa proteksi stop-loss.",
+            "severity": "KRITIS (risiko downside tidak terbatas untuk trade nyata)",
+            "status_fix": "SUDAH DIFIX + DITES",
+            "bukti": "Eksperimen: price=1.0, atr=0.5, atr_multiplier_sl=2.0, max_position_size_pct=45% -> sl_mentah=0.0, sl_pct=100% <= max_sl_pct(112.5%) sebelum fix -> assessment.stop_loss=None. Setelah fix: sl<=0 ikut di-floor, stop_loss=0.975 (valid)."
+          }
+        ],
+        "observasi_bukan_bug": [
+          {
+            "topik": "compute_sharpe_ratio/compute_sortino_ratio memakai pnl_list PnL absolut (USDT), bukan return ternormalisasi modal per periode",
+            "catatan": "Secara metodologi quant, Sharpe/Sortino baku dihitung dari return periodik ternormalisasi modal, bukan PnL dolar mentah per trade. Ini tidak menyebabkan kerugian uang langsung (cuma metrik dashboard/reporting, tidak dipakai untuk keputusan trading otomatis), jadi TIDAK difix di sesi ini -- didokumentasikan sebagai keterbatasan metodologi, bukan bug fungsional. Bisa didiskusikan lebih lanjut kalau user mau metrik yang lebih presisi secara akademis."
+          },
+          {
+            "topik": "check_breakeven_sl/check_trailing_sl: 'not all([entry_price, current_sl, take_profit])' truthy-check",
+            "catatan": "current_sl=0.0 akan salah dianggap 'tidak ada' oleh pattern ini. TAPI karena bug #2 di atas sudah menutup celah sl<=0 sejak SL awal dihitung di evaluate_order(), current_sl yang sampai ke sini (dari posisi live) seharusnya tidak akan pernah 0 lagi -- risiko residual sudah tertutup di sumbernya. Tidak diubah di sesi ini (root cause sudah diperbaiki), tapi dicatat untuk kewaspadaan sesi berikutnya."
+          }
+        ],
+        "verifikasi_lain": [
+          "_update_config: dikonfirmasi ulang SEMUA 13 field ter-cover (fix lama masih valid)",
+          "_compute_low_balance_threshold: dikonfirmasi cap 50% initial_equity masih ada (fix lama masih valid)",
+          "Concurrency: _evaluate_lock melindungi evaluate_order; update_portfolio_state/halt_trading/record_symbol_loss sepenuhnya sync tanpa await di titik kritis -- aman dari race condition dalam model asyncio single-thread kooperatif",
+          "compute_max_drawdown, compute_calmar_ratio (dg annualisasi CAGR di api_server.py), compute_profit_factor, compute_win_rate, compute_expectancy, compute_avg_win_loss_ratio -- diverifikasi ulang manual, matematika benar"
+        ],
+        "status": "DONE_RE_AUDIT_TUNTAS (2 bug kritis baru ditemukan & difix + dites, 1 observasi metodologi didokumentasikan)"
+      }
     },
     "strategy.py": {
       "status": "DONE",

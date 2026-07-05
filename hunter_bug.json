@@ -110,10 +110,9 @@
             }
           },
           "putaran_ulang_metode_ketat": {
-            "tanggal": null,
-            "status": "BELUM DIKERJAKAN",
-            "metode": null,
-            "catatan": "risk.py belum sempat di-re-audit dengan metode ketat baru (Bagian 6.5) -- statusnya masih dari audit lama yang TERBUKTI TIDAK CUKUP (lihat kasus execution.py). WAJIB dikerjakan dengan metode yang sama."
+            "tanggal": "2026-07-05",
+            "status": "SELESAI TUNTAS -- 2 bug kritis baru difix + dites",
+            "catatan": "Lihat AUDIT_STATE.json risk.py temuan_reaudit_2026_07_05 untuk detail. Bug #1 (sell/close ke-cap max_position_size_pct) dan bug #2 (stop_loss bisa None untuk trade nyata) keduanya KRITIS, sudah root-cause fix + eksperimen pembuktian."
           }
         },
         {

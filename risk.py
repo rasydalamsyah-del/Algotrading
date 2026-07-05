@@ -510,11 +510,27 @@ class RiskManager:
         if sl is not None and side == "buy" and price > 0:
             sl_pct     = (price - sl) / price * 100
             max_sl_pct = self._max_position_size_pct * 2.5
-            if sl_pct > max_sl_pct:
+            # [BUG-FIX — kritis] Sebelumnya HANYA sl_pct > max_sl_pct (SL
+            # terlalu LEBAR) yang di-override. Kalau sl hasil hitung ATR
+            # jatuh persis di 0 atau NEGATIF (mis. ATR besar relatif harga,
+            # dikombinasikan max_position_size_pct yang longgar sehingga
+            # max_sl_pct ikut longgar), sl<=0 TIDAK tertangkap kondisi di
+            # atas (sl_pct=100% bisa saja <= max_sl_pct kalau
+            # max_position_size_pct >= 40%). sl=0/negatif itu HARGA STOP
+            # YANG TIDAK MASUK AKAL (order sell di harga 0 tidak mungkin
+            # tereksekusi wajar) -- dan diperparah bug falsy-check di bawah
+            # (baris assessment) yang mengubah sl=0.0 jadi None, membuat
+            # trade approved TANPA stop-loss sama sekali. Dibuktikan lewat
+            # eksperimen: price=1.0, atr=0.5, atr_multiplier_sl=2.0,
+            # max_position_size_pct=45% -> sl=0.0 lolos tanpa override ->
+            # assessment.stop_loss=None. Sekarang: sl<=0 UNTUK BUY juga
+            # di-floor ke SL persentase aman, sama seperti kasus "terlalu lebar".
+            if sl_pct > max_sl_pct or sl <= 0:
                 sl_override = price * (1 - self._stop_loss_pct / 100)
                 log.warning(
-                    "%s: SL too wide (%.2f%% > %.2f%%) — overriding to %.6f",
-                    symbol, sl_pct, max_sl_pct, sl_override,
+                    "%s: SL tidak valid (sl=%.8f, sl_pct=%.2f%% vs max=%.2f%%) "
+                    "— overriding ke %.6f",
+                    symbol, sl, sl_pct, max_sl_pct, sl_override,
                 )
                 sl = sl_override
 
@@ -533,13 +549,21 @@ class RiskManager:
             else RiskDecision.APPROVED
         )
 
+        # [BUG-FIX — kritis] Sebelumnya "if sl else None"/"if tp else None"
+        # -- sl/tp=0.0 (nilai valid secara tipe data, walau harga 0 sendiri
+        # tidak masuk akal untuk stop/target) dianggap falsy dan DIHILANGKAN
+        # jadi None, bukan malah di-floor/ditolak secara eksplisit. Dengan
+        # floor guard di atas, sl untuk BUY sekarang seharusnya tidak akan
+        # pernah <=0 lagi -- tapi pengecekan `is not None` tetap dipasang
+        # di sini sebagai lapisan pertahanan kedua (defense in depth) untuk
+        # SELL/edge-case lain yang belum ter-floor eksplisit.
         assessment = RiskAssessment(
             decision=decision,
             reason=size_reason,
             approved_size=round(approved_size, 8),
             recommended_quantity=round(approved_size, 8),
-            stop_loss=round(sl, 8) if sl else None,
-            take_profit=round(tp, 8) if tp else None,
+            stop_loss=round(sl, 8) if sl is not None else None,
+            take_profit=round(tp, 8) if tp is not None else None,
         )
         log.info("Risk: %s | %s", symbol, assessment)
         return assessment
@@ -560,6 +584,28 @@ class RiskManager:
         # sendiri agar fungsi ini aman dipanggil independen.
         if price is None or price <= 0:
             return None, f"Invalid price: {price}"
+
+        # [BUG-FIX — kritis] Sebelumnya parameter `side` diterima TAPI TIDAK
+        # PERNAH dipakai di fungsi ini -- baik cabang ATR maupun non-ATR
+        # menerapkan cap max_position_size_pct (dan sizing berbasis risk-
+        # per-trade) yang SAMA untuk buy MAUPUN sell. Di bot spot ini (tidak
+        # ada short), side="sell" SELALU berarti MENUTUP posisi existing,
+        # bukan membuka posisi baru -- aturan "jangan buka posisi lebih dari
+        # X% equity" tidak relevan sama sekali untuk menutup posisi yang
+        # SUDAH ada. Dibuktikan lewat eksperimen: posisi $500 yang mau
+        # ditutup penuh, dengan max_position_size_pct=10% dari equity $2000
+        # (=$200), ke-CAP jadi cuma $200 -- SISA $300 TIDAK IKUT TERJUAL,
+        # padahal caller (_evaluate_order_locked baris ~464) SUDAH menjamin
+        # `requested` di sini tidak melebihi free_coin_balance riil. Sekarang:
+        # sell/close selalu memakai `requested` apa adanya, tidak dibatasi
+        # equity-based cap ataupun ATR-based sizing (keduanya aturan untuk
+        # MEMBUKA posisi baru).
+        if side == "sell":
+            return requested, (
+                "Sell/close: ukuran mengikuti saldo riil yang sudah "
+                "diverifikasi caller, tidak dibatasi max_position_size_pct "
+                "(aturan itu untuk membuka posisi baru, bukan menutup)"
+            )
 
         equity = self._current_equity
 
