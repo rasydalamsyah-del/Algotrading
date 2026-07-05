@@ -217,7 +217,7 @@
       ]
     },
     "execution.py": {
-      "status": "DONE",
+      "status": "DONE_TAPI_ADA_TEMUAN_BARU_PENDING (lihat temuan_reaudit_2026_07_05)",
       "bug_fixed": [
         "iceberg_chunk_tidak_cek_min_amount_min_cost",
         "type_hint_max_slippage_override"
@@ -227,7 +227,55 @@
       "bug_fixed_tambahan_dari_audit_file_lain": [
         "BUG HUNT CROSS-CHECK (dua arah, lihat hunter_bug.json/jalur.json): _execute_iceberg() untuk order iceberg (order besar >3% volume 24h, sengaja dipecah jadi beberapa chunk market order terpisah dengan jeda 0.8s) hanya mengembalikan trades[0] (chunk PERTAMA) sebagai primary_trade ke execute_signal()/caller. Caller (main.py._handle_buy) SUDAH benar mengagregasi amount lewat parsing note \"iceberg_actual_filled=\", TAPI entry_price yang dipakai untuk position, tracker trailing-stop, log, dan notifikasi Telegram SEMUA masih pakai trade.executed_price mentah (harga CHUNK PERTAMA saja) -- padahal harga bisa bergeser signifikan antar chunk untuk order besar. Dampak: entry_price yang tercatat di DB & dipakai trailing-stop tracker bisa meleset dari cost-basis sebenarnya, berpengaruh ke akurasi PnL & timing trailing-stop sepanjang umur posisi. Fix: _execute_iceberg() menghitung rata-rata tertimbang (weighted by filled amount) dari executed_price semua chunk yang berhasil, dikirim lewat note baru \"iceberg_avg_price=\" (pola sama seperti iceberg_actual_filled). main.py._handle_buy diupdate parse note ini dan pakai entry_price/actual_amount yang sudah benar secara KONSISTEN di semua titik (upsert_position, tracker trailing-stop, log, notify_trade_opened, notify_projection) -- sebelumnya sebagian titik downstream masih pakai trade.executed_price/trade.filled mentah walau upsert_position sudah benar, jadi ada inkonsistensi internal antara apa yang tersimpan di DB vs apa yang dipakai tracker & notifikasi.",
         "BUG HUNT PUTARAN 4 (kondisi khusus/edge case): _execute_limit() -- ketika limit order timeout unfilled lalu cancel_order() GAGAL (exception), kode SEBELUMNYA langsung ASUMSI \"mungkin sudah filled\" dan tetap lanjut submit MARKET ORDER BARU untuk full amount. Kalau cancel gagal BUKAN karena order sudah filled tapi karena error jaringan sementara (order ASLI masih hidup/open di exchange), order asli itu bisa ke-fill belakangan SETELAH order market baru juga tereksekusi -- DOUBLE FILL, posisi jadi 2x lipat dari yang disetujui risk manager. Fix: setelah cancel gagal, verifikasi status ASLI via fetch_order sebelum mengambil tindakan apa pun -- kalau ternyata sudah filled, proses fill asli (jangan buat order baru); kalau masih open/status tidak jelas, ABORT (jangan fallback market) dan log CRITICAL untuk cek manual, demi mencegah double-fill. Diverifikasi dengan 3 skenario test (order masih hidup -> abort, ternyata sudah filled -> proses fill asli, cancel normal berhasil -> tidak regresi)."
-      ]
+      ],
+      "temuan_reaudit_2026_07_05": {
+        "konteks": "Audit dadakan (bukan bagian alur putaran normal) atas permintaan user untuk menguji apakah status 'DONE/SELESAI' file ini benar-benar valid. Metode: baca ulang TOTAL dari baris 1, tanpa asumsi status lama benar, cross-check dua arah menyeluruh (bukan cuma area fokus_cross_check), dan eksperimen pembuktian nyata untuk kecurigaan signifikan.",
+        "hasil": "5 temuan baru, status file DICABUT dari 'DONE' jadi 'PERLU RE-AUDIT / ADA PENDING FIX'",
+        "temuan": [
+          {
+            "id": 1,
+            "lokasi": "_execute_market (baris ~261-284)",
+            "masalah": "Tidak pernah mengecek order.get('status') sebelum menganggap market order berhasil filled -- beda dengan jalur limit order yang eksplisit cek status closed/filled via _poll_fill.",
+            "severity": "KRITIS",
+            "status_fix": "BELUM DIFIX",
+            "bukti": "Dibuktikan lewat script eksperimen (FakeExchange mengembalikan status='open', filled=0 tanpa exception) -> trade tetap tercatat sebagai filled=100.0 (fully filled) di database."
+          },
+          {
+            "id": 2,
+            "lokasi": "_process_fill (baris ~600-602)",
+            "masalah": "filled = order.get('filled') or order.get('amount') or assessment.approved_size -- truthy-check salah, filled=0 yang valid (order belum tereksekusi) jatuh ke fallback jumlah yang DIMINTA bukan yang benar-benar tereksekusi. Pola sama persis dengan bug threshold_used=0.0 yang pernah ditemukan di learning/cross_learn.py, tapi lolos di execution.py.",
+            "severity": "KRITIS (memperparah temuan #1)",
+            "status_fix": "BELUM DIFIX",
+            "bukti": "Sama seperti temuan #1 -- dibuktikan di eksperimen yang sama."
+          },
+          {
+            "id": 3,
+            "lokasi": "_check_slippage (baris ~221-236)",
+            "masalah": "Kalau WS feed mati DAN REST fetch_ticker juga exception, kode return True, 0.0, 0.0 -- slippage guard dilewati TOTAL, order diizinkan tanpa info harga sama sekali. Sudah pernah dicatat sebagai 'OBSERVASI, sengaja' di audit sebelumnya, tapi belum pernah dikonfirmasi eksplisit ke user apakah ini keputusan sadar atau celah yang perlu diperketat.",
+            "severity": "SEDANG -- butuh keputusan desain dari user",
+            "status_fix": "PENDING KEPUTUSAN (fail-open vs fail-closed)",
+            "bukti": "Ditemukan dari pembacaan kode, belum diuji eksperimen."
+          },
+          {
+            "id": 4,
+            "lokasi": "exchange.py create_order (baris ~221), dipanggil dari _execute_market/_execute_limit/_execute_iceberg",
+            "masalah": "amount_to_precision() (pembulatan step-size exchange) terjadi SETELAH validasi min_amount/min_cost di execute_signal (baris ~130-155) yang memakai amount belum dibulatkan -- kalau amount sangat dekat boundary, hasil pembulatan bisa jatuh di bawah minimum meski lolos validasi awal.",
+            "severity": "RENDAH (gagal aman via exception, tapi order gagal tanpa alasan jelas ke operator)",
+            "status_fix": "BELUM DIFIX",
+            "bukti": "Ditemukan dari pembacaan kode, belum diuji eksperimen."
+          },
+          {
+            "id": 5,
+            "lokasi": "_build_signal_origin (baris ~717-718)",
+            "masalah": "sv.startswith('v') akan AttributeError kalau metadata['strategy_version'] bukan tipe string (misal angka) -- crash ini terjadi SEBELUM save_trade, bisa menggagalkan pencatatan trade yang SUDAH benar-benar tereksekusi di exchange.",
+            "severity": "RENDAH-SEDANG (jarang terjadi, dampak besar kalau kejadian)",
+            "status_fix": "BELUM DIFIX",
+            "bukti": "Ditemukan dari pembacaan kode, belum diuji eksperimen."
+          }
+        ],
+        "rencana_fix_disarankan_1_dan_2": "Tambahkan pengecekan eksplisit order.get('status') di _execute_market -- kalau bukan closed/filled, jangan langsung anggap gagal total (beri toleransi/polling singkat mirip _poll_fill untuk kasus eventual-consistency), dan ganti pola 'or' jadi pengecekan 'is not None' eksplisit untuk field filled. WAJIB root-cause fix, bukan tambal try/except.",
+        "referensi_dokumen": "HANDOFF_NEXT_SESSION_DETAIL.md Bagian 5.6, 5.7, 5.8, 6.5"
+      }
     },
     "risk.py": {
       "status": "DONE",

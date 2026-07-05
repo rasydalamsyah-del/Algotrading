@@ -79,6 +79,12 @@
               "status": "PENDING",
               "catatan": null
             }
+          },
+          "putaran_ulang_metode_ketat": {
+            "tanggal": "2026-07-05",
+            "status": "SEBAGIAN — 5 temuan baru, BELUM DIFIX",
+            "metode": "Baca ulang total 753 baris tanpa asumsi dari status lama. Cross-check ke SEMUA fungsi yang dipanggil (exchange.py: create_order/cancel_order/fetch_order/amount_to_precision/get_taker_fee) dan SEMUA pemanggil (main.py baris 2536, 2863). Dibuat eksperimen nyata (FakeExchange+FakeDB) untuk membuktikan 2 bug kritis, bukan cuma penalaran manual.",
+            "catatan": "5 temuan (2 kritis belum difix, 1 butuh keputusan desain user, 2 minor) -- detail lengkap di AUDIT_STATE.json execution.py field 'temuan_reaudit_2026_07_05' dan di HANDOFF_NEXT_SESSION_DETAIL.md Bagian 5.8. PRIORITAS UTAMA sesi berikutnya: fix temuan ini SEBELUM lanjut file lain."
           }
         },
         {
@@ -102,6 +108,12 @@
               "status": "PENDING",
               "catatan": null
             }
+          },
+          "putaran_ulang_metode_ketat": {
+            "tanggal": null,
+            "status": "BELUM DIKERJAKAN",
+            "metode": null,
+            "catatan": "risk.py belum sempat di-re-audit dengan metode ketat baru (Bagian 6.5) -- statusnya masih dari audit lama yang TERBUKTI TIDAK CUKUP (lihat kasus execution.py). WAJIB dikerjakan dengan metode yang sama."
           }
         },
         {
@@ -125,10 +137,16 @@
               "status": "PENDING",
               "catatan": null
             }
+          },
+          "putaran_ulang_metode_ketat": {
+            "tanggal": null,
+            "status": "BELUM DIKERJAKAN",
+            "metode": null,
+            "catatan": "exchange.py belum sempat di-re-audit dengan metode ketat baru (Bagian 6.5) -- statusnya masih dari audit lama yang TERBUKTI TIDAK CUKUP (lihat kasus execution.py). WAJIB dikerjakan dengan metode yang sama."
           }
         }
       ],
-      "tier_1_status": "SEMUA FILE SELESAI PUTARAN 2-4 — siap lanjut ke Tier 2"
+      "tier_1_status": "STATUS DICABUT per 2026-07-05 — sebelumnya 'SEMUA FILE SELESAI PUTARAN 2-4', TAPI audit dadakan di execution.py (di luar alur putaran normal, metode: baca ulang total baris-per-baris tanpa asumsi + cross-check dua arah menyeluruh + eksperimen pembuktian) menemukan 2 bug KRITIS yang belum pernah tercatat (lihat AUDIT_STATE.json execution.py -> temuan_reaudit_2026_07_05). SELURUH Tier 1 (execution.py, risk.py, exchange.py) WAJIB DI-RE-AUDIT TOTAL dengan metodologi ketat baru (lihat HANDOFF_NEXT_SESSION_DETAIL.md Bagian 6.5) sebelum dianggap benar-benar selesai. Bug lama yang sudah difix tetap valid, tidak perlu ditemukan ulang -- yang dicabut hanya klaim 'sudah pasti bersih'."
     },
     {
       "tier": 2,
