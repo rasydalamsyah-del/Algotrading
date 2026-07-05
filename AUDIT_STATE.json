@@ -237,7 +237,7 @@
             "lokasi": "_execute_market (baris ~261-284)",
             "masalah": "Tidak pernah mengecek order.get('status') sebelum menganggap market order berhasil filled -- beda dengan jalur limit order yang eksplisit cek status closed/filled via _poll_fill.",
             "severity": "KRITIS",
-            "status_fix": "BELUM DIFIX",
+            "status_fix": "SUDAH DIFIX + DITES (6 skenario eksperimen + 1 regresi iceberg, semua PASS)",
             "bukti": "Dibuktikan lewat script eksperimen (FakeExchange mengembalikan status='open', filled=0 tanpa exception) -> trade tetap tercatat sebagai filled=100.0 (fully filled) di database."
           },
           {
@@ -245,7 +245,7 @@
             "lokasi": "_process_fill (baris ~600-602)",
             "masalah": "filled = order.get('filled') or order.get('amount') or assessment.approved_size -- truthy-check salah, filled=0 yang valid (order belum tereksekusi) jatuh ke fallback jumlah yang DIMINTA bukan yang benar-benar tereksekusi. Pola sama persis dengan bug threshold_used=0.0 yang pernah ditemukan di learning/cross_learn.py, tapi lolos di execution.py.",
             "severity": "KRITIS (memperparah temuan #1)",
-            "status_fix": "BELUM DIFIX",
+            "status_fix": "SUDAH DIFIX + DITES (6 skenario eksperimen + 1 regresi iceberg, semua PASS)",
             "bukti": "Sama seperti temuan #1 -- dibuktikan di eksperimen yang sama."
           },
           {
@@ -253,7 +253,7 @@
             "lokasi": "_check_slippage (baris ~221-236)",
             "masalah": "Kalau WS feed mati DAN REST fetch_ticker juga exception, kode return True, 0.0, 0.0 -- slippage guard dilewati TOTAL, order diizinkan tanpa info harga sama sekali. Sudah pernah dicatat sebagai 'OBSERVASI, sengaja' di audit sebelumnya, tapi belum pernah dikonfirmasi eksplisit ke user apakah ini keputusan sadar atau celah yang perlu diperketat.",
             "severity": "SEDANG -- butuh keputusan desain dari user",
-            "status_fix": "PENDING KEPUTUSAN (fail-open vs fail-closed)",
+            "status_fix": "SUDAH DIFIX (diputuskan fail-closed: order ditolak kalau harga benar-benar tidak tersedia dari WS maupun REST) + DITES. Trade-off: bot bisa skip entry saat gangguan API sementara -- ini keputusan desain, bisa didiskusikan ulang kalau user tidak setuju.",
             "bukti": "Ditemukan dari pembacaan kode, belum diuji eksperimen."
           },
           {
@@ -261,7 +261,7 @@
             "lokasi": "exchange.py create_order (baris ~221), dipanggil dari _execute_market/_execute_limit/_execute_iceberg",
             "masalah": "amount_to_precision() (pembulatan step-size exchange) terjadi SETELAH validasi min_amount/min_cost di execute_signal (baris ~130-155) yang memakai amount belum dibulatkan -- kalau amount sangat dekat boundary, hasil pembulatan bisa jatuh di bawah minimum meski lolos validasi awal.",
             "severity": "RENDAH (gagal aman via exception, tapi order gagal tanpa alasan jelas ke operator)",
-            "status_fix": "BELUM DIFIX",
+            "status_fix": "SUDAH DIFIX + DITES (6 skenario eksperimen + 1 regresi iceberg, semua PASS)",
             "bukti": "Ditemukan dari pembacaan kode, belum diuji eksperimen."
           },
           {
@@ -269,12 +269,13 @@
             "lokasi": "_build_signal_origin (baris ~717-718)",
             "masalah": "sv.startswith('v') akan AttributeError kalau metadata['strategy_version'] bukan tipe string (misal angka) -- crash ini terjadi SEBELUM save_trade, bisa menggagalkan pencatatan trade yang SUDAH benar-benar tereksekusi di exchange.",
             "severity": "RENDAH-SEDANG (jarang terjadi, dampak besar kalau kejadian)",
-            "status_fix": "BELUM DIFIX",
+            "status_fix": "SUDAH DIFIX + DITES (6 skenario eksperimen + 1 regresi iceberg, semua PASS)",
             "bukti": "Ditemukan dari pembacaan kode, belum diuji eksperimen."
           }
         ],
         "rencana_fix_disarankan_1_dan_2": "Tambahkan pengecekan eksplisit order.get('status') di _execute_market -- kalau bukan closed/filled, jangan langsung anggap gagal total (beri toleransi/polling singkat mirip _poll_fill untuk kasus eventual-consistency), dan ganti pola 'or' jadi pengecekan 'is not None' eksplisit untuk field filled. WAJIB root-cause fix, bukan tambal try/except.",
-        "referensi_dokumen": "HANDOFF_NEXT_SESSION_DETAIL.md Bagian 5.6, 5.7, 5.8, 6.5"
+        "referensi_dokumen": "HANDOFF_NEXT_SESSION_DETAIL.md Bagian 5.6, 5.7, 5.8, 6.5",
+        "ringkasan_fix": "SEMUA 5 temuan sudah diperbaiki root-cause (bukan tambal sulam) dan diverifikasi lewat 6 skenario eksperimen (order belum filled ditolak, order normal tetap tercatat benar, eventual-consistency via polling singkat berhasil, slippage fail-closed saat blackout, strategy_version non-string tidak crash, precision rounding sebelum validasi min_amount) PLUS 1 test regresi iceberg (4 chunk, weighted-avg-price benar) -- total 7/7 test PASS. Bug pola sama (filled=0 falsy) yang ternyata JUGA ada di _execute_iceberg (bukan cuma _process_fill) ikut ditemukan & difix sesuai aturan 'cek pola sama di seluruh file' (Bagian 6.5.2 poin 7 HANDOFF_NEXT_SESSION_DETAIL.md). Ditambahkan method baru _verify_order_filled() sebagai helper bersama _execute_market dan _execute_iceberg untuk verifikasi status order sebelum dianggap fill sukses (root-cause fix, bukan duplikasi tambal-sulam)."
       }
     },
     "risk.py": {

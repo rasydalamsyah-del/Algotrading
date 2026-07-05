@@ -95,6 +95,37 @@ class OrderExecutionManager:
             )
             return None
 
+        # [BUG-FIX] Sebelumnya: validasi min_amount/min_cost di bawah memakai
+        # `amount` MENTAH (assessment.approved_size), padahal exchange akan
+        # membulatkan amount ke precision/step-size-nya sendiri saat
+        # create_order() benar-benar dipanggil (lihat exchange.py
+        # amount_to_precision). Kalau amount sangat dekat ke boundary
+        # minimum, hasil pembulatan step-size bisa jatuh DI BAWAH minimum
+        # meski lolos validasi awal -- order gagal di exchange padahal sudah
+        # "lolos" cek lokal, tanpa alasan yang jelas ke operator. Sekarang:
+        # bulatkan amount ke precision exchange DULU, lalu SEMUA langkah
+        # berikutnya (validasi minimum, slippage check, market/limit/iceberg
+        # execution) memakai amount yang SAMA PERSIS dengan yang akan benar-
+        # benar dikirim ke exchange. `assessment` ikut diupdate (bukan cuma
+        # variabel lokal `amount`) supaya _execute_iceberg() -- yang membaca
+        # assessment.approved_size secara independen, bukan parameter amount
+        # -- juga konsisten memakai nilai yang sudah dibulatkan.
+        if self.exchange:
+            try:
+                rounded_amount = self.exchange.amount_to_precision(symbol, amount)
+                if rounded_amount != amount:
+                    log.info(
+                        "Amount %s dibulatkan ke precision exchange: "
+                        "%.8f -> %.8f", symbol, amount, rounded_amount,
+                    )
+                amount = rounded_amount
+                assessment = replace(assessment, approved_size=amount)
+            except Exception as e:
+                log.warning(
+                    "amount_to_precision gagal untuk %s: %s — pakai amount "
+                    "asli tanpa dibulatkan.", symbol, e,
+                )
+
         if self.ws_feed and not self.ws_feed.is_feed_healthy(symbol):
             log.warning(
                 "WS feed stale untuk %s — pakai REST untuk slippage check.", symbol
@@ -229,14 +260,34 @@ class OrderExecutionManager:
                 elif tk.get("last") and float(tk["last"]) > 0:
                     current_price = float(tk["last"])
             except Exception as e:
-                log.warning(
-                    "REST ticker fallback gagal untuk %s: %s — order diizinkan.",
-                    symbol, e,
+                # [BUG-FIX — keputusan desain, lihat catatan di
+                # AUDIT_STATE.json & HANDOFF_NEXT_SESSION_DETAIL.md Bagian
+                # 5.8 #3] Sebelumnya: return True (order DIIZINKAN) di sini
+                # -- artinya kalau WS feed mati DAN REST fetch_ticker juga
+                # exception, slippage guard (satu-satunya proteksi terhadap
+                # eksekusi di harga buruk) dilewati TOTAL, order jalan buta
+                # tanpa info harga sama sekali. Ini fail-OPEN pada momen yang
+                # justru paling berisiko (API bermasalah, bisa jadi karena
+                # volatilitas ekstrem). Diubah jadi fail-CLOSED: order
+                # ditolak kalau harga benar-benar tidak bisa diperoleh dari
+                # sumber manapun -- lebih baik melewatkan kesempatan trading
+                # sesaat daripada eksekusi buta saat kondisi pasar/API tidak
+                # normal. Trade-off: bot bisa lebih sering skip entry saat
+                # gangguan API sementara terjadi.
+                log.error(
+                    "REST ticker fallback GAGAL untuk %s: %s — TIDAK ada "
+                    "info harga sama sekali, order DITOLAK (fail-closed) "
+                    "demi keamanan.", symbol, e,
                 )
-                return True, 0.0, 0.0
+                return False, 0.0, 0.0
 
         if current_price is None or current_price <= 0:
-            return True, spread_pct, depth_slip
+            log.error(
+                "Slippage check: tidak ada harga valid untuk %s dari "
+                "manapun (WS maupun REST) — order DITOLAK (fail-closed).",
+                symbol,
+            )
+            return False, spread_pct, depth_slip
 
         if side == "buy" and current_price > signal_price:
             drift = (current_price - signal_price) / signal_price * 100
@@ -272,8 +323,19 @@ class OrderExecutionManager:
                 side=side,
                 amount=amount,
             )
+            # [BUG-FIX — kritis] Sebelumnya: order langsung diteruskan ke
+            # _process_fill() tanpa verifikasi status sama sekali. Lihat
+            # docstring _verify_order_filled() untuk detail lengkap & bukti.
+            verified = await self._verify_order_filled(order, signal.symbol)
+            if verified is None:
+                await self.db.save_log(
+                    "ERROR", "execution",
+                    f"Market order {signal.symbol} tidak terkonfirmasi "
+                    f"filled — tidak dicatat sebagai trade.",
+                )
+                return None
             return await self._process_fill(
-                order, signal, assessment, signal.price
+                verified, signal, assessment, signal.price
             )
         except Exception as e:
             log.error("Market order GAGAL [%s]: %s", signal.symbol, e)
@@ -413,9 +475,17 @@ class OrderExecutionManager:
             return None
 
     async def _poll_fill(
-        self, symbol: str, order_id: str
+        self, symbol: str, order_id: str, timeout_secs: Optional[float] = None
     ) -> Optional[dict]:
-        deadline = time.monotonic() + self.FILL_TIMEOUT_SECS
+        # [BUG-FIX] Tambah parameter timeout_secs opsional (default tetap
+        # FILL_TIMEOUT_SECS seperti sebelumnya, jadi caller lama TIDAK
+        # terpengaruh) supaya _verify_order_filled() bisa memakai polling
+        # singkat untuk market order (yang seharusnya resolve nyaris instan)
+        # tanpa mengubah perilaku polling limit order yang sudah ada.
+        effective_timeout = (
+            timeout_secs if timeout_secs is not None else self.FILL_TIMEOUT_SECS
+        )
+        deadline = time.monotonic() + effective_timeout
         attempt  = 0
         while time.monotonic() < deadline:
             attempt += 1
@@ -437,6 +507,65 @@ class OrderExecutionManager:
                 log.warning("Poll attempt %d error: %s", attempt, e)
             await asyncio.sleep(self.FILL_POLL_INTERVAL)
         return None
+
+    async def _verify_order_filled(
+        self, order: dict, symbol: str, poll_timeout_secs: float = 10.0
+    ) -> Optional[dict]:
+        """
+        [BUG-FIX — kritis] Sebelumnya _execute_market() dan tiap chunk market
+        order di _execute_iceberg() LANGSUNG menganggap order berhasil filled
+        begitu create_order() tidak melempar exception, TANPA pernah mengecek
+        order.get("status") sama sekali -- beda dengan jalur limit order yang
+        eksplisit menunggu status closed/filled via _poll_fill(). Market order
+        BIASANYA closed instan, tapi response API exchange bisa datang dengan
+        status belum final (mis. "open") akibat eventual-consistency, atau
+        order sebenarnya rejected/expired tanpa melempar exception apa pun.
+        Dibuktikan lewat eksperimen: order dengan status="open", filled=0
+        tetap tercatat sebagai trade fully-filled di database -- posisi
+        FIKTIF, padahal exchange belum benar-benar mengeksekusi apa pun.
+        Fungsi ini WAJIB dipanggil sebelum order hasil create_order("market",
+        ...) diteruskan ke _process_fill(). Return None berarti order TIDAK
+        bisa dipastikan filled -- caller WAJIB memperlakukan itu sebagai
+        kegagalan (JANGAN dicatat sebagai trade).
+        """
+        status = order.get("status")
+        if status in ("closed", "filled"):
+            return order
+
+        order_id = order.get("id")
+
+        if status in ("canceled", "expired", "rejected"):
+            log.error(
+                "Order %s [%s] status TERMINAL GAGAL='%s' — TIDAK dicatat "
+                "sebagai fill.", order_id, symbol, status,
+            )
+            return None
+
+        if not order_id:
+            log.critical(
+                "Order [%s] status='%s' belum final DAN tidak ada order_id "
+                "untuk verifikasi ulang — TIDAK dicatat sebagai fill untuk "
+                "cegah posisi fiktif. Cek manual di exchange!",
+                symbol, status,
+            )
+            return None
+
+        log.warning(
+            "Order %s [%s] status awal='%s' (belum closed/filled) — "
+            "polling singkat (%.0fs) untuk konfirmasi sebelum dicatat.",
+            order_id, symbol, status, poll_timeout_secs,
+        )
+        confirmed = await self._poll_fill(
+            symbol, order_id, timeout_secs=poll_timeout_secs
+        )
+        if confirmed is None:
+            log.critical(
+                "Order %s [%s] TIDAK bisa dikonfirmasi filled setelah "
+                "polling — TIDAK dicatat sebagai fill untuk cegah posisi "
+                "fiktif. Cek manual di exchange!",
+                order_id, symbol,
+            )
+        return confirmed
 
     async def _execute_iceberg(
         self,
@@ -508,9 +637,29 @@ class OrderExecutionManager:
                 order = await self.exchange.create_order(
                     signal.symbol, "market", side, chunk
                 )
-                chunk_filled = float(
-                    order.get("filled") or order.get("amount") or chunk
-                )
+                # [BUG-FIX — kritis] Pola bug IDENTIK dengan _execute_market:
+                # chunk langsung dianggap filled tanpa verifikasi status, dan
+                # `order.get("filled") or order.get("amount") or chunk` salah
+                # menangani filled=0 (falsy tapi valid data) dengan jatuh ke
+                # fallback jumlah yang DIMINTA. Sekarang: verifikasi status
+                # dulu via helper yang sama dipakai _execute_market, lalu
+                # ambil filled dengan pengecekan `is not None` eksplisit.
+                verified = await self._verify_order_filled(order, signal.symbol)
+                if verified is None:
+                    log.error(
+                        "Iceberg chunk %d/%d [%s] TIDAK terkonfirmasi filled "
+                        "— chunk dilewati (tidak dicatat sebagai trade).",
+                        i + 1, chunk_count, signal.symbol,
+                    )
+                    continue
+                order = verified
+
+                filled_raw = order.get("filled")
+                if filled_raw is None:
+                    filled_raw = order.get("amount")
+                if filled_raw is None:
+                    filled_raw = chunk
+                chunk_filled = float(filled_raw)
                 actual_filled += chunk_filled
     
                 chunk_assessment = replace(
@@ -539,7 +688,8 @@ class OrderExecutionManager:
             )
             
             actual_filled = sum(
-                float(t.filled or t.amount or 0) for t in done
+                float(t.filled if t.filled is not None else (t.amount or 0))
+                for t in done
             )
             log.info(
                 "Iceberg %s: actual_filled di-recalculate dari trades = %.8f",
@@ -561,7 +711,8 @@ class OrderExecutionManager:
         weighted_avg_price = signal.price
         if done and actual_filled > 0:
             weighted_avg_price = sum(
-                float(t.executed_price or 0) * float(t.filled or t.amount or 0)
+                float(t.executed_price if t.executed_price is not None else 0)
+                * float(t.filled if t.filled is not None else (t.amount or 0))
                 for t in done
             ) / actual_filled
 
@@ -597,10 +748,22 @@ class OrderExecutionManager:
         except (TypeError, ValueError):
             executed_price = float(requested_price)
 
-        filled = (
-            order.get("filled") or order.get("amount") or assessment.approved_size
-        )
-        cost = order.get("cost") or (float(filled) * executed_price)
+        # [BUG-FIX — kritis] Sebelumnya: `order.get("filled") or
+        # order.get("amount") or assessment.approved_size` -- filled=0 yang
+        # VALID (order belum/tidak benar-benar tereksekusi) dianggap "kosong"
+        # oleh Python (0 itu falsy) sehingga salah jatuh ke fallback jumlah
+        # yang DIMINTA, bukan yang benar-benar tereksekusi. Dibuktikan lewat
+        # eksperimen menghasilkan trade phantom (filled=100 padahal order
+        # asli filled=0). Sekarang pakai pengecekan `is not None` eksplisit.
+        filled_raw = order.get("filled")
+        if filled_raw is None:
+            filled_raw = order.get("amount")
+        if filled_raw is None:
+            filled_raw = assessment.approved_size
+        filled = filled_raw
+
+        cost_raw = order.get("cost")
+        cost = cost_raw if cost_raw is not None else (float(filled) * executed_price)
 
         fee_dict     = order.get("fee") or {}
         fee_cost     = fee_dict.get("cost")
@@ -637,7 +800,11 @@ class OrderExecutionManager:
             "requested_price":   round(float(requested_price), 8),
             "executed_price":    round(executed_price, 8),
             "amount":            round(
-                float(order.get("amount") or assessment.approved_size), 8
+                float(
+                    order.get("amount")
+                    if order.get("amount") is not None
+                    else assessment.approved_size
+                ), 8
             ),
             "filled":            round(float(filled), 8),
             "cost":              round(float(cost), 8),
@@ -715,7 +882,14 @@ class OrderExecutionManager:
             tokens.append(f"Sent({float(sent):.3f})")
 
         sv = meta.get("strategy_version", f"v{APP_VERSION}")
-        tokens.append(sv if sv.startswith("v") else f"v{sv}")
+        # [BUG-FIX] Sebelumnya: sv.startswith("v") akan AttributeError kalau
+        # metadata["strategy_version"] bukan tipe string (mis. angka) --
+        # crash ini terjadi SEBELUM save_trade(), bisa menggagalkan
+        # pencatatan trade yang SUDAH benar-benar tereksekusi di exchange
+        # hanya karena format metadata tidak terduga. Sekarang: paksa ke
+        # string dulu sebelum dicek.
+        sv_str = str(sv)
+        tokens.append(sv_str if sv_str.startswith("v") else f"v{sv_str}")
 
         if len(tokens) <= 1:
             skip_keys = {
