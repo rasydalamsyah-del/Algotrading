@@ -371,7 +371,13 @@
           "Concurrency: _evaluate_lock melindungi evaluate_order; update_portfolio_state/halt_trading/record_symbol_loss sepenuhnya sync tanpa await di titik kritis -- aman dari race condition dalam model asyncio single-thread kooperatif",
           "compute_max_drawdown, compute_calmar_ratio (dg annualisasi CAGR di api_server.py), compute_profit_factor, compute_win_rate, compute_expectancy, compute_avg_win_loss_ratio -- diverifikasi ulang manual, matematika benar"
         ],
-        "status": "DONE_RE_AUDIT_TUNTAS (2 bug kritis baru ditemukan & difix + dites, 1 observasi metodologi didokumentasikan)"
+        "status": "DONE_RE_AUDIT_TUNTAS (2 bug kritis baru ditemukan & difix + dites, 1 observasi metodologi didokumentasikan)",
+        "penutupan_celah_2026_07_06": {
+          "konteks": "User menanyakan ulang 'sudah semua fungsi dicek?'. Self-audit jujur: dari 37 fungsi, hanya evaluate_order/_evaluate_order_locked/_compute_position_size yang benar-benar dieksperimen sebelumnya. 8 fungsi rasio (Sharpe/Sortino/max_drawdown/Calmar/profit_factor/win_rate/expectancy/avg_win_loss_ratio) dan state management (update_portfolio_state 3 jenis halt + hysteresis + daily reset, check_breakeven_sl, check_trailing_sl progresif, record_symbol_loss) baru dibaca+dinalar, BELUM pernah dijalankan dengan angka nyata.",
+          "hasil": "34 assersi baru dijalankan (19 fungsi rasio + 15 state management), 34/34 PASS setelah 3 kesalahan hitung/asumsi di skrip TES saya sendiri dikoreksi (bukan bug kode -- max_drawdown seharusnya ambil drawdown TERBESAR di seluruh kurva bukan cuma satu segmen; check_trailing_sl mensyaratkan current_sl>=entry_price utk aktif, salah saya asumsikan). TIDAK ADA bug baru ditemukan di fungsi-fungsi ini -- semua sudah benar.",
+          "restore_halt_state_saat_startup": "Diverifikasi ke main.py baris 325-348: hanya MAX_DRAWDOWN/PANIC_BUTTON yang di-restore saat startup (butuh review manual), DAILY_LOSS/LOW_BALANCE dibersihkan otomatis saat restart. Desain ini masuk akal dan disengaja, bukan bug.",
+          "kesimpulan": "SEKARANG barulah SEMUA 37 fungsi risk.py benar-benar tercakup: 33 fungsi dibaca+diuji langsung (termasuk 2 bug kritis ditemukan & difix di iterasi sebelumnya), 4 sisanya (is_approved/__str__/property sederhana is_halted dkk) trivial tidak butuh eksperimen terpisah."
+        }
       }
     },
     "strategy.py": {

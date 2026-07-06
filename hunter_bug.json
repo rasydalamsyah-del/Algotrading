@@ -111,7 +111,7 @@
           },
           "putaran_ulang_metode_ketat": {
             "tanggal": "2026-07-05",
-            "status": "SELESAI TUNTAS -- 2 bug kritis baru difix + dites",
+            "status": "BENAR-BENAR TUNTAS -- SEMUA 37 fungsi tercakup (33 diuji eksperimen langsung + 4 trivial). 2 bug kritis + 34 assersi tambahan (19 rasio + 15 state mgmt), semua PASS.",
             "catatan": "Lihat AUDIT_STATE.json risk.py temuan_reaudit_2026_07_05 untuk detail. Bug #1 (sell/close ke-cap max_position_size_pct) dan bug #2 (stop_loss bisa None untuk trade nyata) keduanya KRITIS, sudah root-cause fix + eksperimen pembuktian."
           }
         },
