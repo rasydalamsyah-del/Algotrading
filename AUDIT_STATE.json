@@ -250,7 +250,13 @@
             "catatan": "Filter substring bisa false-positive utk hipotetis nama koin asli yang kebetulan berakhiran sama (mis. 'GROUP' endswith 'UP'). Tidak ada koin nyata di Binance yang match pola ini sejauh diketahui -- risiko teoretis sangat rendah, tidak difix (memerlukan redesain validasi leverage token yang lebih ketat, di luar skop bug-fix proporsional saat ini)."
           }
         ],
-        "status": "DONE_RE_AUDIT_TUNTAS (2 bug ditemukan & difix + dites, semua fungsi lain diverifikasi eksperimen/manual)"
+        "status": "DONE_RE_AUDIT_TUNTAS (2 bug ditemukan & difix + dites, semua fungsi lain diverifikasi eksperimen/manual)",
+        "penutupan_celah_lanjutan": {
+          "konteks": "User menanyakan ulang 'sudah semua fungsi dicek?' untuk KETIGA kalinya di seluruh sesi Tier 1 -- pola yang sama harus ditutup tuntas. Self-audit jujur: dari 49 fungsi exchange.py (20 ExchangeConnector + 22 WebSocketFeed + 7 module-level), yang sebelumnya benar-benar dites cuma ~12 (add_symbols, scan_binance_universe, save/load_universe_json, self-healing restart). Sisanya (~38) cuma dibaca+dinalar, termasuk yang PALING kritis: _retry (jantung mekanisme retry SELURUH koneksi exchange), wrapper create_order/cancel_order/fetch_order ASLI (bukan lewat FakeExchange di execution.py), parse_balance, fallback 3-URL auto-scan, get_mid_price/get_spread/get_market_depth_slippage dengan angka nyata, dan connect() error handling.",
+          "hasil": "29 assersi baru dijalankan (4 _retry + 9 parse_balance & wrapper asli + 3 fallback URL + 13 getter numerik & connect), 29/29 PASS setelah 1 kesalahan setup test saya sendiri dikoreksi (lupa set atribut testnet di objek __new__, BUKAN bug kode). TIDAK ADA bug baru ditemukan -- semua logic sudah benar.",
+          "residual_belum_dites_dengan_justifikasi": "disconnect(), start() (task-spawning wrapper), __init__ kedua class, _stale_threshold, get_price/get_orderbook/get_current_spread_pct/get_feed_status (trivial getter satu-baris), _poll_one_ticker, auto_scan_and_populate (orkestrator yg manggil fungsi2 yang SUDAH dites), serta retry-loop INTERNAL _watch_ticker/_watch_orderbook/_poll_orderbooks_rest (pola retry/backoff-nya STRUKTURAL IDENTIK dengan _watch_tickers_all yang sudah dites self-healing-nya, dan _retry yang sudah dites 4 skenario terpisah) -- diputuskan tidak dites ulang terpisah karena kompleksitas rendah/pola sudah diverifikasi di tempat lain, bukan diabaikan tanpa alasan. Dilaporkan jujur ke user, bukan diklaim '100% selesai'.",
+          "dead_code_ditemukan": "get_min_order_cost() tidak dipanggil di mana pun (verified via grep) -- bukan bug, cuma catatan."
+        }
       }
     },
     "execution.py": {
