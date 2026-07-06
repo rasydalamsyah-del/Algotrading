@@ -214,7 +214,44 @@
       ],
       "bug_fixed_tambahan_dari_audit_file_lain": [
         "BUG HUNT PUTARAN 4 (kondisi khusus/edge case) -- SIGNIFIKAN: _watch_tickers_all() (jalur WS utama untuk Binance via watch_tickers multiplexed, dipakai untuk SEMUA simbol sekaligus) mati PERMANEN setelah max_retries koneksi gagal berturut-turut, TANPA mekanisme restart apa pun di seluruh codebase. REST fallback (_poll_tickers, jalan tiap 10s) tetap menjaga data ticker tidak kosong total, TAPI efeknya: SATU burst gangguan WS sementara (mis. exchange maintenance singkat beberapa menit) men-downgrade SEMUA simbol ke REST-only polling SELAMANYA sampai bot direstart manual -- walau WS exchange sudah pulih normal tak lama kemudian. Ini juga menaikkan beban REST API signifikan (semua simbol lewat REST tiap 10s terus-menerus, bukan cuma yang benar-benar degraded) dan menurunkan kesegaran data harga dari real-time WS ke rata-rata 5-10 detik REST polling secara permanen. Sama persis berlaku untuk _watch_ticker() (jalur fallback per-symbol untuk exchange tanpa watch_tickers). Fix: tambah self-healing di _poll_tickers (loop yang sudah jalan terus tiap 10s) -- deteksi task WS ticker sudah \"done\" (mati), restart otomatis dengan exponential backoff cooldown (30s, 60s, 120s... maks 10 menit) supaya tidak restart-loop rapat kalau exchange memang benar-benar down total, dan reset counter backoff begitu WS kembali stabil sukses. Diverifikasi dengan test: simulasi WS mati total, konfirmasi task baru benar-benar di-spawn dan hidup kembali."
-      ]
+      ],
+      "temuan_reaudit_2026_07_06": {
+        "konteks": "Re-audit total exchange.py (1116 baris, 2 class + 6 fungsi module-level auto-scan universe) dengan metode ketat: baca semua 40+ fungsi, cross-check caller di main.py/execution.py/risk.py, eksperimen pembuktian untuk temuan signifikan, verifikasi ulang mekanisme self-healing WS restart yang sebelumnya cuma dipercaya dari komentar sesi lain.",
+        "temuan": [
+          {
+            "id": 1,
+            "lokasi": "WebSocketFeed.add_symbols (resource leak)",
+            "masalah": "add_symbols() SELALU spawn task _watch_ticker(symbol) individual untuk simbol baru, TANPA cek apakah feed sedang mode MULTIPLEXED (_watch_tickers_all, default utk Binance). Simbol baru otomatis ke-cover _watch_tickers_all (self.symbols shared list, dibaca ulang tiap iterasi), jadi spawn individual di sini menghasilkan KONEKSI WS DUPLIKAT untuk simbol yang sama. add_symbols dipanggil AKTIF dari main.py (coin_swap baris 815, update universe_watchlist baris 3140) -- bukan dead code. Task lama tidak pernah dibersihkan sampai restart, jadi menumpuk terus tiap kali coin_swap/watchlist update terjadi selama bot berjalan (resource leak jangka panjang).",
+            "severity": "SEDANG (resource leak, bukan bug data/uang langsung, tapi bisa akumulasi signifikan di bot yang jalan berminggu-minggu dengan coin_swap aktif)",
+            "status_fix": "SUDAH DIFIX + DITES (eksperimen + regresi mode non-multiplexed)"
+          },
+          {
+            "id": 2,
+            "lokasi": "save_universe_json (metadata salah)",
+            "masalah": "min_volume_usd di-hardcode 10_000_000, padahal caller sebenarnya (auto_scan_and_populate) memanggil scan_binance_universe(100_000, ...) -- SELISIH 100x dari nilai yang benar-benar dipakai untuk filter. Tidak dibaca ulang oleh kode manapun (cuma metadata informasional), tapi menyesatkan operator yang membuka universe.json langsung untuk audit/debug.",
+            "severity": "RENDAH (kosmetik/metadata, tidak ada dampak fungsional)",
+            "status_fix": "SUDAH DIFIX + DITES (parameter diteruskan dari caller, roundtrip save/load diverifikasi)"
+          }
+        ],
+        "verifikasi_lain_dengan_eksperimen": [
+          "scan_binance_universe: 10 skenario filter (stablecoin, leverage token, volume threshold, quote mismatch, status TRADING, sorting descending, max_coins truncation, network gagal total) -- 10/10 PASS, tidak ada bug",
+          "_poll_tickers self-healing WS restart (dibuat sesi sebelumnya, BARU sekarang dieksperimen langsung bukan cuma dipercaya dari komentar): restart#1 segera saat task mati, cooldown exponential mencegah restart-loop rapat, restart#2 terjadi setelah cooldown lewat -- 3/3 PASS",
+          "add_symbols regresi: mode non-multiplexed tetap spawn individual watch_ticker seperti seharusnya -- PASS"
+        ],
+        "verifikasi_manual_tanpa_eksperimen_terpisah": [
+          "_retry: fallback RuntimeError kalau retries<=0 (fix lama, masih ada), hard-error InsufficientFunds/InvalidOrder tidak diretry (by design)",
+          "get_orderbook: sudah ditambahkan sesi sebelumnya (fix [TAMBAHAN] utk api_server.py endpoint), dikonfirmasi masih ada",
+          "get_mid_price/get_spread/get_spread_absolute/get_quote_volume_24h: pola truthy-check pada bid/ask/volume diverifikasi TIDAK bug -- nilai 0 pada field ini secara matematis memang harus diperlakukan sama seperti 'tidak ada data', bukan data valid yang hilang",
+          "get_market_depth_slippage: matematika VWAP walk-the-book sudah diverifikasi ulang di sesi audit execution.py sebelumnya, dikonfirmasi konsisten"
+        ],
+        "observasi_bukan_bug": [
+          {
+            "topik": "scan_binance_universe leverage-token filter (base.endswith('UP')/'DOWN'/'BULL'/'BEAR')",
+            "catatan": "Filter substring bisa false-positive utk hipotetis nama koin asli yang kebetulan berakhiran sama (mis. 'GROUP' endswith 'UP'). Tidak ada koin nyata di Binance yang match pola ini sejauh diketahui -- risiko teoretis sangat rendah, tidak difix (memerlukan redesain validasi leverage token yang lebih ketat, di luar skop bug-fix proporsional saat ini)."
+          }
+        ],
+        "status": "DONE_RE_AUDIT_TUNTAS (2 bug ditemukan & difix + dites, semua fungsi lain diverifikasi eksperimen/manual)"
+      }
     },
     "execution.py": {
       "status": "DONE_RE_AUDIT_TUNTAS (9 temuan total, semua difix + dites, 20/20 eksperimen PASS)",

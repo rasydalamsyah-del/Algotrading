@@ -559,13 +559,33 @@ class WebSocketFeed:
         # Spawn task baru untuk simbol yang ditambah
         ws_supported = hasattr(self._ex, "watch_ticker")
         for symbol in added:
-            if ws_supported:
+            # [BUG-FIX — resource leak] Sebelumnya: _watch_ticker(symbol)
+            # individual SELALU di-spawn di sini asal ws_supported=True,
+            # TANPA mengecek apakah feed sedang jalan mode MULTIPLEXED
+            # (_watch_tickers_all, dipakai default untuk Binance dkk yang
+            # mendukung watch_tickers banyak simbol sekaligus). Simbol baru
+            # yang di-append ke self.symbols (baris di atas) OTOMATIS
+            # ke-cover oleh _watch_tickers_all pada iterasi berikutnya
+            # (fungsi itu selalu membaca ulang self.symbols yang sama,
+            # bukan copy) -- jadi spawn _watch_ticker individual di sini
+            # menghasilkan KONEKSI WS DUPLIKAT untuk simbol yang sama.
+            # Dibuktikan lewat eksperimen. Ini menumpuk setiap kali
+            # coin_swap/update universe_watchlist terjadi saat runtime
+            # (add_symbols dipanggil aktif dari main.py, bukan dead code),
+            # karena task lama tidak pernah dibersihkan sampai bot restart.
+            # Sekarang: individual _watch_ticker HANYA di-spawn kalau feed
+            # TIDAK sedang multiplexed (exchange yang tidak dukung
+            # watch_tickers massal). Orderbook TETAP selalu on-demand per
+            # simbol (memang didesain begitu, tidak ada mode multiplexed
+            # untuk orderbook di codebase ini).
+            if ws_supported and not self._ws_ticker_is_multiplexed:
                 self._tasks.append(
                     asyncio.create_task(
                         self._watch_ticker(symbol),
                         name=f"ws_ticker_{symbol}",
                     )
                 )
+            if ws_supported:
                 self._tasks.append(
                     asyncio.create_task(
                         self._watch_orderbook(symbol),
@@ -990,12 +1010,19 @@ def scan_binance_universe(
     return results
 
 
-def save_universe_json(coins: list) -> None:
+def save_universe_json(coins: list, min_volume_usdt: float = 100_000) -> None:
     """Simpan hasil scan ke universe.json."""
+    # [BUG-FIX] Sebelumnya "min_volume_usd" di-hardcode 10_000_000, padahal
+    # caller sebenarnya (auto_scan_and_populate) memanggil
+    # scan_binance_universe(100_000, ...) -- SELISIH 100x dari nilai yang
+    # BENAR-BENAR dipakai untuk filter. Metadata ini murni informasional
+    # (tidak dibaca ulang oleh load_universe_json ataupun kode lain), tapi
+    # tetap MENYESATKAN operator yang membuka universe.json langsung untuk
+    # audit/debug. Sekarang: parameter aktual diteruskan dari caller.
     data = {
         "scanned_at":     _datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%S"),
         "total_coins":    len(coins),
-        "min_volume_usd": 10_000_000,
+        "min_volume_usd": min_volume_usdt,
         "symbols":        coins,
     }
     with open(_UNIVERSE_FILE, "w") as f:
@@ -1040,13 +1067,14 @@ async def auto_scan_and_populate(db) -> list:
         # Sekarang: dijalankan di thread pool lewat run_in_executor agar event
         # loop tidak terblokir.
         loop = asyncio.get_running_loop()
+        _scan_min_volume = 100_000
         coins = await loop.run_in_executor(
-            None, scan_binance_universe, 100_000, 500,
+            None, scan_binance_universe, _scan_min_volume, 500,
         )
 
         if coins:
             # Simpan ke universe.json
-            save_universe_json(coins)
+            save_universe_json(coins, min_volume_usdt=_scan_min_volume)
 
             # Nonaktifkan semua koin lama di universe_overrides
             old_symbols = await db.get_active_universe_overrides()

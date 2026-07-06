@@ -138,14 +138,13 @@
             }
           },
           "putaran_ulang_metode_ketat": {
-            "tanggal": null,
-            "status": "BELUM DIKERJAKAN",
-            "metode": null,
-            "catatan": "exchange.py belum sempat di-re-audit dengan metode ketat baru (Bagian 6.5) -- statusnya masih dari audit lama yang TERBUKTI TIDAK CUKUP (lihat kasus execution.py). WAJIB dikerjakan dengan metode yang sama."
+            "tanggal": "2026-07-06",
+            "status": "SELESAI TUNTAS -- 2 bug ditemukan & difix + dites",
+            "catatan": "Lihat AUDIT_STATE.json exchange.py temuan_reaudit_2026_07_06 untuk detail. Bug #1 (duplikasi WS subscription/resource leak di add_symbols) dan bug #2 (metadata min_volume_usd salah 100x) -- keduanya root-cause fix + eksperimen. TIER 1 (execution.py, risk.py, exchange.py) SEKARANG SEMUA SELESAI untuk metode re-audit ketat Bagian 6.5."
           }
         }
       ],
-      "tier_1_status": "STATUS DICABUT per 2026-07-05 — sebelumnya 'SEMUA FILE SELESAI PUTARAN 2-4', TAPI audit dadakan di execution.py (di luar alur putaran normal, metode: baca ulang total baris-per-baris tanpa asumsi + cross-check dua arah menyeluruh + eksperimen pembuktian) menemukan 2 bug KRITIS yang belum pernah tercatat (lihat AUDIT_STATE.json execution.py -> temuan_reaudit_2026_07_05). SELURUH Tier 1 (execution.py, risk.py, exchange.py) WAJIB DI-RE-AUDIT TOTAL dengan metodologi ketat baru (lihat HANDOFF_NEXT_SESSION_DETAIL.md Bagian 6.5) sebelum dianggap benar-benar selesai. Bug lama yang sudah difix tetap valid, tidak perlu ditemukan ulang -- yang dicabut hanya klaim 'sudah pasti bersih'."
+      "tier_1_status": "SEMUA FILE (execution.py, risk.py, exchange.py) SELESAI RE-AUDIT TOTAL dengan metode ketat per 2026-07-06. Total bug ditemukan sesi ini: 9 (execution.py) + 2 (risk.py) + 2 (exchange.py) = 13 bug, semua root-cause fix + dites. Siap lanjut Tier 2."
     },
     {
       "tier": 2,
