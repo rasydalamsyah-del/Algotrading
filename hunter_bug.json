@@ -203,8 +203,8 @@
           "fokus_cross_check": "RSI/MACD/Stochastic dll. Sama seperti trend.py — cek lookahead bias & pembagian dengan nol (RSI saat avg_loss=0).",
           "putaran": {
             "putaran_2_cross_check_dua_arah": {
-              "status": "PENDING",
-              "catatan": null
+              "status": "CROSS_CHECKED_FIXED",
+              "catatan": "1 bug matematika: _calc_rsi salah RSI=100 utk harga flat total (harusnya 50). Sudah difix + dites 45 skenario, 17/17 fungsi tercakup langsung."
             },
             "putaran_3_validasi_matematika": {
               "status": "PENDING",

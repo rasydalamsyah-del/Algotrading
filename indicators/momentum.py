@@ -76,11 +76,21 @@ def _calc_rsi(close: pd.Series, period: int = 14) -> pd.Series:
     avg_loss_safe = avg_loss.replace(0.0, np.nan)
     rs = (avg_gain / avg_loss_safe).replace([np.inf, -np.inf], np.nan)
     rsi = 100.0 - (100.0 / (1.0 + rs))
-    # [FIX] avg_loss dari ewm() tidak pernah menghasilkan NaN (ewm forward-fills),
-    # sehingga ~avg_loss.isna() selalu True — kondisi sebelumnya redundant dan
-    # menyesatkan. Disederhanakan: kalau avg_loss == 0 (tidak ada loss dalam
-    # lookback), RSI = 100 (seluruh pergerakan adalah kenaikan).
-    rsi = rsi.where(avg_loss > 0, 100.0)
+    # [BUG-FIX] Sebelumnya "rsi.where(avg_loss > 0, 100.0)" menyamakan DUA
+    # kondisi yang secara matematis BERBEDA saat avg_loss==0:
+    #   (a) avg_gain > 0, avg_loss == 0 -> SEMUA pergerakan naik -> RSI=100 BENAR.
+    #   (b) avg_gain == 0, avg_loss == 0 -> harga BENAR-BENAR FLAT (tidak ada
+    #       gain maupun loss sama sekali, mis. saat konsolidasi/stablecoin
+    #       pair) -> harusnya RSI=50 (netral, tidak ada momentum arah sama
+    #       sekali), TAPI kode lama tetap memberi 100.0 (overbought ekstrem)
+    #       karena hanya mengecek avg_loss==0 tanpa mempedulikan avg_gain.
+    # Dibuktikan lewat eksperimen: harga 30 bar identik semua -> RSI lama=100,
+    # seharusnya=50. Ini bisa membuat bot salah mengira pasar sideways/flat
+    # sebagai "sangat overbought" dan menghindari entry yang sebenarnya netral.
+    # Fix: RSI=100 HANYA kalau avg_gain>0 DAN avg_loss==0; kalau keduanya 0
+    # (flat total), RSI=50 (netral).
+    rsi = rsi.where(avg_loss > 0, np.where(avg_gain > 0, 100.0, 50.0))
+    rsi = pd.Series(rsi, index=close.index)
     return rsi.fillna(SCORE_NEUTRAL)
 
 def _detect_rsi_divergence(

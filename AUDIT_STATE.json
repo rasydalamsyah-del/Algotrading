@@ -35,7 +35,32 @@
         "rsi_dihitung_2x",
         "vwma_upgrade"
       ],
-      "audit_level": "SERIUS"
+      "audit_level": "SERIUS",
+      "putaran_2_reaudit_ketat_2026_07_07": {
+        "konteks": "Tier 2. indicators/momentum.py (673 baris, 17 fungsi) dibaca tuntas + 45 eksperimen numerik langsung untuk SEMUA 17 fungsi (bukan cuma sebagian) -- pelajaran dari celah trend.py sebelumnya.",
+        "hasil": "1 bug matematika ditemukan & difix, 45/45 eksperimen PASS.",
+        "temuan": [
+          {
+            "id": 1,
+            "lokasi": "_calc_rsi (baris ~83)",
+            "masalah": "rsi.where(avg_loss > 0, 100.0) menyamakan dua kondisi yang berbeda secara matematis: (a) avg_gain>0, avg_loss==0 (semua pergerakan naik) -> RSI=100 BENAR; (b) avg_gain==0, avg_loss==0 (harga BENAR-BENAR FLAT, tidak ada pergerakan sama sekali) -> seharusnya RSI=50 (netral), TAPI kode lama tetap memberi 100.0 (overbought ekstrem) karena hanya mengecek avg_loss==0 tanpa mempedulikan avg_gain.",
+            "severity": "SEDANG (bot bisa salah mengira pasar sideways/flat sebagai 'sangat overbought' dan menghindari entry yang sebenarnya netral, atau memicu exit yang tidak perlu)",
+            "bukti": "Eksperimen: harga 30 bar identik -> RSI SEBELUM fix=100.0, SESUDAH fix=50.0. Harga naik terus tetap 100.0 (benar, tidak berubah), harga turun terus 0.0 (benar).",
+            "status_fix": "SUDAH DIFIX + DITES: RSI=100 HANYA kalau avg_gain>0 DAN avg_loss==0; kalau keduanya 0 (flat total), RSI=50."
+          }
+        ],
+        "verifikasi_lain_tanpa_bug": [
+          "_ema/_sma: formula standar benar",
+          "_detect_rsi_divergence/_detect_macd_divergence: deteksi bullish/bearish divergence + guard data pendek/range nol -- benar",
+          "_score_rsi/_score_macd/_score_stochrsi: semua clamp ke [0,100], arah bonus/penalti benar",
+          "calculate_rsi_enhanced: integrasi rsi_series eksternal (dari observer.py, shared dgn strength.py) -- panjang cocok dipakai, panjang salah diabaikan+dihitung ulang -- benar",
+          "calculate_macd_enhanced: zero_cross bullish/bearish simetris (fix lama valid)",
+          "_stoch_of_series: window awal NaN bukan 50 palsu (fix lama valid), window flat -> NaN bukan crash",
+          "score_momentum: rsi_ok/macd_ok/stoch_ok/vwma_ok SEMUA benar mengecek ketersediaan (TIDAK ada hardcode True seperti bug trend.py sebelumnya)",
+          "Cross-check ke intelligence/observer.py: shared_rsi_series period=14 konsisten dipakai momentum.py DAN strength.py, tidak ada mismatch"
+        ],
+        "status": "DONE_RE_AUDIT_TUNTAS (1 bug ditemukan & difix + dites, 17/17 fungsi tercakup eksperimen langsung)"
+      }
     },
     "indicators/orderbook.py": {
       "status": "DONE",
