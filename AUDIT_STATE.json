@@ -167,7 +167,17 @@
         "ols_slope_v5_fix",
         "loc_vs_iloc_datetimeindex"
       ],
-      "audit_level": "SERIUS"
+      "audit_level": "SERIUS",
+      "putaran_2_reaudit_ketat_2026_07_07": {
+        "konteks": "Mulai Tier 2. ta_compat.py (2080 baris, 48 fungsi: 1 accessor class _TAAccessor dgn ~35 method + 11 helper privat + patch()) dibaca tuntas baris-per-baris. File ini sudah punya self-test bawaan yang sangat lengkap (57 assersi, jalankan `python3 ta_compat.py`) -- dijalankan dan PASS 57/57, plus 27 assersi TAMBAHAN saya tulis sendiri utk 11 helper privat yang tidak disentuh self-test bawaan (lookup_col, _require, _to_numeric, _ema_series, _wilder_smooth, _true_range, _fmt_param, _ensure_datetime_index, _rsi_raw, _skip_if_exists, _wma_numpy).",
+        "hasil": "TIDAK ADA bug matematika/fungsional ditemukan. Semua formula (EMA/RSI Wilder/MACD/ADX/CCI/MFI/CMF/Supertrend/PSAR/Ichimoku/dst) diverifikasi manual dan konsisten dgn definisi baku. 27/27 assersi helper privat PASS (2 kegagalan awal murni bug test saya sendiri -- numpy.bool_ vs Python bool identity check `is` alih-alih `==`, sudah dikoreksi).",
+        "temuan_dokumentasi": {
+          "masalah": "Docstring enrich_production() mengklaim 'WAJIB dipakai main.py, strategy.py, telegram_bot.py' -- TERBUKTI TIDAK AKURAT via grep seluruh codebase. Faktanya HANYA api_server.py yang memanggil enrich_production() (endpoint diagnostic/chart). strategy.py punya enrich() sendiri yang minimal (EMA9/21/50, RSI_14, ATRr_14, VWAP), TIDAK memanggil enrich_production(). Docstring lama ini sempat MENYESATKAN audit sesi ini sendiri (dikira ada bug integrasi di strategy.py, ternyata cuma dokumentasi usang).",
+          "fix": "Docstring diperbaiki, menjelaskan fakta sebenarnya + referensi ke catatan constants.py baris 105-113 yang sudah lebih dulu mendokumentasikan hal serupa."
+        },
+        "temuan_arsitektur_penting_untuk_prioritas_audit_selanjutnya": "Codebase punya DUA SISTEM KALKULASI INDIKATOR TERPISAH yang tidak berbagi kode: (1) ta_compat.py -- HANYA dipakai dashboard/diagnostic api_server.py, TIDAK memengaruhi keputusan trading nyata. (2) indicators/*.py (score_trend/score_momentum/score_strength/dst, dipanggil dari intelligence/observer.py -> strategy.py.get_scored_signal) -- INILAH yang benar-benar dipakai untuk keputusan trading real. KESIMPULAN: indicators/*.py JAUH LEBIH KRITIS untuk diaudit ketat dibanding ta_compat.py -- prioritas Tier 2 selanjutnya diarahkan ke sana.",
+        "status": "DONE_RE_AUDIT_TUNTAS (0 bug fungsional, 1 dokumentasi diperbaiki, 48/48 fungsi tercakup)"
+      }
     },
     "simulate_test.py": {
       "status": "DONE",

@@ -1367,42 +1367,36 @@ class _TAAccessor:
         **kw,
     ) -> pd.DataFrame:
         """
-        PRODUCTION ENTRY POINT — WAJIB dipakai oleh:
-          main.py, strategy.py, api_server.py, telegram_bot.py
-          (gantikan blok df.ta.ema/rsi/atr/vwap manual yang tidak lengkap!)
+        60+ kolom indikator dalam satu panggilan (chart/diagnostic/analytics).
 
-        [v5 UPGRADE] Sekarang menghasilkan SEMUA kolom yang dibutuhkan oleh
-        observer.py / intelligence pipeline, termasuk yang sebelumnya missing:
-          MACD_12_26_9, MACDs, MACDh
-          STOCHRSIk_14_14_3_3, STOCHRSId
-          BBU/BBM/BBL/BBB/BBP_20_2.0
-          KCUe/KCBe/KCLe_20_2
-          SQZ_20_2.0_20_1.5
-          MFI_14, OBV
-          SUPERT_7_3.0, SUPERTd_7_3.0
-          VWAP_D_upper_1/lower_1/upper_2/lower_2
-          CCI_20
+        [DOKUMENTASI DIPERBAIKI — sebelumnya klaim "WAJIB dipakai main.py,
+        strategy.py, telegram_bot.py" TIDAK AKURAT dan sempat menyesatkan
+        audit sesi ini. Faktanya (diverifikasi via grep seluruh codebase):
+          - HANYA api_server.py yang benar-benar memanggil enrich_production()
+            (endpoint /api/diagnosa dan chart debug).
+          - strategy.py PUNYA fungsi enrich() SENDIRI yang minimal (cuma
+            EMA9/21/50, RSI_14, ATRr_14, VWAP) — TIDAK memanggil
+            enrich_production() sama sekali.
+          - Jalur skoring produksi SESUNGGUHNYA (Observer.observe() di
+            intelligence/observer.py, dipanggil dari
+            strategy.py:get_scored_signal) memakai indicators/*.py
+            (score_trend, score_momentum, score_strength, dst) yang
+            punya implementasi kalkulasi SENDIRI, TERPISAH dari ta_compat.py.
+          - Konsisten dengan catatan di constants.py baris 105-113 soal
+            PRODUCTION_INDICATOR_COLS yang juga tidak dipakai di runtime.
+        Kesimpulan: ta_compat.py dan indicators/*.py adalah DUA SISTEM
+        KALKULASI INDIKATOR TERPISAH yang TIDAK saling berbagi kode. Ini
+        BUKAN bug (tidak ada crash/kesalahan fungsional), tapi risiko
+        arsitektur: kalau rumus di ta_compat.py dan indicators/*.py untuk
+        indikator yang "sama" (RSI, ATR, dll) berbeda, dashboard diagnostic
+        (pakai ta_compat) bisa menampilkan angka BERBEDA dari yang benar-
+        benar dipakai bot untuk keputusan trading (pakai indicators/*.py).
+        Perlu audit terpisah utk indicators/*.py guna verifikasi konsistensi
+        ini (di luar skop ta_compat.py sendiri).]
 
-        Skip-if-exists: kolom yang sudah ada tidak dihitung ulang — aman
-        dipanggil berkali-kali.
-
-        Kolom yang dihasilkan (lengkap v5):
-          EMA 9/21/50/100/200    DEMA/TEMA/HMA 9/21    VWMA_20
-          EMAXS_9_21 + _21_50   _ema_stack_score
-          RSI_14                 RSI_14_slope            RSI_DIV_14
-          MACD_12_26_9 + MACDs + MACDh
-          STOCHRSIk_14_14_3_3 + STOCHRSId
-          CCI_20                 WILLR_14
-          ROC_9 + ROC_SLOPE_9_5
-          ATRr_14 + ATRr_14_pct  _atr_percentile_100
-          BBU/M/L/B/P_20_2.0    KCUe/KCBe/KCLe_20_2
-          SQZ_20_2.0_20_1.5     CHOP_14
-          SUPERT_7_3.0 + SUPERTd_7_3.0
-          DCU/DCM/DCL_20         PSAR + PSAR_DIR + PSAR_REV
-          ADX_14 + DMP_14 + DMN_14
-          OBV                    MFI_14                  CMF_20
-          VWAP_D
-          VWAP_D_upper_1/lower_1/upper_2/lower_2  (jika with_vwap_bands=True)
+        Cocok untuk analytics, backtest, training, dan endpoint diagnostic
+        di api_server.py. Skip-if-exists: kolom yang sudah ada tidak
+        dihitung ulang — aman dipanggil berkali-kali.
         """
         df = self._df
         t0 = time.perf_counter()

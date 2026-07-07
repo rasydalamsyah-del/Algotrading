@@ -157,8 +157,8 @@
           "fokus_cross_check": "Layer kompatibilitas pandas-ta. Cek SEMUA fungsi indikator yang dibungkus di sini benar-benar meneruskan parameter (period, source column) dengan benar ke pandas-ta, dan menangani NaN/kolom hilang tanpa crash diam-diam (mis. return 0 padahal harusnya NaN/None).",
           "putaran": {
             "putaran_2_cross_check_dua_arah": {
-              "status": "PENDING",
-              "catatan": null
+              "status": "CROSS_CHECKED_CLEAN",
+              "catatan": "Re-audit ketat: 84 assersi total (57 self-test bawaan + 27 helper privat tambahan), 0 bug fungsional. 1 docstring menyesatkan diperbaiki. Temuan penting: indicators/*.py (bukan ta_compat.py) yang benar-benar dipakai jalur trading nyata -- prioritas audit dialihkan ke sana."
             },
             "putaran_3_validasi_matematika": {
               "status": "PENDING",
