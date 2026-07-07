@@ -180,8 +180,8 @@
           "fokus_cross_check": "EMA/SMA/Supertrend/ADX dll. Cek off-by-one di window/period, penggunaan .iloc[-1] vs .iloc[-2] yang konsisten (candle terakhir CLOSED vs BELUM CLOSED — bug klasik lookahead bias).",
           "putaran": {
             "putaran_2_cross_check_dua_arah": {
-              "status": "PENDING",
-              "catatan": null
+              "status": "CROSS_CHECKED_FIXED",
+              "catatan": "1 bug baru: cross_ok hardcode True (bug integrasi antar sub-indikator score_trend), sudah difix + dites 20 skenario."
             },
             "putaran_3_validasi_matematika": {
               "status": "PENDING",

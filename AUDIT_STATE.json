@@ -81,7 +81,29 @@
       "bug_fixed": [
         "diskontinuitas_golden_dead_cross"
       ],
-      "audit_level": "SERIUS"
+      "audit_level": "SERIUS",
+      "putaran_2_reaudit_ketat_2026_07_07": {
+        "konteks": "Tier 2. indicators/trend.py (540 baris, 8 fungsi) dibaca tuntas. File ini sudah punya changelog v2/v3 dari audit sebelumnya (fix normalisasi ema_stack, falsy-check ema9/21, diskontinuitas golden_dead_cross) -- diverifikasi ulang SENDIRI via 20 eksperimen numerik (bukan percaya klaim changelog lama), meliputi trend kuat naik/turun, harga mendekati 0, data pendek/sangat pendek, volume 0, kolom hilang, integrasi 4 sub-indikator di score_trend.",
+        "hasil": "1 bug BARU ditemukan & difix, 20/20 eksperimen PASS setelah fix.",
+        "temuan": [
+          {
+            "id": 1,
+            "lokasi": "score_trend (baris ~480)",
+            "masalah": "cross_ok = True di-hardcode, TIDAK PERNAH mengecek apakah calculate_golden_dead_cross() benar-benar punya cukup data -- beda dgn ema_ok/st_ok/vwap_ok yg semua benar mengecek None/ketersediaan. Saat data terlalu pendek, fungsi cross mengembalikan skor darurat (neutral/fallback) tapi tetap dianggap sinyal VALID berbobot 20% ke composite.",
+            "severity": "SEDANG (bisa mendistorsi composite trend score pada koin baru listing/data pendek/awal startup bot, membuat sinyal trading terlihat lebih meyakinkan dari yang seharusnya)",
+            "bukti": "Eksperimen data 3-bar: SEBELUM fix composite=59.43 (blend neutral cross 50 bobot20 + vwap 72 bobot15 = (50*20+72*15)/35). SESUDAH fix composite=72.0 PERSIS = vwap_score murni (cross benar dikecualikan karena data tidak cukup).",
+            "status_fix": "SUDAH DIFIX + DITES: cross_ok dideteksi via perubahan panjang errors list (konsisten dgn cara calculate_golden_dead_cross melaporkan insufficient data)"
+          }
+        ],
+        "verifikasi_lain_tanpa_bug": [
+          "calculate_ema_stack: normalisasi konsisten across jumlah pair berbeda (fix lama valid), falsy-check ema9/21~0 sudah benar pakai is not None",
+          "_calculate_supertrend_raw/calculate_supertrend: uptrend/downtrend terdeteksi benar (score 85/15 sesuai arah), data pendek -> None aman",
+          "calculate_golden_dead_cross: golden cross terdeteksi benar, anchor gap_pct=0 -> 50.0 (fix diskontinuitas lama terverifikasi VALID)",
+          "calculate_vwap_multiday/calculate_vwap: band terurut benar, volume=0 dan kolom hilang -> None aman"
+        ],
+        "observasi_kosmetik": "Komentar baris ~422 'Zona upper band (>=upper_1): slight bearish -> 55' salah kata (55>50 artinya net BULLISH-leaning, bukan bearish) -- cuma typo komentar, logika/nilai skor sendiri sudah benar. Tidak diubah (murni kosmetik, prioritas sangat rendah).",
+        "status": "DONE_RE_AUDIT_TUNTAS (1 bug ditemukan & difix + dites, 8/8 fungsi tercakup eksperimen)"
+      }
     },
     "indicators/volatility.py": {
       "status": "DONE",

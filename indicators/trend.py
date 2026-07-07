@@ -473,11 +473,26 @@ def score_trend(
     result.ema_stack_score = ema_result.ema_stack_score
     ema_ok = result.ema9 is not None and result.ema21 is not None
 
+    # [BUG-FIX] Sebelumnya "cross_ok = True" di-hardcode, TIDAK PERNAH mengecek
+    # apakah calculate_golden_dead_cross() benar-benar punya cukup data --
+    # beda dengan ema_ok/st_ok/vwap_ok yang semuanya benar mengecek
+    # ketersediaan (None check). Saat data terlalu pendek (< min_bars di
+    # dalam calculate_golden_dead_cross), fungsi itu mengembalikan skor
+    # "darurat" (SCORE_NEUTRAL / fallback gap_pct) DAN menambahkan pesan ke
+    # `errors`, tapi skor darurat itu tetap DIANGGAP SEBAGAI SINYAL VALID
+    # berbobot 20% ke composite -- padahal seharusnya dikecualikan sama
+    # seperti 3 sub-indikator lain saat datanya tidak cukup. Dibuktikan lewat
+    # eksperimen: data 3 bar (semua sub-indikator lain correctly invalid)
+    # tetap menghasilkan composite=59.4 (bukan neutral 50) karena cross_ok
+    # salah dianggap True. Fix: deteksi ketersediaan via perubahan panjang
+    # `errors` -- kalau calculate_golden_dead_cross menambah error baru
+    # (artinya data tidak cukup), cross_ok=False, dikecualikan dari bobot.
+    errors_before_cross = len(errors)
     gc_bars, dc_bars, cross_score = calculate_golden_dead_cross(df, errors=errors)
     result.golden_cross_bars_ago = gc_bars
     result.dead_cross_bars_ago   = dc_bars
     result.cross_score           = cross_score
-    cross_ok = True
+    cross_ok = len(errors) == errors_before_cross
 
     # Supertrend aktif untuk semua TF termasuk 1D — adaptive multiplier handle perbedaan volatilitas
     st_val, st_dir, st_score = _calculate_supertrend_raw(df, errors=errors)
