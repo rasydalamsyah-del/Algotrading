@@ -433,14 +433,33 @@ def score_oscillators(
         result.roc_score    = score_roc(result.roc, result.roc_slope, result.roc_crossover)
 
         # ── Composite ─────────────────────────────────────────────────────────
-        # [MSL-2] Weight dari parameter, default CCI=0.35 / Williams=0.25 / ROC=0.40
-        total_w = w["cci"] + w["williams"] + w["roc"]
-        result.composite_score = clamp_score(
-            (result.cci_score       * w["cci"]
-             + result.williams_r_score * w["williams"]
-             + result.roc_score        * w["roc"])
-            / max(total_w, 1e-9)
-        )
+        # [BUG-FIX] Sebelumnya composite SELALU memakai bobot tetap
+        # (cci=0.35/williams=0.25/roc=0.40) walau salah satu sub-indikator
+        # None (data kurang) -- score_cci(None)/score_williams_r(None)/
+        # score_roc(None) semua fallback ke 50.0 (netral), dan nilai fallback
+        # itu tetap DIHITUNG BERBOBOT PENUH seolah sinyal nyata, alih-alih
+        # dikecualikan & bobot dinormalisasi ulang di antara yang tersedia
+        # saja (pola yang SUDAH BENAR dipakai score_trend & score_momentum).
+        # Dibuktikan lewat eksperimen: 15 bar data (CCI butuh >=20 -> None,
+        # Williams & ROC valid) -> composite lama=51.28, seharusnya=51.96
+        # (kalau CCI dikecualikan). Selisih membesar kalau skor yang valid
+        # makin ekstrem/menjauh dari 50. Fix: exclude None + renormalize.
+        available_w   = {}
+        available_val = {}
+        if result.cci is not None:
+            available_w["cci"] = w["cci"]; available_val["cci"] = result.cci_score
+        if result.williams_r is not None:
+            available_w["williams"] = w["williams"]; available_val["williams"] = result.williams_r_score
+        if result.roc is not None:
+            available_w["roc"] = w["roc"]; available_val["roc"] = result.roc_score
+
+        total_w = sum(available_w.values())
+        if total_w <= 0:
+            result.composite_score = 50.0
+        else:
+            result.composite_score = clamp_score(
+                sum(available_val[k] * available_w[k] for k in available_w) / total_w
+            )
 
     except Exception as exc:
         if errors is not None:

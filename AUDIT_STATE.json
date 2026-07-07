@@ -76,7 +76,32 @@
       "bug_fixed": [
         "diskontinuitas_score_roc_anchor"
       ],
-      "audit_level": "SERIUS"
+      "audit_level": "SERIUS",
+      "putaran_2_reaudit_ketat_2026_07_07": {
+        "konteks": "Tier 2. indicators/oscillators.py (451 baris, 15 fungsi) dibaca tuntas + 55 eksperimen numerik langsung utk SEMUA 15 fungsi. 5 kegagalan awal semua ternyata kesalahan asumsi/setup di skrip tes saya sendiri (CCI konstan utk trend linear sempurna -- benar matematis; make_df helper saya selalu +-1 jadi tidak pernah high==low; salah baca boundary formula score_williams_r; ROC persentase bisa melambat walau harga naik makin cepat absolut; length-check jadi guard alami sebelum kolom disentuh) -- semua dikoreksi terbuka, bukan bug kode.",
+        "hasil": "1 bug ditemukan & difix (pola sama dgn trend.py cross_ok), 55/55 eksperimen PASS.",
+        "temuan": [
+          {
+            "id": 1,
+            "lokasi": "score_oscillators (composite, baris ~436)",
+            "masalah": "Composite SELALU pakai bobot tetap (cci=0.35/williams=0.25/roc=0.40) walau salah satu sub None (data kurang) -- score_cci(None)/score_williams_r(None)/score_roc(None) semua fallback 50.0 (netral), nilai fallback itu tetap DIHITUNG BERBOBOT PENUH seolah sinyal nyata, bukan dikecualikan+dinormalisasi ulang seperti pola yang SUDAH BENAR di score_trend & score_momentum.",
+            "severity": "SEDANG (distorsi composite score saat data pas di antara period minimum berbeda-beda, mis. CCI butuh 20 bar tapi Williams/ROC cuma 14/10 -- terjadi di setiap simbol yang baru cukup data utk sebagian indikator)",
+            "bukti": "15-bar data: CCI None (butuh>=20), Williams&ROC valid. SEBELUM fix composite=51.28, SESUDAH fix (exclude CCI+renormalize)=51.96. Diverifikasi PERSIS sama dgn hitungan manual exclude.",
+            "status_fix": "SUDAH DIFIX + DITES: exclude None + renormalize bobot di antara yang tersedia, sama seperti pola trend.py/momentum.py."
+          }
+        ],
+        "verifikasi_lain_tanpa_bug": [
+          "calculate_cci/_cci_series/calculate_cci_trend/calculate_cci_divergence: formula benar, mad=0 -> None aman, data kurang -> None aman",
+          "score_cci: kontinuitas terverifikasi di SEMUA 4 boundary (100,200,-100,-200)",
+          "calculate_williams_r/calculate_willr_trend: denom=0 -> None aman",
+          "score_williams_r: kontinuitas terverifikasi di SEMUA 3 boundary (-20,-50,-80)",
+          "calculate_roc/calculate_roc_slow/calculate_roc_crossover/calculate_roc_slope: div-by-zero guard benar, buffer noise crossover benar",
+          "score_roc: kontinuitas 5 boundary (5,2,0,-2,-5) diverifikasi ULANG sendiri -- fix v3 lama (anchor -2.0 bukan -5.0) TERKONFIRMASI VALID, semua diff<0.001",
+          "score_oscillators: fast-path pre-computed kolom (CCI_20/WILLR_14/ROC_9/ROC_SLOPE_9_5 dari enrich_production) dipakai benar tanpa rekalkukasi, custom weights override benar"
+        ],
+        "catatan_arsitektur_sudah_terdokumentasi_sebelumnya": "iset.oscillators.* (cci_divergence, cci_trend, willr_trend, roc_crossover, roc_slope) TIDAK dicek di intelligence/validator.py (beda dgn trend/momentum/strength/volatility/structure/patterns yg semua sudah punya _check_*_context()). Sudah didokumentasikan di changelog v3 file ini sendiri sebagai keputusan pending (fitur belum diupgrade, bukan bug), tidak diubah sesi ini.",
+        "status": "DONE_RE_AUDIT_TUNTAS (1 bug ditemukan & difix + dites, 15/15 fungsi tercakup eksperimen langsung)"
+      }
     },
     "indicators/patterns.py": {
       "status": "DONE",

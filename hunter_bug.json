@@ -226,8 +226,8 @@
           "fokus_cross_check": "Cek normalisasi skala (0-100 vs 0-1) konsisten dgn caller di intelligence/scorer.py — mismatch skala adalah bug yang sangat mudah lolos review manual.",
           "putaran": {
             "putaran_2_cross_check_dua_arah": {
-              "status": "PENDING",
-              "catatan": null
+              "status": "CROSS_CHECKED_FIXED",
+              "catatan": "1 bug: score_oscillators composite tidak exclude+renormalize sub-indikator None (pola sama dgn trend.py cross_ok). Sudah difix + dites 55 skenario, 15/15 fungsi tercakup langsung."
             },
             "putaran_3_validasi_matematika": {
               "status": "PENDING",
