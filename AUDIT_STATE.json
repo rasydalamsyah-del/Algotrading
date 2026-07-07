@@ -102,7 +102,8 @@
           "calculate_vwap_multiday/calculate_vwap: band terurut benar, volume=0 dan kolom hilang -> None aman"
         ],
         "observasi_kosmetik": "Komentar baris ~422 'Zona upper band (>=upper_1): slight bearish -> 55' salah kata (55>50 artinya net BULLISH-leaning, bukan bearish) -- cuma typo komentar, logika/nilai skor sendiri sudah benar. Tidak diubah (murni kosmetik, prioritas sangat rendah).",
-        "status": "DONE_RE_AUDIT_TUNTAS (1 bug ditemukan & difix + dites, 8/8 fungsi tercakup eksperimen)"
+        "status": "DONE_RE_AUDIT_TUNTAS (1 bug ditemukan & difix + dites, 8/8 fungsi tercakup eksperimen)",
+        "penutupan_celah": "_calc_ema (dipakai internal calculate_ema_stack & calculate_golden_dead_cross) sebelumnya cuma teruji tidak langsung -- ditambah 3 assersi langsung (cocok manual EMA adjust=False, series kosong, period>panjang data). 3/3 PASS. Sekarang benar-benar 8/8 fungsi tercakup eksperimen langsung."
       }
     },
     "indicators/volatility.py": {
