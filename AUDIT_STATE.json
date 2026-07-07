@@ -161,7 +161,31 @@
       "bug_fixed": [
         "kc_squeeze_ok_always_true"
       ],
-      "audit_level": "SERIUS"
+      "audit_level": "SERIUS",
+      "putaran_2_reaudit_ketat_2026_07_07": {
+        "konteks": "Tier 2. indicators/volatility.py (686 baris, 16 fungsi) dibaca tuntas + 42 eksperimen numerik langsung utk SEMUA fungsi. File ini sudah punya changelog v2/v2.1 dari audit sebelumnya (fix kc_squeeze_ok=kc_ok or True, aktivasi bb_trending) -- diverifikasi ulang SENDIRI, terkonfirmasi VALID (score_volatility SUDAH benar pakai exclude+renormalize, TIDAK ada bug pola cross_ok/oscillators composite di file ini).",
+        "hasil": "1 bug inkonsistensi ditemukan & difix + 1 TEMUAN ARSITEKTUR PENTING dikonfirmasi dgn angka nyata.",
+        "temuan": [
+          {
+            "id": 1,
+            "lokasi": "_bb_trend (baris ~114)",
+            "masalah": "past_avg = bb_width.iloc[-lookback:].mean() MENYERTAKAN bar saat ini (current) di dalam rata-rata 'masa lalu'-nya sendiri, meredam rasio current/past_avg ke arah 1.0. TIDAK KONSISTEN dengan _atr_trend_direction() yang benar mengecualikan current (pakai iloc[-lookback-1:-1]).",
+            "severity": "SEDANG (kesimpulan arah bb_trending bisa 'flat' padahal seharusnya 'expanding'/'contracting' untuk data yang identik dengan yang dipakai _atr_trend_direction -- memengaruhi _score_bb yang punya bonus/penalti signifikan berdasarkan bb_trending)",
+            "bukti": "Data IDENTIK (5 nilai flat lalu naik 6%): _bb_trend SEBELUM fix='flat', _atr_trend_direction='rising' -- kesimpulan arah BERBEDA untuk data yang sama. SESUDAH fix keduanya konsisten (expanding vs rising, arah 'naik' yang sama secara konsep).",
+            "status_fix": "SUDAH DIFIX + DITES: past_avg sekarang mengecualikan current, sama seperti _atr_trend_direction."
+          }
+        ],
+        "temuan_arsitektur_dikonfirmasi_dgn_angka": "_wilder_smooth di indicators/volatility.py vs ta_compat.py MEMANG BERBEDA HASIL secara matematis (dibuktikan: selisih hingga 0.36 pada data 15 titik) -- indicators/volatility.py pakai seed SMA(N) eksplisit di index N-1 lalu rekursi Wilder murni (textbook-correct, dipakai platform TA mainstream), ta_compat.py pakai ewm(com=period-1) approksimasi (konvergen ke perilaku sama jangka panjang tapi beda di bar-bar awal). Ini MENGONFIRMASI dgn angka nyata risiko arsitektur 'dua sistem indikator terpisah' yang ditemukan saat audit ta_compat.py: ATR/RSI/ADX yang ditampilkan dashboard diagnostic (ta_compat, via api_server.py) akan menunjukkan angka BERBEDA dari yang benar-benar dipakai bot untuk keputusan trading (indicators/*.py). Bukan bug di salah satu file (keduanya pendekatan Wilder smoothing yang sah), tapi confirmed real risk untuk operator yang membandingkan angka dashboard vs perilaku bot. Tidak diubah (keputusan arsitektur besar, di luar skop bug-fix proporsional).",
+        "verifikasi_lain_tanpa_bug": [
+          "_sma/_calc_true_range/_calc_atr: formula standar benar",
+          "_score_bb/_score_atr: clamp [0,100], arah bonus/penalti benar termasuk bb_trending yg sudah diaktifkan v2.1",
+          "calculate_bollinger_bands/calculate_keltner_channels: band terurut benar, guard kolom hilang/data pendek/harga flat semua aman",
+          "detect_squeeze/calculate_squeeze: tidak crash, guard data pendek aman",
+          "_calc_atr_percentile: percentile rank benar di kedua ekstrem, window<2 -> neutral aman",
+          "score_volatility: SUDAH BENAR pakai exclude+renormalize (bb_ok/kc_squeeze_valid/atr_ok) -- diverifikasi skenario kc invalid (butuh 42 bar) sementara bb&atr valid (35 bar) -> composite TIDAK tercampur skor palsu kc"
+        ],
+        "status": "DONE_RE_AUDIT_TUNTAS (1 bug ditemukan & difix + dites, 1 temuan arsitektur dikonfirmasi dgn angka, 16/16 fungsi tercakup eksperimen langsung)"
+      }
     },
     "intelligence/classifier.py": {
       "status": "DONE",

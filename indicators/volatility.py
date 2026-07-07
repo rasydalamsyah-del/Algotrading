@@ -111,7 +111,18 @@ def _bb_trend(bb_width: pd.Series, lookback: int = 5) -> str:
         return "flat"
 
     current  = float(bb_width.iloc[-1])
-    past_avg = float(bb_width.iloc[-lookback:].mean())
+    # [BUG-FIX] Sebelumnya "past_avg = bb_width.iloc[-lookback:].mean()" --
+    # window ini MENYERTAKAN bar saat ini (current) di dalam rata-rata
+    # "masa lalu"-nya sendiri, meredam rasio current/past_avg ke arah 1.0.
+    # Ini TIDAK KONSISTEN dengan _atr_trend_direction() yang benar
+    # mengecualikan current dari past_avg (pakai iloc[-lookback-1:-1]).
+    # Dibuktikan lewat eksperimen: data IDENTIK (5 nilai flat lalu naik 6%)
+    # menghasilkan kesimpulan arah BERBEDA -- _bb_trend lama bilang "flat",
+    # _atr_trend_direction bilang "rising" -- padahal seharusnya konsisten
+    # karena keduanya menjawab pertanyaan yang sama ("apakah nilai sekarang
+    # menyimpang signifikan dari rata-rata historis murni?"). Fix: pakai
+    # window historis murni yang SAMA seperti _atr_trend_direction.
+    past_avg = float(bb_width.iloc[-lookback-1:-1].mean())
 
     if past_avg < 1e-9:
         return "flat"

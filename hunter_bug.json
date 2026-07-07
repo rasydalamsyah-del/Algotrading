@@ -249,8 +249,8 @@
           "fokus_cross_check": "ATR dan turunannya dipakai LANGSUNG untuk hitung SL/TP price di strategy.py/risk.py — bug kecil di sini = SL/TP salah tempat = kerugian nyata. Prioritas tinggi walau masuk tier 2.",
           "putaran": {
             "putaran_2_cross_check_dua_arah": {
-              "status": "PENDING",
-              "catatan": null
+              "status": "CROSS_CHECKED_FIXED",
+              "catatan": "1 bug: _bb_trend inkonsisten dgn _atr_trend_direction (current bar disertakan/dikecualikan beda). Sudah difix + dites 42 skenario, 16/16 fungsi tercakup. Plus konfirmasi dgn angka nyata: _wilder_smooth beda hasil vs ta_compat.py."
             },
             "putaran_3_validasi_matematika": {
               "status": "PENDING",
