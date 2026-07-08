@@ -117,7 +117,20 @@
         "double_penalty_volume_climax",
         "noop_replace_0_0"
       ],
-      "audit_level": "SERIUS"
+      "audit_level": "SERIUS",
+      "putaran_2_reaudit_ketat_2026_07_08": {
+        "konteks": "Tier 2. indicators/strength.py (583 baris, 18 fungsi: ADX/DI, OBV/volume analysis, MFI) dibaca tuntas + 53 eksperimen numerik langsung untuk SEMUA fungsi. File sudah punya changelog v2/v3 (fix double-penalty volume_climax di validator.py, shared rsi_series dgn momentum.py) -- diverifikasi ulang SENDIRI.",
+        "hasil": "TIDAK ADA bug ditemukan. 53/53 eksperimen PASS pada percobaan PERTAMA (tidak ada kesalahan tes yang perlu dikoreksi kali ini).",
+        "verifikasi_penting": [
+          "score_strength: SUDAH BENAR pakai exclude+renormalize (adx_ok/di_ok/vol_ok/mfi_ok) sejak awal -- TIDAK ada bug pola cross_ok/oscillators-composite. Diverifikasi skenario campuran: ADX butuh 29 bar (invalid di 25 bar) sementara volume(22)&mfi(17) valid -> composite TIDAK tercampur skor palsu adx.",
+          "_score_adx: kontinuitas diverifikasi di SEMUA 4 boundary (ADX_WEAK/MODERATE/STRONG/VERY_STRONG) -- semua diff<0.01",
+          "_calc_directional_movement: arah plus_dm/minus_dm diverifikasi manual sesuai definisi DM baku (up_move vs down_move dominan)",
+          "_calc_obv: arah cumsum diverifikasi tepat sesuai definisi OBV (naik=+volume, turun=-volume)",
+          "calculate_money_flow: rsi_series eksternal dari observer.py (shared dgn momentum.py) dikonfirmasi HANYA memengaruhi mfi_divergence, TIDAK memengaruhi nilai mfi itu sendiri -- integrasi benar",
+          "_wilder_smooth: identik strukturnya dgn versi di volatility.py (bagian dari temuan arsitektur dua-sistem-indikator yang sudah didokumentasikan sebelumnya, bukan bug baru di sini)"
+        ],
+        "status": "DONE_RE_AUDIT_TUNTAS (0 bug, 18/18 fungsi tercakup eksperimen langsung, file paling bersih sejauh ini di Tier 2)"
+      }
     },
     "indicators/structure.py": {
       "status": "DONE",
