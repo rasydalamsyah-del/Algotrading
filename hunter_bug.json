@@ -158,7 +158,7 @@
           "putaran": {
             "putaran_2_cross_check_dua_arah": {
               "status": "CROSS_CHECKED_CLEAN",
-              "catatan": "Re-audit ketat: 84 assersi total (57 self-test bawaan + 27 helper privat tambahan), 0 bug fungsional. 1 docstring menyesatkan diperbaiki. Temuan penting: indicators/*.py (bukan ta_compat.py) yang benar-benar dipakai jalur trading nyata -- prioritas audit dialihkan ke sana."
+              "catatan": "Re-audit ketat: 84 assersi total (57 self-test bawaan + 27 helper privat tambahan), 0 bug fungsional. 1 docstring menyesatkan diperbaiki. Temuan penting: indicators/*.py (bukan ta_compat.py) yang benar-benar dipakai jalur trading nyata -- prioritas audit dialihkan ke sana. REVISI: ditemukan bug SAMA (fillna prematur di adx()) saat audit ulang strength.py -- sudah difix juga. Kontaminasi murni ~12.6 poin (34%) di bar minimum, lebih parah drpd versi strength.py krn ewm."
             },
             "putaran_3_validasi_matematika": {
               "status": "PENDING",
@@ -272,8 +272,8 @@
           "fokus_cross_check": "Cek formula kombinasi multi-indikator tidak dobel-hitung komponen yang sama dengan bobot berbeda tanpa sadar.",
           "putaran": {
             "putaran_2_cross_check_dua_arah": {
-              "status": "CROSS_CHECKED_CLEAN",
-              "catatan": "0 bug. 53/53 eksperimen PASS, 18/18 fungsi tercakup langsung. score_strength sudah benar sejak awal pakai exclude+renormalize."
+              "status": "CROSS_CHECKED_FIXED",
+              "catatan": "REVISI: 2 bug KRITIS ADX ditemukan lewat cross-check matematika independen (fillna prematur + _wilder_smooth salah tangani leading-NaN). Bias sampai 37.9% di bar minimum. Sudah difix, exact match (diff=0.0000) dgn implementasi independen di semua ukuran data."
             },
             "putaran_3_validasi_matematika": {
               "status": "PENDING",

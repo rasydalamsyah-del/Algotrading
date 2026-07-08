@@ -1238,10 +1238,22 @@ class _TAAccessor:
         sm_m  = _wilder_smooth(pd.Series(minus_dm, index=idx), length)
 
         safe   = sm_tr.replace(0, np.nan)
-        di_p   = (100.0 * sm_p / safe).fillna(0.0)
-        di_m   = (100.0 * sm_m / safe).fillna(0.0)
+        # [BUG-FIX — kritis, ditemukan lewat cross-check antar dua sistem
+        # indikator (indicators/strength.py juga py, pola identik)] Sebelumnya
+        # di_p/di_m/dx di-fillna(0.0) SEBELUM waktunya, saat sm_tr masih NaN
+        # (warm-up, _wilder_smooth ewm belum menghasilkan nilai stabil).
+        # Ini memalsukan "belum ada data" jadi "DI+/DI- = 0", dan dx warm-up
+        # ikut jadi 0.0 palsu -- mencemari _wilder_smooth(dx) berikutnya
+        # (versi ewm bahkan LEBIH terpengaruh drpd versi manual-seed karena
+        # ewm mempertahankan pengaruh histori lebih lama). Dibuktikan lewat
+        # eksperimen: selisih ADX akibat kontaminasi murni ~12.6 poin (~34%
+        # relatif) pada data 29 bar. Fix: biarkan NaN mengalir apa adanya,
+        # _wilder_smooth (ewm) sudah benar menangani leading-NaN dengan
+        # skip otomatis, tidak perlu fillna prematur.
+        di_p   = (100.0 * sm_p / safe)
+        di_m   = (100.0 * sm_m / safe)
         di_sum = (di_p + di_m).replace(0, np.nan)
-        dx     = (100.0 * (di_p - di_m).abs() / di_sum).fillna(0.0)
+        dx     = (100.0 * (di_p - di_m).abs() / di_sum)
         s_adx  = _wilder_smooth(dx, length)
 
         if append:

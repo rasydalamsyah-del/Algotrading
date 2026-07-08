@@ -120,7 +120,7 @@
       "audit_level": "SERIUS",
       "putaran_2_reaudit_ketat_2026_07_08": {
         "konteks": "Tier 2. indicators/strength.py (583 baris, 18 fungsi: ADX/DI, OBV/volume analysis, MFI) dibaca tuntas + 53 eksperimen numerik langsung untuk SEMUA fungsi. File sudah punya changelog v2/v3 (fix double-penalty volume_climax di validator.py, shared rsi_series dgn momentum.py) -- diverifikasi ulang SENDIRI.",
-        "hasil": "TIDAK ADA bug ditemukan. 53/53 eksperimen PASS pada percobaan PERTAMA (tidak ada kesalahan tes yang perlu dikoreksi kali ini).",
+        "hasil": "REVISI: awalnya 0 bug (53/53 PASS), TAPI setelah user menanyakan ulang 'apakah semua matematika/caller/callee dicek', ditemukan 2 bug KRITIS tambahan lewat verifikasi terhadap implementasi ADX independen (cross-check matematika eksternal, bukan cuma konsistensi internal).",
         "verifikasi_penting": [
           "score_strength: SUDAH BENAR pakai exclude+renormalize (adx_ok/di_ok/vol_ok/mfi_ok) sejak awal -- TIDAK ada bug pola cross_ok/oscillators-composite. Diverifikasi skenario campuran: ADX butuh 29 bar (invalid di 25 bar) sementara volume(22)&mfi(17) valid -> composite TIDAK tercampur skor palsu adx.",
           "_score_adx: kontinuitas diverifikasi di SEMUA 4 boundary (ADX_WEAK/MODERATE/STRONG/VERY_STRONG) -- semua diff<0.01",
@@ -129,7 +129,17 @@
           "calculate_money_flow: rsi_series eksternal dari observer.py (shared dgn momentum.py) dikonfirmasi HANYA memengaruhi mfi_divergence, TIDAK memengaruhi nilai mfi itu sendiri -- integrasi benar",
           "_wilder_smooth: identik strukturnya dgn versi di volatility.py (bagian dari temuan arsitektur dua-sistem-indikator yang sudah didokumentasikan sebelumnya, bukan bug baru di sini)"
         ],
-        "status": "DONE_RE_AUDIT_TUNTAS (0 bug, 18/18 fungsi tercakup eksperimen langsung, file paling bersih sejauh ini di Tier 2)"
+        "status": "DONE_RE_AUDIT_TUNTAS_REVISI (2 bug kritis ADX ditemukan setelah cross-check matematika independen, semua difix+dites)",
+        "temuan_tambahan_setelah_cross_check_independen": [
+          {
+            "id": 2,
+            "lokasi": "_wilder_smooth (baris ~80) dan calculate_adx (baris ~194-198)",
+            "masalah": "DUA bug berlapis pada perhitungan ADX: (a) di_plus/di_minus/dx di-fillna(0.0) PREMATUR saat atr_smooth masih NaN (warm-up), mencemari seed _wilder_smooth(dx) dengan nilai nol palsu; (b) _wilder_smooth() sendiri tidak menangani leading-NaN dgn benar -- seed dipaksa di index absolut period-1 memakai HANYA 1 nilai real (bukan rata-rata `period` nilai real pertama sesuai metodologi Wilder baku 'ADX pertama = rata-rata 14 DX pertama').",
+            "severity": "KRITIS (ADX dipakai composite score_strength utk keputusan trading nyata; bias TERBESAR justru di sekitar bar minimum -- skenario paling umum utk koin baru listing/bot baru start)",
+            "bukti": "Cross-check terhadap implementasi ADX independen (rumus textbook Wilder ditulis ulang dari nol): di batas bar minimum (29 bar, period=14) ADX SEBELUM fix=13.25, SESUDAH fix=21.34 (selisih 37.9% relatif!). Setelah fix #1 (hilangkan fillna prematur) selisih turun ke 2.4 poin; setelah fix #2 (_wilder_smooth deteksi leading-NaN dgn benar) selisih jadi PERSIS 0.0000 di SEMUA ukuran data (29,40,60,100 bar) -- exact match dgn implementasi independen.",
+            "status_fix": "SUDAH DIFIX + DITES (14 skenario cross-check independen + regresi 38 test lama, semua PASS)"
+          }
+        ]
       }
     },
     "indicators/structure.py": {
@@ -286,7 +296,14 @@
           "fix": "Docstring diperbaiki, menjelaskan fakta sebenarnya + referensi ke catatan constants.py baris 105-113 yang sudah lebih dulu mendokumentasikan hal serupa."
         },
         "temuan_arsitektur_penting_untuk_prioritas_audit_selanjutnya": "Codebase punya DUA SISTEM KALKULASI INDIKATOR TERPISAH yang tidak berbagi kode: (1) ta_compat.py -- HANYA dipakai dashboard/diagnostic api_server.py, TIDAK memengaruhi keputusan trading nyata. (2) indicators/*.py (score_trend/score_momentum/score_strength/dst, dipanggil dari intelligence/observer.py -> strategy.py.get_scored_signal) -- INILAH yang benar-benar dipakai untuk keputusan trading real. KESIMPULAN: indicators/*.py JAUH LEBIH KRITIS untuk diaudit ketat dibanding ta_compat.py -- prioritas Tier 2 selanjutnya diarahkan ke sana.",
-        "status": "DONE_RE_AUDIT_TUNTAS (0 bug fungsional, 1 dokumentasi diperbaiki, 48/48 fungsi tercakup)"
+        "status": "DONE_RE_AUDIT_TUNTAS (0 bug fungsional, 1 dokumentasi diperbaiki, 48/48 fungsi tercakup)",
+        "revisi_ditemukan_bug_adx": {
+          "konteks": "Ditemukan saat audit ulang indicators/strength.py (pola bug identik).",
+          "masalah": "adx() method: di_p/di_m/dx di-fillna(0.0) prematur saat sm_tr masih NaN warm-up -- kontaminasi seed _wilder_smooth(dx).",
+          "bukti": "Isolasi murni efek fillna prematur (sebelum/sesudah, algoritma ewm sama): ADX 24.27 -> 36.83 (selisih 12.56 poin, ~34%) pada 29 bar.",
+          "status_fix": "SUDAH DIFIX. _wilder_smooth (ewm-based) dikonfirmasi SUDAH BENAR menangani leading-NaN (skip otomatis), tidak perlu fix tambahan seperti di strength.py. Self-test bawaan 57/57 tetap PASS setelah fix.",
+          "catatan_severity": "Lebih rendah dari strength.py karena ta_compat.py HANYA dipakai dashboard diagnostic (api_server.py), TIDAK memengaruhi keputusan trading nyata -- tapi tetap diperbaiki demi konsistensi & akurasi dashboard."
+        }
       }
     },
     "simulate_test.py": {

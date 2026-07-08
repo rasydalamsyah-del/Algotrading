@@ -85,9 +85,41 @@ def _wilder_smooth(series: pd.Series, period: int) -> pd.Series:
     if n < period:
         return pd.Series(result, index=series.index)
 
-    result[period - 1] = np.nanmean(arr[:period])
+    # [BUG-FIX — kritis, ditemukan lewat cross-check terhadap implementasi
+    # ADX independen] Sebelumnya seed SELALU dipasang di index ABSOLUT
+    # `period-1` memakai nanmean(arr[:period]) -- ini benar HANYA kalau
+    # `arr` tidak punya leading NaN (kasus TR/+DM/-DM, yang memang mulai
+    # dari index 0). TAPI kalau `arr` punya leading NaN (kasus `dx` di
+    # calculate_adx: punya period-1 NaN di depan sebelum DI+/DI- pertama
+    # kali valid), nanmean(arr[:period]) cuma merata-ratakan SATU nilai
+    # real yang kebetulan ada di window itu (nilai NaN diabaikan nanmean),
+    # BUKAN rata-rata `period` nilai real pertama seperti metodologi Wilder
+    # baku (ADX textbook: "ADX pertama = rata-rata 14 nilai DX pertama").
+    # Dibuktikan: dx dgn 13 NaN lalu nilai real -> seed lama muncul di
+    # index 13 memakai HANYA 1 nilai (harusnya nunggu sampai index 26,
+    # rata-rata 14 nilai real). Dampak nyata ke calculate_adx: ADX di
+    # sekitar bar minimum (29 bar) meleset ~2.4 poin bahkan SETELAH fix
+    # zero-contamination sebelumnya. Fix: deteksi posisi nilai valid
+    # PERTAMA, lalu seed = rata-rata `period` nilai valid pertama mulai
+    # dari situ (bukan dari index absolut 0).
+    first_valid = 0
+    while first_valid < n and np.isnan(arr[first_valid]):
+        first_valid += 1
 
-    for i in range(period, n):
+    seed_idx = first_valid + period - 1
+    if seed_idx >= n:
+        return pd.Series(result, index=series.index)
+
+    window = arr[first_valid: first_valid + period]
+    if np.any(np.isnan(window)):
+        # Ada NaN "di tengah" window (bukan cuma leading) -- data tidak
+        # bersih, tidak bisa seed dengan aman. Fallback ke perilaku lama
+        # (nanmean atas window yang sama) drpd crash/seed sembarangan.
+        result[seed_idx] = np.nanmean(window)
+    else:
+        result[seed_idx] = float(np.mean(window))
+
+    for i in range(seed_idx + 1, n):
         if np.isnan(result[i - 1]) or np.isnan(arr[i]):
             result[i] = result[i - 1] if not np.isnan(result[i - 1]) else np.nan
         else:
@@ -192,10 +224,28 @@ def calculate_adx(
     smooth_plus_dm   = _wilder_smooth(plus_dm,  period)
     smooth_minus_dm  = _wilder_smooth(minus_dm, period)
     atr_safe = atr_smooth.replace(0.0, np.nan)
-    di_plus  = (smooth_plus_dm  / atr_safe * 100.0).fillna(0.0)
-    di_minus = (smooth_minus_dm / atr_safe * 100.0).fillna(0.0)
+    # [BUG-FIX — kritis, ditemukan lewat cross-check terhadap implementasi
+    # ADX independen] Sebelumnya di_plus/di_minus di-fillna(0.0) DI SINI,
+    # padahal untuk indeks 0..period-2 (warm-up, atr_smooth masih NaN
+    # karena _wilder_smooth baru mulai menghasilkan nilai di index
+    # period-1), fillna(0.0) itu MEMALSUKAN "belum ada data" menjadi
+    # "DI+/DI- = 0". Akibatnya dx untuk indeks warm-up itu JUGA ikut jadi
+    # 0.0 (bukan NaN), dan saat _wilder_smooth(dx, period) mengambil seed
+    # awalnya dari nanmean(dx[:period]), rata-rata itu TERCEMAR oleh
+    # (period-1) nilai nol palsu -- membuat seed ADX jauh lebih rendah dari
+    # yang seharusnya (rata-rata cuma dx_asli/period, bukan dx_asli murni).
+    # Dibuktikan lewat implementasi ADX independen (rumus textbook Wilder
+    # ditulis ulang dari nol, tanpa contek kode ini): selisih ADX 0.41 dari
+    # basis ~18 (~2.3%), dan bias ini LEBIH BESAR lagi persis di sekitar
+    # jumlah bar minimum (period*2+1=29) karena rekursi Wilder belum sempat
+    # "melupakan" seed yang tercemar. Fix: biarkan NaN mengalir apa adanya
+    # sepanjang pipeline (jangan fillna prematur) -- _wilder_smooth sendiri
+    # sudah benar menangani NaN di awal (skip via nanmean), dan dropna() di
+    # akhir fungsi ini sudah menangani ekstraksi nilai valid terakhir.
+    di_plus  = (smooth_plus_dm  / atr_safe * 100.0)
+    di_minus = (smooth_minus_dm / atr_safe * 100.0)
     di_sum  = (di_plus + di_minus).replace(0.0, np.nan)
-    dx      = ((di_plus - di_minus).abs() / di_sum * 100.0).fillna(0.0)
+    dx      = ((di_plus - di_minus).abs() / di_sum * 100.0)
     adx_series = _wilder_smooth(dx, period)
     last_adx      = adx_series.dropna()
     last_di_plus  = di_plus.dropna()
