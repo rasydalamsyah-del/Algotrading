@@ -420,9 +420,30 @@ class CoinSwapEngine:
                     if s.strip()
                 ]
                 db_url  = env_data.get("DATABASE_URL", "")
-                db_path = db_url.replace("sqlite+aiosqlite:///./", f"/root/{bot_name}/")                                 .replace("sqlite+aiosqlite:///", "")
-                if not db_path:
+                if not db_url:
                     continue
+                # [BUG-FIX -- ditemukan lewat verifikasi independen] Sebelumnya
+                # pola construction db_path di sini BEDA & kurang robust dari
+                # pola yang sudah dipakai run_cycle()/_triggered_swap() di file
+                # yang sama: `.replace("sqlite+aiosqlite:///./", f"/root/{bot_name}/")
+                # .replace("sqlite+aiosqlite:///", "")` -- kalau DATABASE_URL
+                # TIDAK punya prefix "./" (mis. "sqlite+aiosqlite:///data/x.db",
+                # format valid SQLAlchemy lain), replace pertama tidak match,
+                # lalu replace kedua cuma membuang skema-nya saja, menyisakan
+                # PATH RELATIF ("data/x.db") -- bukan absolute path. Dibuktikan
+                # via eksperimen: 2 pola construction menghasilkan path BERBEDA
+                # utk URL yang sama. DatabaseManager yang dikonstruksi dgn path
+                # relatif ini bisa diam-diam membuat/akses file DB yang SALAH
+                # (relatif thd cwd proses saat itu, bukan direktori bot), tanpa
+                # error -- silent data-integrity risk utk universe_overrides.
+                # Fix: pakai fallback robust yang sama (cek startswith("/"),
+                # kalau bukan absolute, prefix dgn /root/{bot_name}/).
+                db_path = (
+                    db_url.replace("sqlite+aiosqlite:///", "")
+                    .replace("./", "")
+                )
+                if not db_path.startswith("/"):
+                    db_path = f"/root/{bot_name}/{db_path.lstrip('/')}"
 
                 bot_dir = os.path.dirname(env_path)
                 spec    = _ilu.spec_from_file_location(
