@@ -279,6 +279,7 @@ def score_signal(
     regime_confidence: float,
     db_manager=None,
     profile_override=None,
+    main_loop=None,
 ) -> ScoredSignal:
     symbol         = observation.symbol
     profile_name   = observation.strategy_profile
@@ -308,7 +309,7 @@ def score_signal(
         reason = "Primary TF data tidak valid atau tidak tersedia"
         signal.scoring_narrative = f"❌ {reason}"
         signal.add_validation_note(reason)
-        _save_score_to_db(signal, action="SKIP_INVALID_DATA", db_manager=db_manager)
+        _save_score_to_db(signal, action="SKIP_INVALID_DATA", db_manager=db_manager, main_loop=main_loop)
         return signal
 
     if regime == MarketRegime.TRENDING_BEAR:
@@ -320,7 +321,7 @@ def score_signal(
             f"Semua long position harus dipertimbangkan untuk exit."
         )
         signal.add_validation_note("Blocked by TRENDING_BEAR regime")
-        _save_score_to_db(signal, action="REJECT_BEAR_REGIME", db_manager=db_manager)
+        _save_score_to_db(signal, action="REJECT_BEAR_REGIME", db_manager=db_manager, main_loop=main_loop)
         return signal
 
     trigger_met, trigger_reason = _check_primary_trigger(profile_name, iset, profile_cfg)
@@ -331,7 +332,7 @@ def score_signal(
         signal.signal_type   = "hold"
         signal.scoring_narrative = f"❌ No-Trigger: {trigger_reason}"
         signal.add_validation_note(f"Primary trigger gagal: {trigger_reason}")
-        _save_score_to_db(signal, action="NO_TRIGGER", db_manager=db_manager)
+        _save_score_to_db(signal, action="NO_TRIGGER", db_manager=db_manager, main_loop=main_loop)
         return signal
 
     indicator_scores = _extract_indicator_scores(iset)
@@ -447,11 +448,11 @@ def score_signal(
     )
 
     action = "EXECUTE_CANDIDATE" if signal.is_actionable else "HOLD"
-    _save_score_to_db(signal, action=action, db_manager=db_manager)
+    _save_score_to_db(signal, action=action, db_manager=db_manager, main_loop=main_loop)
 
     return signal
 
-def _save_score_to_db(signal: ScoredSignal, action: str, db_manager) -> None:
+def _save_score_to_db(signal: ScoredSignal, action: str, db_manager, main_loop=None) -> None:
     if db_manager is None:
         return
 
@@ -493,6 +494,26 @@ def _save_score_to_db(signal: ScoredSignal, action: str, db_manager) -> None:
                 signal_confidence=getattr(signal, "confidence", None),
             )
 
+        # [BUG-FIX] score_signal() dipanggil lewat run_in_executor() dari
+        # strategy.py (jalur produksi utama Gate3->Gate4), yaitu dari WORKER
+        # THREAD -- di situ asyncio.get_event_loop() SELALU melempar RuntimeError
+        # karena worker thread tidak punya loop sendiri, sehingga except
+        # RuntimeError di bawah selalu return diam-diam dan _persist() TIDAK
+        # PERNAH benar-benar terjadwal untuk jalur ini (dibuktikan lewat
+        # eksperimen: RuntimeError nyata muncul saat pola run_in_executor
+        # disimulasikan). Fix: kalau caller yang tahu pasti sedang di main
+        # thread (strategy.py) mengoper referensi main_loop eksplisit, pakai
+        # langsung via run_coroutine_threadsafe -- aman dipanggil dari thread
+        # manapun. Kalau main_loop tidak dioper (caller lama spt
+        # position_sync.py yang memang jalan di main thread), fallback ke
+        # deteksi lama supaya perilaku existing tidak berubah.
+        if main_loop is not None:
+            try:
+                asyncio.run_coroutine_threadsafe(_persist(), main_loop)
+            except Exception as exc:
+                log.debug("Gagal jadwalkan simpan signal score (main_loop): %s", exc)
+            return
+
         try:
             loop = asyncio.get_event_loop()
             if loop.is_running():
@@ -500,7 +521,10 @@ def _save_score_to_db(signal: ScoredSignal, action: str, db_manager) -> None:
             else:
                 loop.run_until_complete(_persist())
         except RuntimeError:
-            # No running loop (e.g. called from sync context during tests)
+            # No running loop di thread ini DAN main_loop tidak dioper caller.
+            # Non-fatal, DB save cuma dilewati (bukan lagi jalur produksi utama
+            # setelah fix ini, karena strategy.py sekarang selalu mengoper
+            # main_loop).
             return
 
     except Exception as exc:
@@ -588,6 +612,7 @@ class SignalScorer:
         profile,
         regime: MarketRegime,
         regime_confidence: float,
+        main_loop=None,
     ) -> Optional[ScoredSignal]:
         return score_signal(
             observation=observation,
@@ -595,4 +620,5 @@ class SignalScorer:
             regime_confidence=regime_confidence,
             profile_override=profile,
             db_manager=self._db,
+            main_loop=main_loop,
         )

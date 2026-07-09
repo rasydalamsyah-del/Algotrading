@@ -466,16 +466,16 @@
           "fokus_cross_check": "Kombinasi weighted-score dari semua indikator jadi total_score. Cek bobot dari profiles/weights.py benar-benar dibaca ulang tiap cycle (bukan di-cache basi), dan penjumlahan weighted score konsisten dengan skala yang dipakai threshold di profiles/thresholds.py.",
           "putaran": {
             "putaran_2_cross_check_dua_arah": {
-              "status": "PENDING",
-              "catatan": null
+              "status": "CROSS_CHECKED_FIXED",
+              "catatan": "1 bug kritis-moderat ditemukan & difix: _save_score_to_db() gagal diam-diam di jalur produksi (worker thread via run_in_executor). Root-cause fix: main_loop eksplisit dioper dari strategy.py. Semua caller (position_sync.py, simulate_test.py, strategy.py) diverifikasi manual & konsisten. Detail lengkap di AUDIT_STATE.json intelligence/scorer.py -> bug_fixed_tambahan_dari_audit_file_lain. Commit: lihat git log terkait scorer.py."
             },
             "putaran_3_validasi_matematika": {
-              "status": "PENDING",
-              "catatan": null
+              "status": "CROSS_CHECKED_CLEAN",
+              "catatan": "compute_category_score (exclude+renormalize) dan ScoreBreakdown.total() (raw_total * regime_modifier) diverifikasi terhadap core/models.py & profiles/weights.py -- matematika konsisten & benar. get_dynamic_threshold simple lookup, tidak ada bug. Tidak ada isu skala/unit mismatch ditemukan."
             },
             "putaran_4_kondisi_khusus": {
-              "status": "PENDING",
-              "catatan": null
+              "status": "CROSS_CHECKED_CLEAN",
+              "catatan": "_SIGNAL_CONFIRM_BUFFER (module-level dict, state global) dicek utk race condition: aman krn dedup _pipeline_active/_queued_symbols di main.py run_gate3_worker mencegah simbol yg sama diproses 2 worker sekaligus (sudah diverifikasi Tier 1). _suggest_sl_tp menangani current_price<=0 dan atr None/<=0 dgn benar. Falsy-vs-None check pada field *_score aman krn semua field itu float dgn default 50.0, tidak pernah di-set None di manapun (grep dikonfirmasi)."
             },
             "putaran_5_regresi_akhir": {
               "status": "PENDING",

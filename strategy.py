@@ -957,13 +957,25 @@ class VolumetricBreakoutStrategy(BaseStrategy):
                 adaptive_profile = profile
                 log.debug("[%s] Adaptive inject gagal: %s — pakai profile statis", symbol, _e)
 
-            scored = await asyncio.get_running_loop().run_in_executor(
+            # [BUG-FIX] self._scorer.score() (-> score_signal() ->
+            # _save_score_to_db()) dijalankan lewat run_in_executor di WORKER
+            # THREAD -- di sana asyncio.get_event_loop() di dalam
+            # _save_score_to_db selalu RuntimeError sehingga penyimpanan
+            # signal_scores utk jalur ini (SKIP_INVALID_DATA/REJECT_BEAR_REGIME/
+            # NO_TRIGGER/EXECUTE_CANDIDATE/HOLD) selalu gagal diam-diam
+            # (dibuktikan via eksperimen). Fix root-cause: oper referensi loop
+            # yang benar (didapat di main thread, sebelum masuk executor) supaya
+            # _save_score_to_db bisa menjadwalkan _persist() dgn benar dari
+            # thread manapun via run_coroutine_threadsafe.
+            _main_loop = asyncio.get_running_loop()
+            scored = await _main_loop.run_in_executor(
                 None,
                 self._scorer.score,
                 observation,
                 adaptive_profile,
                 regime,
                 regime_confidence,
+                _main_loop,
             )
 
             if scored is None:
