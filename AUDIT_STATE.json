@@ -250,7 +250,10 @@
           "Field baru nearest_structure_support/resistance (S/R zone clustering) dikonfirmasi terpakai benar di validator.py dengan semantik dan nama field yang cocok"
         ],
         "status": "DONE_1_BUG_FIXED_1_TEMUAN_ARSITEKTUR_DIDOKUMENTASIKAN"
-      }
+      },
+      "catatan_investigasi": [
+        "[Re-audit penuh 2026-07-09] Kontradiksi tracking lama (hunter_bug.json PENDING vs AUDIT_STATE.json DONE_METODE_KETAT) diselesaikan -- file dibaca ulang tuntas + semua formula matematika diverifikasi independen dari nol (Ichimoku, SAR, Pivot, fix pandas 3.x microsecond, Fibonacci, Market Structure, Donchian, exclusion logic). Semua CLEAN, tidak ada bug baru ditemukan."
+      ]
     },
     "indicators/trend.py": {
       "status": "DONE",
