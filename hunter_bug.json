@@ -408,20 +408,24 @@
           "fokus_cross_check": "Analisis orderbook real-time (dipakai _get_ob_danger_level di main.py). Cek staleness check — apakah ada validasi orderbook snapshot tidak terlalu basi sebelum dipakai untuk keputusan Gate 3.",
           "putaran": {
             "putaran_2_cross_check_dua_arah": {
-              "status": "PENDING",
-              "catatan": null
+              "status": "CROSS_CHECKED_FIXED",
+              "catatan": "1 bug race condition ditemukan & difix (threading.Lock utk _state_registry, konsisten dgn fix _REGIME_BUFFERS/_OBSERVATION_CACHE hari ini) -- diakses dari worker thread (via observe() run_in_executor) DAN main thread (cleanup_stale_states/reset_state dari main.py). BEDA dgn 2 kasus sebelumnya: eksperimen ekstensif (termasuk delay artifisial) TIDAK berhasil memicu crash nyata di sini -- risiko cuma lost-update ringan (self-correcting), bukan double-delete crash. Lock ditambahkan sbg defense-in-depth/konsistensi, bukan krn ada bukti crash. Caller observer.py score_orderbook_data(ob_data, errors=, symbol=) diverifikasi cocok."
             },
             "putaran_3_validasi_matematika": {
-              "status": "PENDING",
-              "catatan": null
+              "status": "CROSS_CHECKED_CLEAN",
+              "catatan": "imbalance_score continuity (fix v3.1) diverifikasi TEPAT DI TITIK BOUNDARY (bukan epsilon neighborhood) -- exact match 0.0 selisih, genuinely kontinu. 'Diskontinuitas' yg awalnya terdeteksi di epsilon-offset test ternyata cuma efek slope beda di kedua sisi kink point (by design, bukan bug) -- diklarifikasi via evaluasi titik eksak. Spoofing detection (BUG-A fix) diverifikasi dgn skenario level harga hilang total -- awalnya tes saya salah (cuma qty berkurang di harga sama, bukan level hilang), setelah diperbaiki: confidence turun benar (1.0 -> 0.65). score_orderbook weighted composite (40/25/20/10/5) exact match referensi."
             },
             "putaran_4_kondisi_khusus": {
-              "status": "PENDING",
-              "catatan": null
+              "status": "CROSS_CHECKED_FIXED",
+              "catatan": "Race condition _state_registry (lihat putaran 2) adalah temuan kondisi khusus concurrency utama file ini, sudah difix dgn lock."
             },
             "putaran_5_regresi_akhir": {
-              "status": "PENDING",
-              "catatan": null
+              "status": "DONE",
+              "catatan": "Regression simulate_test.py: 107 PASSED, 0 FAILED."
+            },
+            "putaran_1_baca_ulang_full": {
+              "status": "DONE",
+              "catatan": "731 baris dibaca tuntas (setelah tambahan lock fix)."
             }
           },
           "putaran_ulang_metode_ketat": {

@@ -82,7 +82,8 @@
       "bug_fixed": [
         "diskontinuitas_imbalance_score",
         "spoofing_snapshot_salah",
-        "wall_first_seen_dead_field"
+        "wall_first_seen_dead_field",
+        "race_condition_state_registry_lintas_thread_lock_fix"
       ],
       "audit_level": "SERIUS",
       "putaran_ulang_metode_ketat_2026_07_09": {

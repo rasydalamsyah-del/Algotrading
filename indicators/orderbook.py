@@ -41,6 +41,7 @@ from __future__ import annotations
 
 import logging
 import statistics
+import threading
 import time
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Tuple
@@ -264,19 +265,40 @@ _state_registry: Dict[str, _SnapshotState] = {}
 
 _STATE_TTL_SECS = 3600.0  # state coin yang tidak aktif > 1 jam dihapus otomatis
 
+# [BUG-FIX -- konsistensi dgn fix _REGIME_BUFFERS (classifier.py) & _OBSERVATION_CACHE
+# (observer.py) hari ini] _state_registry diakses dari 2 jalur berbeda yg bisa jalan
+# BERSAMAAN: (1) _get_state() via calculate_orderbook() -> score_orderbook_data() ->
+# observer.py observe() -> dipanggil via run_in_executor (WORKER THREAD, lihat
+# strategy.py get_scored_signal); (2) cleanup_stale_states()/reset_state() dipanggil
+# langsung dari main.py (MAIN THREAD, loop periodik & saat coin dirotasi keluar
+# universe). Pola check-then-create di _get_state (`if symbol not in: create`) TIDAK
+# atomik. Eksperimen ekstensif (termasuk delay artifisial spt yg berhasil membuktikan
+# race di classifier.py/observer.py) TIDAK berhasil memicu crash/exception di sini --
+# beda dgn kasus lain, tidak ada pola delete-key-yang-sama-dua-kali di dalam
+# _get_state sendiri (delete cuma di cleanup_stale_states/reset_state, dan objek
+# _SnapshotState yg sudah di-fetch via reference lokal tetap aman diakses walau entry
+# registry-nya dihapus concurrent -- GC Python tidak crash krn refcount). Risiko nyata
+# HANYA lost-update ringan (dua thread bikin _SnapshotState baru utk symbol yg sama,
+# salah satu ke-overwrite) -- tidak crash, self-correcting (history absorption/
+# spoofing utk symbol itu di-reset, bukan corrupt). Lock tetap ditambahkan sbg
+# defense-in-depth/konsistensi, BUKAN krn ada bukti crash spt 2 kasus sebelumnya.
+_state_registry_lock = threading.Lock()
+
 
 def _get_state(symbol: str) -> _SnapshotState:
     """Ambil state per-symbol. Buat baru jika belum ada. Update last_active."""
-    if symbol not in _state_registry:
-        _state_registry[symbol] = _SnapshotState()
-    state = _state_registry[symbol]
-    state.last_active = time.time()
-    return state
+    with _state_registry_lock:
+        if symbol not in _state_registry:
+            _state_registry[symbol] = _SnapshotState()
+        state = _state_registry[symbol]
+        state.last_active = time.time()
+        return state
 
 
 def reset_state(symbol: str) -> None:
     """[MSL-A FIX] Hapus state coin tertentu — panggil saat coin dikeluarkan dari universe."""
-    _state_registry.pop(symbol, None)
+    with _state_registry_lock:
+        _state_registry.pop(symbol, None)
     log.debug("orderbook: state '%s' direset", symbol)
 
 
@@ -289,11 +311,12 @@ def cleanup_stale_states(ttl_secs: float = _STATE_TTL_SECS) -> int:
     Returns:
         Jumlah state yang dihapus.
     """
-    now   = time.time()
-    stale = [sym for sym, st in _state_registry.items()
-             if (now - st.last_active) > ttl_secs]
-    for sym in stale:
-        del _state_registry[sym]
+    now = time.time()
+    with _state_registry_lock:
+        stale = [sym for sym, st in _state_registry.items()
+                 if (now - st.last_active) > ttl_secs]
+        for sym in stale:
+            del _state_registry[sym]
     if stale:
         log.info("orderbook: cleanup %d stale state(s): %s", len(stale), stale)
     return len(stale)
