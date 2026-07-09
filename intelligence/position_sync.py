@@ -137,7 +137,30 @@ async def analyze_position(
             profile.profile.value if hasattr(profile.profile, "value")
             else str(profile.profile)
         )
-        observation  = await observe(symbol, df, profile)
+        # [BUG-FIX] Sebelumnya: `observation = await observe(symbol, df, profile)`.
+        # DUA bug sekaligus: (1) observe() adalah fungsi SYNC (bukan async def),
+        # tapi dipakai dgn `await` -- observe() mengembalikan ObservationReport
+        # langsung, bukan coroutine, jadi `await` di objek itu SELALU
+        # TypeError; (2) signature mismatch -- observe() aslinya butuh
+        # (symbol, strategy_profile, primary_df, primary_timeframe, ...), tapi
+        # dipanggil positional (symbol, df, profile) -- df ke-mapping jadi
+        # strategy_profile (harusnya string, malah DataFrame), profile
+        # ke-mapping jadi primary_df (harusnya DataFrame, malah objek profile),
+        # dan primary_timeframe (wajib, tanpa default) tidak diisi sama
+        # sekali. Kombinasi keduanya membuat pemanggilan ini SELALU melempar
+        # TypeError "missing 1 required positional argument: primary_timeframe"
+        # -- ditangkap oleh except Exception di akhir analyze_position, jadi
+        # SETIAP posisi Binance yang terdeteksi untracked SELALU dianggap
+        # "tidak layak dikawal" (return False, score=0.0) walau datanya
+        # sebenarnya valid. Dibuktikan via eksperimen: pola pemanggilan persis
+        # ini menghasilkan TypeError nyata. Fix: panggil observe() dgn
+        # parameter benar (bukan positional ambigu) & tanpa await (sync).
+        observation = observe(
+            symbol=symbol,
+            strategy_profile=profile_name,
+            primary_df=df,
+            primary_timeframe=profile.timeframe,
+        )
 
         if not observation.primary_tf_valid:
             return (False, 0.0, None, None, "Indikator primary TF tidak valid",

@@ -535,16 +535,16 @@
           "fokus_cross_check": "Observasi/monitoring pasif. Cek tidak ada side-effect tersembunyi yang mengubah state trading (observer harusnya read-only).",
           "putaran": {
             "putaran_2_cross_check_dua_arah": {
-              "status": "PENDING",
-              "catatan": null
+              "status": "CROSS_CHECKED_FIXED",
+              "catatan": "1 bug race condition ditemukan & difix (threading.Lock utk _OBSERVATION_CACHE, diakses dari Gate3 worker thread, position_sync main thread, DAN api_server.py async context -- 3 jalur berbeda). Ditemukan saat cross-check caller position_sync.py: observe() dipanggil dgn signature salah total (lihat entry position_sync.py utk detail bug terpisah tapi terkait). Semua caller lain (strategy.py via MarketObserver.observe, api_server.py via get_cached_observation) diverifikasi signature cocok."
             },
             "putaran_3_validasi_matematika": {
-              "status": "SKIP_TIDAK_RELEVAN",
-              "catatan": "File ini tidak mengandung kalkulasi/formula matematis signifikan (murni I/O, orkestrasi, atau notifikasi)."
+              "status": "CROSS_CHECKED_CLEAN",
+              "catatan": "_compute_tf_score weighted-average (trend 0.30/momentum 0.25/strength 0.25/volatility 0.10/pattern 0.10/oscillator 0.07/structure 0.07/orderbook 0.10, ternormalisasi via total_weight) diverifikasi konsisten dan sudah correct (fix lama zip-misalignment terverifikasi masih ada di kode). composite_raw_score (primary*primary_weight + confirmation*confirmation_weight) matematika sederhana & benar."
             },
             "putaran_4_kondisi_khusus": {
-              "status": "PENDING",
-              "catatan": null
+              "status": "CROSS_CHECKED_FIXED",
+              "catatan": "Race condition _OBSERVATION_CACHE (lihat putaran 2) adalah temuan kondisi khusus concurrency. n_bars < MIN_CANDLES_FOR_INDICATORS ditangani dgn early-return iset kosong + error tercatat (tidak crash). Semua try/except per-indikator di _build_indicator_set menangani exception dgn fail-open yg wajar (skip indikator itu, lanjut yg lain) -- konsisten dan disengaja."
             },
             "putaran_5_regresi_akhir": {
               "status": "PENDING",
@@ -581,16 +581,16 @@
           "fokus_cross_check": "Adopsi posisi Binance yang tidak ke-track. Cek race condition dengan run_sl_tp_monitor & run_scanner_loop yang jalan bersamaan — apakah ada locking/dedup supaya posisi yang sedang di-adopt tidak diproses ganda oleh loop lain.",
           "putaran": {
             "putaran_2_cross_check_dua_arah": {
-              "status": "PENDING",
-              "catatan": null
+              "status": "CROSS_CHECKED_FIXED",
+              "catatan": "1 bug KRITIS ditemukan & difix: observe() dipanggil dgn signature salah total + await pada fungsi sync -- SELALU TypeError, tertangkap except generik, fitur position-sync guardian tidak pernah berhasil sejak awal. Detail lengkap di AUDIT_STATE.json. File ini sebelumnya sudah di-'DONE' audit kronologis dgn 6 bug fix lain (adopt_position dll) -- bug observe() ini LOLOS dari audit itu krn ada di analyze_position(), fungsi berbeda dari yg jadi fokus audit sebelumnya (adopt_position). Contoh nyata kenapa re-audit metode ketat per-fungsi (bukan per-'temuan besar') penting."
             },
             "putaran_3_validasi_matematika": {
               "status": "SKIP_TIDAK_RELEVAN",
-              "catatan": "File ini tidak mengandung kalkulasi/formula matematis signifikan (murni I/O, orkestrasi, atau notifikasi)."
+              "catatan": "File ini orkestrasi (fetch, observe, score, adopt), tidak ada kalkulasi/formula sendiri yang signifikan."
             },
             "putaran_4_kondisi_khusus": {
-              "status": "PENDING",
-              "catatan": null
+              "status": "CROSS_CHECKED_CLEAN",
+              "catatan": "except Exception generik di analyze_position sudah tepat (fail-safe: gagal analisis -> tidak diadopsi, bukan crash seluruh loop). find_untracked_positions membandingkan set symbol Binance vs DB dgn benar. MIN_USDT_VALUE/MIN_ADOPT_SCORE/MIN_CANDLE_BARS threshold masuk akal."
             },
             "putaran_5_regresi_akhir": {
               "status": "PENDING",

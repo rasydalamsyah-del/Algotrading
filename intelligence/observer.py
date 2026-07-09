@@ -23,6 +23,7 @@ CHANGELOG v2:
 from __future__ import annotations
 
 import logging
+import threading
 import time
 from datetime import datetime, timezone
 from typing import Dict, List, Optional, Tuple
@@ -60,6 +61,20 @@ from indicators.orderbook import score_orderbook_data
 log = logging.getLogger("intelligence.observer")
 
 _OBSERVATION_CACHE: Dict[str, Tuple[ObservationReport, float]] = {}
+# [BUG-FIX] _OBSERVATION_CACHE diakses dari jalur berbeda yg bisa jalan
+# BERSAMAAN: (1) Gate3 worker via run_in_executor (worker thread, strategy.py
+# get_scored_signal -> self._observer.observe), (2) position_sync.py
+# analyze_position (main thread langsung, dipanggil observe() top-level
+# secara sync setelah fix mismatch-signature di atas), (3)
+# MarketObserver.get_cached_observation (dipanggil dari api_server.py, async
+# context terpisah lagi) yg iterate _OBSERVATION_CACHE.items(). Pola
+# check-then-delete di _get_cached (cek age > TTL lalu del key) dan
+# check-then-delete di _put_cache (cari oldest_key lalu del) TIDAK atomik --
+# dibuktikan via eksperimen paralel (4/5 thread KeyError akibat 2 thread
+# sama-sama mencoba del key yang sama, sudah dihapus thread lain lebih dulu).
+# Fix: threading.Lock (lintas OS THREAD, bukan asyncio.Lock) membungkus semua
+# akses baca/tulis _OBSERVATION_CACHE sbg critical section atomik.
+_OBSERVATION_CACHE_LOCK = threading.Lock()
 
 _CACHE_TTL = OBSERVATION_CACHE_TTL_SECONDS
 _STALE_THRESHOLD = OBSERVATION_STALE_THRESHOLD_SECONDS
@@ -69,32 +84,35 @@ def _cache_key(symbol: str, timeframe: str, bar_timestamp: Optional[datetime]) -
     return f"{symbol}|{timeframe}|{ts}"
 
 def _get_cached(key: str) -> Optional[ObservationReport]:
-    entry = _OBSERVATION_CACHE.get(key)
-    if entry is None:
-        return None
-    report, cached_at = entry
-    age = time.monotonic() - cached_at
-    if age > _CACHE_TTL:
-        del _OBSERVATION_CACHE[key]
-        return None
-    return report
+    with _OBSERVATION_CACHE_LOCK:
+        entry = _OBSERVATION_CACHE.get(key)
+        if entry is None:
+            return None
+        report, cached_at = entry
+        age = time.monotonic() - cached_at
+        if age > _CACHE_TTL:
+            _OBSERVATION_CACHE.pop(key, None)
+            return None
+        return report
 
 def _put_cache(key: str, report: ObservationReport) -> None:
-    _OBSERVATION_CACHE[key] = (report, time.monotonic())
-    if len(_OBSERVATION_CACHE) > 200:
-        oldest_key = min(_OBSERVATION_CACHE, key=lambda k: _OBSERVATION_CACHE[k][1])
-        del _OBSERVATION_CACHE[oldest_key]
+    with _OBSERVATION_CACHE_LOCK:
+        _OBSERVATION_CACHE[key] = (report, time.monotonic())
+        if len(_OBSERVATION_CACHE) > 200:
+            oldest_key = min(_OBSERVATION_CACHE, key=lambda k: _OBSERVATION_CACHE[k][1])
+            _OBSERVATION_CACHE.pop(oldest_key, None)
 
 def clear_cache(symbol: Optional[str] = None) -> int:
-    if symbol is None:
-        count = len(_OBSERVATION_CACHE)
-        _OBSERVATION_CACHE.clear()
-        return count
+    with _OBSERVATION_CACHE_LOCK:
+        if symbol is None:
+            count = len(_OBSERVATION_CACHE)
+            _OBSERVATION_CACHE.clear()
+            return count
 
-    keys_to_delete = [k for k in _OBSERVATION_CACHE if k.startswith(f"{symbol}|")]
-    for k in keys_to_delete:
-        del _OBSERVATION_CACHE[k]
-    return len(keys_to_delete)
+        keys_to_delete = [k for k in _OBSERVATION_CACHE if k.startswith(f"{symbol}|")]
+        for k in keys_to_delete:
+            _OBSERVATION_CACHE.pop(k, None)
+        return len(keys_to_delete)
 
 def _build_indicator_set(
     df: pd.DataFrame,
@@ -452,10 +470,11 @@ class MarketObserver:
         prefix = f"{symbol}|{timeframe}|"
         best_report = None
         best_time   = -1.0
-        for key, (report, cached_at) in list(_OBSERVATION_CACHE.items()):
-            if key.startswith(prefix) and cached_at > best_time:
-                best_report = report
-                best_time   = cached_at
+        with _OBSERVATION_CACHE_LOCK:
+            for key, (report, cached_at) in list(_OBSERVATION_CACHE.items()):
+                if key.startswith(prefix) and cached_at > best_time:
+                    best_report = report
+                    best_time   = cached_at
         return best_report
 
     def observe(
