@@ -69,9 +69,23 @@ kalau salah**:
   teknikal (RSI, MACD, ATR, dll) yang JADI INPUT untuk keputusan trading di tier-tier
   atasnya. Kalau rumus salah di sini, semua keputusan yang dibangun di atasnya
   (scoring, sinyal, threshold) ikut salah tanpa terlihat jelas — makanya disebut
-  "fondasi". **INI YANG SEKARANG HARUS DIKERJAKAN.**
+  "fondasi". **STATUS: SELESAI TOTAL (2026-07-09)** — semua 9 file sudah diaudit
+  metode ketat (BAGIAN 6.5), 9 bug ditemukan & difix (rincian lengkap di
+  `hunter_bug.json` tier 2 -> field `ringkasan`), termasuk verifikasi matematika
+  independen untuk ADX/RSI/MACD/CCI/Williams%R/BB/Keltner/MFI/Supertrend/Ichimoku/
+  SAR/Pivot/Fibonacci/MarketStructure/Donchian/OBV/EMA-Stack/VWAP/GoldenDeadCross/
+  ROC/StochRSI/Engulfing/Hammer/Doji/Marubozu/VolumeClimax/Imbalance/WeightedVolume/
+  Spoofing/Absorption/Liquidity. Regression test penuh (`simulate_test.py`) 103/104
+  PASS (1 gagal = env-issue sandbox, bukan bug kode). **INI SUDAH SELESAI, JANGAN
+  DIKERJAKAN ULANG DARI 0** — kalau sesi baru mau verifikasi tambahan, cek dulu
+  `AUDIT_STATE.json`/`hunter_bug.json` entry masing-masing file utk lihat apa yang
+  sudah dicek, supaya tidak buang waktu mengulang yang sudah terverifikasi.
 - **Tier 3 — Keputusan** (`intelligence/*`, `strategy.py`): logika yang mengambil
-  keputusan trading berdasarkan skor/indikator dari Tier 2.
+  keputusan trading berdasarkan skor/indikator dari Tier 2. **INI YANG SEKARANG
+  HARUS DIKERJAKAN**, dengan metodologi yang sama persis seperti Tier 1 & 2
+  (BAGIAN 6.5): baca tuntas, verifikasi matematika/logika independen, cek jalur
+  penghubung ke SEMUA caller, eksperimen pembuktian sebelum & sesudah fix, jangan
+  percaya klaim/changelog lama tanpa verifikasi ulang.
 - **Tier 4 — Config** (`profiles/*`): parameter dan threshold per-koin.
 - **Tier 5 — Pembelajaran adaptif** (`learning/*`): sistem yang menyesuaikan
   parameter otomatis berdasarkan hasil trading historis.
@@ -385,29 +399,56 @@ disengaja, sudah didokumentasikan sebagai `catatan_investigasi`, bukan bug).
 understated ~150x, risiko double-fill, WS mati permanen — dihitung sebagai 2 bug
 karena mencakup dua kasus edge case terpisah di putaran 4).
 
-### SEKARANG GILIRAN: Tier 2 — putaran 2 (cross-check dua arah) untuk 9 file berikut:
+### TIER 2 — STATUS: SELESAI TOTAL (2026-07-09)
+
+Semua 9 file berikut sudah diaudit metode ketat penuh (bukan cuma putaran
+cross-check parsial seperti rencana lama di bawah ini — sudah mencakup baca
+tuntas + verifikasi matematika independen + cek jalur penghubung + eksperimen
+pembuktian untuk SEMUA fungsi publik):
 
 ```
-ta_compat.py
-indicators/trend.py
-indicators/momentum.py
-indicators/oscillators.py
-indicators/volatility.py
-indicators/strength.py
-indicators/structure.py
-indicators/patterns.py
-indicators/orderbook.py
+ta_compat.py          -- DONE (1 fix konsistensi RSI seed)
+indicators/trend.py    -- DONE (1 fix lama cross_ok, diverifikasi ulang clean)
+indicators/momentum.py -- DONE (1 fix RSI seed method, keputusan desain user)
+indicators/oscillators.py -- DONE (1 fix lama exclude+renormalize, diverifikasi ulang)
+indicators/volatility.py  -- DONE (2 fix: ADX seed + _wilder_smooth defensive)
+indicators/strength.py    -- DONE (2 fix: ADX seed + MFI asimetris)
+indicators/structure.py   -- DONE (1 fix: composite_score exclude+renormalize)
+indicators/patterns.py    -- DONE (2 fix: asimetri scoring + arah HTF terbalik)
+indicators/orderbook.py   -- DONE (1 fix: spoofing detection tidak aktif)
 ```
 
-Cek field `fokus_cross_check` di `hunter_bug.json` untuk Tier 2 — ini berisi
-hipotesis awal area yang perlu diperhatikan untuk tiap file (BUKAN daftar lengkap
-final, cross-check tetap harus dilakukan menyeluruh terhadap seluruh fungsi publik
-di tiap file, bukan cuma area yang sudah dihipotesiskan).
+Total 9 bug ditemukan & difix di Tier 2. Rincian lengkap tiap file ada di
+`hunter_bug.json` (field `putaran_ulang_metode_ketat` per file) dan
+`AUDIT_STATE.json`. Ada juga 2 temuan arsitektur yang DIDOKUMENTASIKAN tapi
+SENGAJA TIDAK diubah (butuh backtest data historis nyata utk validasi
+sebelum diubah, tidak tersedia di sandbox): (1) `market_structure_score`/
+`donchian_score` tidak masuk `LEVEL2_WEIGHTS` di `profiles/weights.py`,
+(2) — cek `AUDIT_STATE.json` utk detail lengkap kalau ada temuan lain yg
+serupa.
 
-Ingat: setelah putaran 2 selesai untuk SEMUA 9 file di atas, baru lanjut ke putaran 3
-(validasi matematika) untuk SEMUA 9 file itu juga (skip yang ditandai
-`SKIP_TIDAK_RELEVAN`), baru putaran 4 (edge case) untuk semua file itu juga — baru
-setelah itu semua selesai, pindah ke Tier 3.
+**JANGAN kerjakan ulang Tier 2 dari 0.** Kalau ingin verifikasi tambahan,
+mulai dari baca `AUDIT_STATE.json`/`hunter_bug.json` per file dulu.
+
+### SEKARANG GILIRAN: Tier 3 — Keputusan (`intelligence/*`, `strategy.py`)
+
+File-file di `intelligence/` (observer.py, scorer.py, validator.py, dan
+lainnya) serta `strategy.py` — ini lapisan yang mengambil keputusan trading
+berdasarkan skor/indikator yang sudah diverifikasi di Tier 2. Terapkan
+metodologi yang SAMA PERSIS seperti Tier 1 & Tier 2 (BAGIAN 6.5): baca
+tuntas semua fungsi, verifikasi matematika/logika independen di mana
+relevan, cek jalur penghubung ke SEMUA caller (bukan cuma 1-2), jangan
+percaya klaim/changelog lama tanpa verifikasi ulang, eksperimen pembuktian
+before/after untuk setiap fix, dan regression test (`simulate_test.py`)
+setelah setiap perubahan.
+
+Perhatian khusus untuk Tier 3: file-file ini SUDAH beberapa kali disentuh
+secara tidak langsung selama audit Tier 2 (misal ditemukan bahwa RSI mentah
+dipakai sebagai hard threshold gate di `scorer.py` untuk 4 jenis trigger,
+dan `nearest_structure_support/resistance` dipakai di `validator.py`) — jadi
+sebagian jalur penghubung sudah terverifikasi, tapi audit MENYELURUH untuk
+file-file ini sendiri (bukan cuma dari sudut pandang caller Tier 2) belum
+pernah dilakukan.
 
 ---
 
