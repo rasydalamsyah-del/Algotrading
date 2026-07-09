@@ -1022,20 +1022,24 @@
           "fokus_cross_check": "Sudah difix 5 bug termasuk 2 cross-file kritis. Cross-check ulang: field response API lain (selain approve/reject) yang mungkin punya pola sama (field 'status' selalu sama, hasil asli di field lain).",
           "putaran": {
             "putaran_2_cross_check_dua_arah": {
-              "status": "PENDING",
-              "catatan": null
+              "status": "CROSS_CHECKED_CLEAN",
+              "catatan": "Whitelist cmd_setconfig vs api_server.py /api/config/update cross-check otomatis -- match sempurna 26/26. addcoin/removecoin dikonfirmasi tidak pakai endpoint buggy universe/add-remove."
             },
             "putaran_3_validasi_matematika": {
               "status": "SKIP_TIDAK_RELEVAN",
-              "catatan": "File ini tidak mengandung kalkulasi/formula matematis signifikan (murni I/O, orkestrasi, atau notifikasi)."
+              "catatan": "File ini murni UI/formatting Telegram, tidak ada kalkulasi matematis independen -- semua angka diambil dari API yg sudah diverifikasi di api_server.py/database.py."
             },
             "putaran_4_kondisi_khusus": {
-              "status": "PENDING",
-              "catatan": null
+              "status": "CROSS_CHECKED_CLEAN",
+              "catatan": "tg_send_long chunking + header panjang diverifikasi eksperimen. _last_msg state global aman (polling loop sekuensial tunggal)."
             },
             "putaran_5_regresi_akhir": {
-              "status": "PENDING",
-              "catatan": null
+              "status": "DONE",
+              "catatan": "107 PASSED 0 FAILED."
+            },
+            "putaran_1_baca_ulang_full": {
+              "status": "DONE",
+              "catatan": "1911 baris dibaca tuntas (55 fungsi)."
             }
           }
         },

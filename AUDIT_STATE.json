@@ -910,7 +910,7 @@
       ]
     },
     "telegram_bot.py": {
-      "status": "DONE",
+      "status": "DONE_METODE_KETAT",
       "audit_level": "SERIUS",
       "peran": "Bot kontrol Telegram (proses TERPISAH dari main.py, polling loop sendiri) — semua interaksi trading bot lewat HTTP REST ke api_server.py, plus 1 jalur fallback lokal (_diagnosa_direct) yang akses ccxt langsung.",
       "catatan_arsitektur": "Awalnya asumsi di catatan audit adalah main.py mengimpor telegram_bot.py — ternyata tidak. telegram_bot.py adalah proses polling mandiri yang bicara ke api_server.py via HTTP (BOT_API=http://localhost:8000/api). Tidak ada import silang dengan main.py atau notifications.py sama sekali.",
@@ -922,9 +922,12 @@
         "Cleanup: os.getenv nested dengan key sama (UNIVERSE_WATCHLIST di dalam UNIVERSE_WATCHLIST) dobel tanpa efek - disederhanakan."
       ],
       "cross_file_check": "Semua 19 endpoint yang dipanggil (api_get/api_post) di-cross-check satu-satu terhadap route yang terdaftar di api_server.py - 18 cocok, 1 (/health) salah prefix (sudah difix). Field response approve/reject dan config/update sudah dicocokkan literal dengan kode api_server.py, ditemukan 2 mismatch (sudah difix, 1 di antaranya perlu sentuhan ke api_server.py).",
-      "test": "Syntax OK, Import OK (setelah install aiohttp/python-dotenv), Functional PASS: approve/reject sekarang benar2 deteksi gagal vs sukses, cmd_run panggil /status bukan /health, _diagnosa_direct tidak NameError walau ccxt gagal diimport.",
+      "test": "Cross-check otomatis whitelist config (26/26 match). Eksperimen tg_send_long (header panjang, chunking). Regression simulate_test.py: 107 PASSED, 0 FAILED.",
       "sentuhan_file_lain": [
         "api_server.py: tambah rsi_min/rsi_max/lookback_candles ke whitelist /api/config/update (lihat entry api_server.py, audit_level tetap SERIUS karena perubahan ini kecil dan well-understood, bukan berarti perlu re-audit penuh)"
+      ],
+      "catatan_investigasi": [
+        "[Tier 6, 2026-07-09] File CLEAN -- tidak ada bug baru, tidak ada kode diubah. 1911 baris (55 fungsi) dibaca tuntas. Cross-check penting: whitelist cmd_setconfig() (26 key gabungan allowed_int/float/bool/list/str) dibandingkan otomatis vs whitelist /api/config/update di api_server.py (26 key) -- MATCH SEMPURNA, tidak ada selisih di kedua arah (konfirmasi fix cross-file lama rsi_min/rsi_max/lookback_candles masih konsisten). cmd_addcoin/cmd_removecoin dikonfirmasi TIDAK memakai endpoint /api/universe/add|remove yang baru saya temukan buggy di api_server.py -- pakai jalur terpisah (/config/update dgn universe_watchlist) yang independen dan tidak terdampak. cmd_approve/reject_suggestion (klaim fix lama: cek field 'applied'/'rejected' bukan 'status' yg selalu sama) dikonfirmasi field response API cocok. pause()/resume() di strategy.py (dipanggil endpoint pause_strategy/resume_strategy) dikonfirmasi ada (BaseStrategy, sudah diverifikasi saat audit strategy.py Tier 3). tg_send_long diverifikasi eksperimen: header sangat panjang (>_TG_MAX_LEN) tidak crash, chunking multi-part bekerja benar. _last_msg (state global module-level) dikonfirmasi aman -- polling() loop sekuensial tunggal, tidak ada concurrency."
       ]
     },
     "intelligence/commander.py": {
