@@ -558,16 +558,16 @@
           "fokus_cross_check": "ATG (Adaptive Trailing Guard) — baru ditemukan bug notifikasi trigger salah di main.py yang MENGGUNAKAN exit_reason dari sini. Cek exit_reason yang dikembalikan trade_guardian.py punya cukup informasi (mis. apakah exit karena profit-protect atau loss-cut) untuk konsumen di main.py menentukan trigger yang benar TANPA perlu hitung ulang tanda PnL secara terpisah.",
           "putaran": {
             "putaran_2_cross_check_dua_arah": {
-              "status": "PENDING",
-              "catatan": null
+              "status": "CROSS_CHECKED_CLEAN",
+              "catatan": "Caller check_atg() (main.py:1934, simulate_test.py:628) diverifikasi manual, keyword args cocok persis signature. get_profit_zone_sl, _exit_score murni internal (dipanggil cuma dari check_atg sendiri). Tidak ada callee eksternal selain numpy. 1 catatan cross-file lama (notify_sl_tp_hit hardcode) dikonfirmasi SUDAH DIPERBAIKI di main.py sesi lain, docstring disinkronkan."
             },
             "putaran_3_validasi_matematika": {
-              "status": "PENDING",
-              "catatan": null
+              "status": "CROSS_CHECKED_CLEAN",
+              "catatan": "RSI (Wilder) & EMA diverifikasi matematis independen (ditulis ulang dari definisi standar dari nol, bukan cross-check ke indicators/momentum.py) -- hasil identik. get_profit_zone_sl 5 zona profit dicek monotonic & guard no-downgrade SL benar. _exit_score bobot per-regime (_W dict) dicek cocok dgn MarketRegime enum values, fallback ke 'undefined' aman."
             },
             "putaran_4_kondisi_khusus": {
-              "status": "PENDING",
-              "catatan": null
+              "status": "CROSS_CHECKED_CLEAN",
+              "catatan": "Tidak ada state global module-level -- file murni fungsional, tidak ada risiko race condition. entry_price<=0/current_price<=0 guard di awal check_atg. df=None atau <15 baris -> graceful early return (cuma profit-zone SL, skip layer exit score). _supertrend_dir wrapped try/except sendiri, fallback 0 (unknown) kalau error."
             },
             "putaran_5_regresi_akhir": {
               "status": "PENDING",
