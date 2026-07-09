@@ -587,35 +587,68 @@ class VolumetricBreakoutStrategy(BaseStrategy):
                         )
 
                     if pos_data:
-                        profile = self._profiles.get(sym)
-                        entry_price  = float(pos_data.entry_price or 0)
-                        atr_at_entry = float(pos_data.atr_at_entry or 0)
-                        p = self._resolve_params(sym, entry_price, atr_at_entry, 1.0, 55.0)
+                        # [BUG-FIX -- ditemukan lewat eksperimen putaran 2]
+                        # Sebelumnya: entry_price = float(pos_data.entry_price
+                        # or 0) -- kalau pos_data.entry_price None/0/corrupt
+                        # dari DB, tracker tetap dibuat dgn entry_price=0.0.
+                        # Tracker ini lalu dipakai di banyak tempat hilir
+                        # (check_trailing_exit, _handle_regime_transition,
+                        # _generate_signals_v7/_legacy) yang menghitung
+                        # profit_pct = (price - tracker.entry_price) /
+                        # tracker.entry_price * 100 TANPA guard entry_price<=0
+                        # -- ZeroDivisionError nyata (dibuktikan via eksperimen:
+                        # sync_position_state dgn pos_data.entry_price=None ->
+                        # tracker.entry_price=0.0 -> check_trailing_exit crash).
+                        # Karena run_sl_tp_monitor di main.py membungkus SATU
+                        # try/except di LUAR seluruh for-loop posisi (bukan per
+                        # posisi), crash pada SATU posisi dgn data korup akan
+                        # menghentikan pemrosesan SL/TP utk SEMUA posisi lain
+                        # di siklus itu -- data korup pada 1 record bisa
+                        # mengganggu proteksi SL/TP posisi sehat lainnya. Fix
+                        # root-cause: JANGAN buat tracker kalau entry_price
+                        # tidak valid -- log warning jelas & skip, supaya
+                        # operator sadar ada data korup yang perlu dibenahi,
+                        # daripada diam-diam membuat tracker rusak yang crash
+                        # nanti di tempat lain.
+                        raw_entry_price = float(pos_data.entry_price or 0)
+                        if raw_entry_price <= 0:
+                            log.error(
+                                "sync: %s punya entry_price tidak valid dari DB "
+                                "(%s) — tracker TIDAK dibuat (posisi ini tidak "
+                                "akan dikawal trailing/regime-transition sampai "
+                                "data diperbaiki manual). Cek record posisi di DB.",
+                                sym, pos_data.entry_price,
+                            )
+                        else:
+                            entry_price  = raw_entry_price
+                            profile = self._profiles.get(sym)
+                            atr_at_entry = float(pos_data.atr_at_entry or 0)
+                            p = self._resolve_params(sym, entry_price, atr_at_entry, 1.0, 55.0)
 
-                        tracker = PositionTracker(
-                            symbol=sym,
-                            entry_price=entry_price,
-                            entry_time=pos_data.entry_time or _utcnow(),
-                            exit_mode=ExitMode.QUICK_PROFIT,
-                            highest_price=float(
-                                pos_data.current_price or pos_data.entry_price
-                            ),
-                            trailing_active=False,
-                            quick_tp_pct=p.get("quick_tp_pct", 1.75),
-                            quick_sl_pct=p.get("quick_sl_pct", 1.20),
-                            atr_sl_mult=p.get("atr_sl_mult", 2.0),
-                            trailing_gap_pct=p.get("trailing_gap_pct", 0.50),
-                            activation_pct=p.get("trailing_activation_pct", 1.50),
-                            max_hold_seconds=p.get("max_hold_seconds", 0),
-                            profile_name=profile.profile.value if profile else "universal",
-                            entry_regime=str(getattr(pos_data, "entry_regime", None) or "undefined"),
-                        )
-                        self._pos_trackers[sym] = tracker
-                        log.info(
-                            "sync: %s posisi lama di-restore ke tracker "
-                            "(entry=%.6f max_hold_secs=%d)",
-                            sym, entry_price, tracker.max_hold_seconds,
-                        )
+                            tracker = PositionTracker(
+                                symbol=sym,
+                                entry_price=entry_price,
+                                entry_time=pos_data.entry_time or _utcnow(),
+                                exit_mode=ExitMode.QUICK_PROFIT,
+                                highest_price=float(
+                                    pos_data.current_price or pos_data.entry_price
+                                ),
+                                trailing_active=False,
+                                quick_tp_pct=p.get("quick_tp_pct", 1.75),
+                                quick_sl_pct=p.get("quick_sl_pct", 1.20),
+                                atr_sl_mult=p.get("atr_sl_mult", 2.0),
+                                trailing_gap_pct=p.get("trailing_gap_pct", 0.50),
+                                activation_pct=p.get("trailing_activation_pct", 1.50),
+                                max_hold_seconds=p.get("max_hold_seconds", 0),
+                                profile_name=profile.profile.value if profile else "universal",
+                                entry_regime=str(getattr(pos_data, "entry_regime", None) or "undefined"),
+                            )
+                            self._pos_trackers[sym] = tracker
+                            log.info(
+                                "sync: %s posisi lama di-restore ke tracker "
+                                "(entry=%.6f max_hold_secs=%d)",
+                                sym, entry_price, tracker.max_hold_seconds,
+                            )
                     elif not was:
                         log.info(
                             "sync: %s posisi dibuka dari luar (tidak ada data DB)", sym
@@ -673,6 +706,29 @@ class VolumetricBreakoutStrategy(BaseStrategy):
     def _compute_sl_tp_wave(
         self, close: float, atr: float, p: Dict
     ) -> Tuple[float, float]:
+        # [BUG-FIX -- HARDENING, ditemukan lewat eksperimen edge case putaran 2]
+        # Sebelumnya fungsi ini TIDAK punya guard atr<=0, beda dgn
+        # _compute_sl_tp_quick yang sudah aman (`if atr > 0 else 0.0`).
+        # Dibuktikan: atr=0 -> sl=tp=close (SL/TP order invalid, sama dgn
+        # harga entry); atr negatif (data corrupt/bug hulu) -> SL malah DI
+        # ATAS close dan TP malah DI BAWAH close, terbalik total dari makna
+        # SL/TP untuk posisi long. Saat ini SATU-SATUNYA caller
+        # (_generate_signals_legacy) sudah menjaga lewat `if atr <= 0: return`
+        # lebih awal sebelum sampai ke fungsi ini -- jadi TIDAK exploitable
+        # di jalur produksi saat ini -- tapi fungsi ini sendiri rapuh (silent
+        # wrong output, bukan crash) kalau suatu saat dipanggil dari jalur
+        # lain tanpa guard yang identik. Root-cause fix taruh di fungsi ini
+        # sendiri (bukan cuma andalkan disiplin caller), konsisten dgn pola
+        # defensif _compute_sl_tp_quick.
+        if atr is None or atr <= 0:
+            log.warning(
+                "_compute_sl_tp_wave dipanggil dgn atr tidak valid (%s) — "
+                "fallback ke quick_sl_pct/quick_tp_pct dari profile.", atr,
+            )
+            sl = round(close * (1 - p.get("quick_sl_pct", 1.20) / 100), 8)
+            tp = round(close * (1 + p.get("quick_tp_pct", 1.75) / 100), 8)
+            return sl, tp
+
         sl = round(close - atr * p["atr_sl_mult"], 8)
         tp = round(close + atr * p["atr_tp_mult"], 8)
         return sl, tp
@@ -684,6 +740,19 @@ class VolumetricBreakoutStrategy(BaseStrategy):
             tracker = self._pos_trackers.get(symbol)
 
         if not tracker or tracker.exit_mode != ExitMode.RIDE_THE_WAVE:
+            return None
+
+        # [BUG-FIX -- HARDENING] Guard defensif tambahan: kalau entry_price
+        # entah bagaimana tetap <=0 (mis. register_position dipanggil dgn
+        # entry_price salah di masa depan), jangan crash ZeroDivisionError --
+        # root-cause utama sudah difix di sync_position_state (tidak lagi
+        # membuat tracker dgn entry_price<=0), ini cuma jaring pengaman kedua.
+        if tracker.entry_price <= 0:
+            log.error(
+                "check_trailing_exit: %s tracker.entry_price tidak valid (%s) "
+                "— skip perhitungan trailing (data tracker korup).",
+                symbol, tracker.entry_price,
+            )
             return None
 
         with self._lock:

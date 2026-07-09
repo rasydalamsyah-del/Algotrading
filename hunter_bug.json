@@ -618,6 +618,10 @@
             "putaran_5_regresi_akhir": {
               "status": "PENDING",
               "catatan": null
+            },
+            "putaran_5_stress_test_kedua_lebih_ketat": {
+              "status": "CROSS_CHECKED_FIXED",
+              "catatan": "Atas permintaan user utk verifikasi lebih dalam (bukan cuma baca), dilakukan putaran tambahan dgn eksperimen tertulis (bukan penalaran manual) utk _compute_sl_tp_quick/wave, _detect_exit_mode, _compute_confidence, dan stress-test pipeline end-to-end 9 skenario adversarial. Ditemukan 2 bug tambahan (_compute_sl_tp_wave atr<=0 guard hilang; sync_position_state bisa membuat tracker entry_price=0 yg crash ZeroDivisionError di banyak fungsi hilir). Keduanya difix + dites before/after. Metodologi: baca kode SAJA tidak cukup utk menemukan bug kelas ini -- harus dieksekusi dgn nilai adversarial (0, negatif, None, ekstrem) utk setiap fungsi matematis."
             }
           }
         }
