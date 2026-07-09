@@ -78,13 +78,38 @@
       }
     },
     "indicators/orderbook.py": {
-      "status": "DONE",
+      "status": "DONE_METODE_KETAT",
       "bug_fixed": [
         "diskontinuitas_imbalance_score",
         "spoofing_snapshot_salah",
         "wall_first_seen_dead_field"
       ],
-      "audit_level": "SERIUS"
+      "audit_level": "SERIUS",
+      "putaran_ulang_metode_ketat_2026_07_09": {
+        "konteks": "Audit total pertama dengan metode ketat untuk indicators/orderbook.py (680 baris, 19 fungsi + class WhaleDetector: imbalance, whale wall single+cluster, wall distance factor, spoofing detection, absorption detection, liquidity score, per-symbol state management). File terakhir Tier 2 -- dengan ini SELURUH Tier 2 (9 file) sudah diaudit metode ketat.",
+        "klaim_changelog_diverifikasi_ulang": [
+          "BUG-1 (absorbed_bid/ask benar2 terdeteksi): TERVERIFIKASI BENAR via eksperimen (wall turun 50% -> True, turun 20% -> False)",
+          "BUG-3 (_weighted_volume bobot 1.0/0.7/0.4 per level 1-5/6-10/11-20): TERVERIFIKASI BENAR persis",
+          "BUG-B (_walls_to_dict filter whale-only utk absorption): TERVERIFIKASI BENAR (micro-order tidak masuk dict) -- TAPI reuse dict ini juga utk spoofing ternyata jadi BUG BARU (lihat di bawah)",
+          "v3.1 BUG-FIX (imbalance_score kontinu di boundary, tidak ada lompatan 10.2 poin): TERVERIFIKASI BENAR PERSIS -- limit kiri==kanan di kedua boundary (IMBALANCE_BULL & IMBALANCE_BEAR), bukan cuma \"dekat\" tapi matematis identik",
+          "_wall_distance_factor interpolasi linear, _liquidity_score formula: semua terverifikasi benar"
+        ],
+        "bug_ditemukan_dan_difix": {
+          "lokasi": "calculate_orderbook() -- spoofing detection pathway",
+          "masalah": "BUG-A fix lama (simpan prev snapshot SEBELUM overwrite) sudah benar, TAPI snapshot yang dipakai (prev_bid_walls/prev_ask_walls, hasil _walls_to_dict whale-filtered dari BUG-B fix) MERUSAK heuristik internal _spoofing_penalty. _spoofing_penalty mendeteksi wall hilang via kondisi \"value > median_prev*2\" -- ini butuh himpunan CAMPURAN (kecil+besar) supaya whale bisa \"menonjol\" dari median. Tapi karena prev sudah di-filter whale-only (semua entrinya sama2 besar by construction), tidak ada satupun yang bisa >2x median dari peer whale-only-nya sendiri -- spoofing TIDAK PERNAH terdeteksi di jalur produksi ini (calculate_orderbook, dipanggil observer.py), bahkan utk kasus paling jelas (1 whale wall 100% hilang).",
+          "bukti": "WhaleDetector.analyze() (jalur LAIN di file yang sama, dipakai main.py, pakai snapshot MENTAH bukan whale-filtered) BERHASIL mendeteksi skenario identik (confidence turun ke 0.65), sementara calculate_orderbook() gagal total (confidence tetap 1.0) untuk skenario PERSIS SAMA. Dikonfirmasi juga di skenario 2-whale-wall (1 hilang) -- tetap gagal terdeteksi.",
+          "fix": "Tambah field baru _SnapshotState.prev_bid_raw/prev_ask_raw -- snapshot MENTAH (bukan whale-filtered) khusus utk _spoofing_penalty, mirror pola WhaleDetector._prev_bids/_prev_asks. prev_bid_walls/prev_ask_walls (whale-filtered) TIDAK diubah, tetap dipakai HANYA utk _detect_absorption (itu tujuan BUG-B fix yang benar).",
+          "verifikasi": "8/8 eksperimen PASS: fix utama (1 whale hilang -> confidence turun dari 1.0 SALAH ke 0.65 BENAR), skenario 2-whale (1 hilang) juga terdeteksi sekarang, konsistensi cross-pathway (calculate_orderbook vs WhaleDetector.analyze() sekarang identik diff=0.0 utk skenario sama), regresi absorption TIDAK terpengaruh (masih benar), regresi no-false-positive pada kondisi stabil, first-call tidak crash, stress test 30/30 trial deteksi & 30/30 trial no-false-positive."
+        },
+        "concurrency_check": "SEMUA fungsi di file ini SINKRON (tidak ada async/await) -- _state_registry (global dict per-symbol) aman dari race condition krn asyncio cuma switch context di titik await, dan tidak ada satupun di file ini. Tidak perlu locking tambahan.",
+        "state_management_verifikasi": "cleanup_stale_states (TTL-based, MSL-A fix) diverifikasi bekerja benar -- state tidak aktif >TTL terhapus otomatis dari registry.",
+        "jalur_penghubung_diverifikasi": [
+          "calculate_orderbook/score_orderbook_data dipanggil observer.py (jalur produksi utama)",
+          "WhaleDetector dipanggil main.py (jalur terpisah, dikonfirmasi TIDAK terpengaruh fix ini krn sudah pakai snapshot mentah sejak awal)",
+          "cleanup_stale_states() dipanggil main.py secara periodik, reset_state() dipanggil saat coin dirotasi keluar universe -- keduanya sesuai dokumentasi"
+        ],
+        "status": "DONE_1_BUG_SIGNIFIKAN_DITEMUKAN_DAN_DIFIX"
+      }
     },
     "indicators/oscillators.py": {
       "status": "DONE",

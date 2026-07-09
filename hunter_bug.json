@@ -415,6 +415,13 @@
               "status": "PENDING",
               "catatan": null
             }
+          },
+          "putaran_ulang_metode_ketat": {
+            "2026_07_09_full_audit": {
+              "apa_yang_dicek": "Audit total: verifikasi ulang semua klaim changelog (BUG-1/BUG-3/BUG-A/BUG-B/v3.1), matematika imbalance/liquidity/wall_distance, concurrency check (semua fungsi sync), state TTL cleanup, jalur penghubung ke main.py & observer.py.",
+              "hasil": "1 bug signifikan ditemukan & difix: spoofing detection di calculate_orderbook() (jalur produksi observer.py) TIDAK PERNAH terdeteksi krn snapshot pembanding sudah di-filter whale-only (reuse dari BUG-B fix utk absorption), merusak heuristik \">2x median\" internal _spoofing_penalty. Dibuktikan via WhaleDetector.analyze() (jalur lain, pakai snapshot mentah) yg berhasil deteksi skenario identik. Fix: pisahkan snapshot mentah (baru) utk spoofing dari snapshot whale-filtered (lama, tetap) utk absorption. 8/8 eksperimen PASS termasuk stress test 30 trial.",
+              "status": "CROSS_CHECKED_FIXED"
+            }
           }
         }
       ]

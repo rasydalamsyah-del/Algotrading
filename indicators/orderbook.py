@@ -232,8 +232,26 @@ def _liquidity_score(total_raw_usdt: float) -> float:
 @dataclass
 class _SnapshotState:
     """State per-symbol untuk perbandingan antar tick."""
-    prev_bid_walls: Dict[float, float] = field(default_factory=dict)  # price→usdt_weighted
+    prev_bid_walls: Dict[float, float] = field(default_factory=dict)  # price→usdt_weighted (WHALE-FILTERED, khusus absorption)
     prev_ask_walls: Dict[float, float] = field(default_factory=dict)
+    # [BUG-FIX -- ditemukan lewat audit menyeluruh] prev_bid_raw/prev_ask_raw
+    # BARU: snapshot MENTAH (tidak difilter whale-only) khusus untuk spoofing
+    # detection. Sebelumnya _spoofing_penalty() di calculate_orderbook() salah
+    # memakai prev_bid_walls/prev_ask_walls (whale-filtered via _walls_to_dict,
+    # BUG-B fix) sebagai snapshot pembanding -- ini merusak heuristik internal
+    # _spoofing_penalty yang butuh himpunan CAMPURAN (kecil+besar) untuk bisa
+    # mendeteksi outlier via "value > median*2". Kalau prev SUDAH cuma berisi
+    # level whale-only (yang besarannya mirip satu sama lain by construction),
+    # tidak ada satu pun yang bisa ">2x median dari peer whale-only-nya sendiri"
+    # -- membuat spoofing TIDAK PERNAH terdeteksi di jalur produksi ini,
+    # dibuktikan lewat WhaleDetector.analyze() (jalur lain, pakai raw levels)
+    # yang BERHASIL mendeteksi skenario identik (confidence 1.0 vs 0.65).
+    # Fix: simpan snapshot mentah terpisah (mirror pola WhaleDetector.
+    # _prev_bids/_prev_asks) khusus utk _spoofing_penalty, prev_bid_walls/
+    # prev_ask_walls TETAP whale-filtered khusus utk _detect_absorption
+    # (tidak diubah -- itu fix BUG-B yang benar utk tujuannya sendiri).
+    prev_bid_raw:   Dict[float, float] = field(default_factory=dict)  # price→qty MENTAH, semua level lolos _filter_min_size
+    prev_ask_raw:   Dict[float, float] = field(default_factory=dict)
     prev_ts:        float              = 0.0
     # [MSL-B FIX] wall_first_seen dihapus — field ini tidak pernah dipakai di
     # calculate_orderbook(). WhaleDetector mengelola wall age via self._wall_first_seen
@@ -544,18 +562,27 @@ def calculate_orderbook(ob: dict, symbol: str = "_default") -> dict:
     # [BUG-A FIX] Simpan snapshot prev SEBELUM state di-update — dipakai spoofing di bawah.
     # Sebelumnya spoofing menggunakan state.prev_bid_walls SETELAH di-overwrite curr,
     # sehingga membandingkan current vs current → _spoofing_penalty selalu return 1.0.
-    prev_bid_snapshot = dict(state.prev_bid_walls)
-    prev_ask_snapshot = dict(state.prev_ask_walls)
+    # [BUG-FIX TAMBAHAN] Snapshot utk spoofing sekarang pakai prev_bid_raw/prev_ask_raw
+    # (mentah, bukan whale-filtered) -- lihat penjelasan lengkap di docstring
+    # _SnapshotState. prev_bid_walls/prev_ask_walls (whale-filtered) TETAP dipakai
+    # HANYA utk absorption di bawah, tidak diubah.
+    prev_bid_raw_snapshot = dict(state.prev_bid_raw)
+    prev_ask_raw_snapshot = dict(state.prev_ask_raw)
 
     # Update state
     state.prev_bid_walls = curr_bid_dict
     state.prev_ask_walls = curr_ask_dict
+    state.prev_bid_raw   = {float(p): float(q) for p, q in bids_f[:20] if float(p) > 0 and float(q) > 0}
+    state.prev_ask_raw   = {float(p): float(q) for p, q in asks_f[:20] if float(p) > 0 and float(q) > 0}
     state.prev_ts        = time.time()
 
     # ── Spoofing confidence ───────────────────────────────────────────────────
     # [BUG-A FIX] Pakai prev_snapshot (sebelum update) bukan state.prev yang sudah = curr
-    pen_b = _spoofing_penalty(bids_f, prev_bid_snapshot)
-    pen_a = _spoofing_penalty(asks_f, prev_ask_snapshot)
+    # [BUG-FIX TAMBAHAN] Pakai snapshot MENTAH (prev_bid_raw_snapshot), bukan
+    # whale-filtered -- supaya heuristik ">2x median" _spoofing_penalty punya
+    # himpunan campuran utk mendeteksi outlier, konsisten dgn WhaleDetector.analyze().
+    pen_b = _spoofing_penalty(bids_f, prev_bid_raw_snapshot)
+    pen_a = _spoofing_penalty(asks_f, prev_ask_raw_snapshot)
     result["spoofing_confidence"] = round((pen_b + pen_a) / 2, 3)
 
     # ── Liquidity score (MSL-6) ───────────────────────────────────────────────
