@@ -214,12 +214,12 @@
               "catatan": "1 bug matematika: _calc_rsi salah RSI=100 utk harga flat total (harusnya 50). Sudah difix + dites 45 skenario, 17/17 fungsi tercakup langsung."
             },
             "putaran_3_validasi_matematika": {
-              "status": "PENDING",
-              "catatan": null
+              "status": "CROSS_CHECKED_CLEAN",
+              "catatan": "[Putaran ulang lebih dalam] RSI Wilder SMA-seeded diverifikasi independen (max deviasi 0.0 vs referensi ditulis dari nol, bar 30+). RSI flat-price=50.0 dan RSI naik-terus=100.0 dikonfirmasi. MACD line/histogram exact match vs referensi independen. Bearish zero cross logic dibaca ulang -- simetris sempurna dgn bullish (prev>=0 and curr<0 vs prev<=0 and curr>0). StochRSI bounds [0,100] dikonfirmasi. Semua CLEAN."
             },
             "putaran_4_kondisi_khusus": {
-              "status": "PENDING",
-              "catatan": null
+              "status": "CROSS_CHECKED_CLEAN",
+              "catatan": "score_momentum exclusion logic diuji dgn data 2-bar (semua sub-indikator invalid) -> composite=50.0 SCORE_NEUTRAL, benar. Tidak ada state global module-level -- tidak ada risiko race condition. Caller observer.py (rsi_series shared param) diverifikasi signature cocok."
             },
             "putaran_5_regresi_akhir": {
               "status": "PENDING",
