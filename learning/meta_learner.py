@@ -138,6 +138,29 @@ def _apply_weight_change(profile: str, indicator: str, delta: float) -> tuple:
         with open(weights_path, "w") as f:
             f.write(new_src)
 
+        # [BUG-FIX -- ditemukan lewat verifikasi arsitektur lebih dalam,
+        # 2026-07-09] Sebelumnya fungsi ini HANYA menulis ke file
+        # profiles/weights.py di disk -- dict LEVEL1_WEIGHTS yang SUDAH
+        # di-import ke memori (dipakai get_level1_weights() di seluruh
+        # pipeline scoring, mis. scorer.py._calc_weighted_breakdown) TIDAK
+        # PERNAH di-refresh. Tidak ada mekanisme reload apapun di codebase
+        # (grep importlib.reload nihil). Akibatnya seluruh fitur "autonomous
+        # weight adjustment" MetaLearner TIDAK benar-benar mengubah perilaku
+        # bot yang sedang berjalan -- suggestion "berhasil di-apply" (file
+        # ditulis, log sukses, notifikasi terkirim) tapi scoring LIVE tetap
+        # pakai bobot LAMA sampai proses di-restart. Beda dgn parameter lain
+        # (entry_threshold, volume_multiplier, dst) yang lewat
+        # apply_parameter_override() -- itu mutasi dict in-memory
+        # _ACTIVE_OVERRIDES langsung, jadi otomatis live-effect, TIDAK
+        # kena bug ini. Fix root-cause: setelah berhasil tulis file (utk
+        # persist ke disk, bertahan lintas restart), JUGA mutasi
+        # LEVEL1_WEIGHTS[profile] in-memory langsung -- karena LEVEL1_WEIGHTS
+        # adalah dict module-level yang di-share by-reference ke semua
+        # importer (termasuk profiles.weights.get_level1_weights() yang
+        # dipakai scorer.py), mutasi in-place ini otomatis terlihat di
+        # seluruh proses tanpa perlu reload modul.
+        LEVEL1_WEIGHTS[profile] = weights
+
         log.info("AdaptiveWeights: profile=%s category=%s %.4f→%.4f",
                  profile, category, old_w, new_w)
         return True, (

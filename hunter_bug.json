@@ -868,20 +868,24 @@
           "fokus_cross_check": "Sudah difix 2 bug (cooldown weight_, auto-revert persistence). Cross-check ulang: apakah MASIH ada jalur lain yang bisa mengubah profiles/weights.py atau profiles/thresholds.py TANPA lewat guardrail meta_learner.py sama sekali (mis. langsung dari api_server.py endpoint config lain)?",
           "putaran": {
             "putaran_2_cross_check_dua_arah": {
-              "status": "PENDING",
-              "catatan": null
+              "status": "CROSS_CHECKED_FIXED",
+              "catatan": "1 bug ARSITEKTUR signifikan ditemukan & difix: _apply_weight_change tidak update LEVEL1_WEIGHTS in-memory, fitur autonomous weight adjustment tidak live-effect sampai restart. Dibuktikan via eksperimen aman (backup/restore). Caller MetaLearner(...) di main.py diverifikasi cocok. apply_parameter_override (jalur parameter non-weight) dikonfirmasi TIDAK kena bug yang sama (sudah in-memory)."
             },
             "putaran_3_validasi_matematika": {
-              "status": "PENDING",
-              "catatan": null
+              "status": "CROSS_CHECKED_CLEAN",
+              "catatan": "_calc_confidence (weighted composite, bounds [0.10,0.95]) dan _is_delta_safe (guardrail) diverifikasi eksperimen. CLEAN."
             },
             "putaran_4_kondisi_khusus": {
-              "status": "PENDING",
-              "catatan": null
+              "status": "CROSS_CHECKED_FIXED",
+              "catatan": "Bug live-effect (putaran 2) adalah temuan kondisi khusus arsitektur utama file ini. self._cooling_cache/self._pending/self._last_apply_at semua instance-level (bukan module-level), tidak ada risiko race condition lintas thread."
             },
             "putaran_5_regresi_akhir": {
-              "status": "PENDING",
-              "catatan": null
+              "status": "DONE",
+              "catatan": "107 PASSED 0 FAILED."
+            },
+            "putaran_1_baca_ulang_full": {
+              "status": "DONE",
+              "catatan": "1651 baris (setelah fix) dibaca tuntas."
             }
           }
         }
