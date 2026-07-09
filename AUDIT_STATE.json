@@ -375,7 +375,14 @@
         "double_penalty_volume_climax_duplicate",
         "primary_pattern_idle"
       ],
-      "audit_level": "SERIUS"
+      "audit_level": "SERIUS",
+      "bug_fixed_tambahan_dari_audit_file_lain": [
+        "[Tier 3 re-audit metode ketat, 2026-07-09] BUG WIRING (fitur risk-management tidak pernah aktif di produksi): validate_and_apply(scored) dipanggil di strategy.py get_scored_signal TANPA parameter db_manager (default None). Akibatnya _check_consecutive_losses() -- fitur 'fatigue penalty' yang menurunkan confidence kalau symbol/profile baru loss beruntun >=3x -- SELALU return di baris pertama (if db_manager is None: return), di jalur produksi utama (Gate3->Gate4, tiap simbol tiap siklus). Fitur ini sudah diimplementasikan lengkap & benar (matematika penalty dicek: min(0.20, consecutive_losses*0.05), asyncio.run() di dalamnya aman dipanggil dari worker thread -- beda kasus dgn bug scorer.py yg pakai get_event_loop()), tapi tidak pernah aktif krn parameter tidak pernah dioper caller. DIKONFIRMASI KE USER (trade-off: nambah 1 query DB sinkron per simbol per siklus scoring) -- user memilih AKTIFKAN. Fix: strategy.py get_scored_signal sekarang mengoper _db (sudah didapat lebih awal di fungsi yg sama, dipakai jg utk save_market_regime) ke validate_and_apply via run_in_executor positional arg. TEST: eksperimen before/after pakai validate_and_apply() asli dgn FakeDB berisi 3 trade loss beruntun -- tanpa db_manager: 0 warning fatigue (perilaku lama, sesuai ekspektasi); dengan db_manager: fatigue penalty warning muncul benar dgn confidence -15% (3 losses * 0.05). Regression simulate_test.py: 107 PASSED, 0 FAILED, 2 WARNED (non-terkait). File disentuh: strategy.py."
+      ],
+      "catatan_investigasi": [
+        "[Tier 3] Class SignalValidator (dgn method .validate()) adalah DEAD CODE -- dikonstruksi di strategy.py (self._validator = SignalValidator()), bahkan di-inject _db dari main.py (self.strategy._validator._db = self.db), TAPI method .validate()-nya tidak pernah benar-benar dipanggil di manapun. Jalur produksi nyata pakai fungsi top-level validate_and_apply() langsung (bukan lewat class ini). Bukan bug (tidak ada dampak fungsional), tidak diubah.",
+        "[Tier 3] Comment lama di indicators/oscillators.py (Tier 2 audit) yg mengklaim field v2 oscillator (cci_trend, cci_divergence, willr_trend, roc_crossover, roc_slope) 'TIDAK PERNAH dicek di intelligence/validator.py' TERBUKTI SALAH/BASI -- _check_oscillator_context() di validator.py justru SUDAH mengecek semuanya, dipanggil dari validate_signal(). Comment sudah dikoreksi langsung di indicators/oscillators.py supaya tidak menyesatkan sesi audit berikutnya. Pelajaran: rule 5.5.1 (jangan percaya catatan lama tanpa verifikasi) terbukti relevan bahkan utk catatan dari audit metode ketat sebelumnya di sesi yg sama proyek ini."
+      ]
     },
     "main.py": {
       "status": "DONE",

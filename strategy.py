@@ -995,12 +995,25 @@ class VolumetricBreakoutStrategy(BaseStrategy):
                     )
                     return None
 
+            # [BUG-FIX] validate_and_apply() sebelumnya dipanggil TANPA
+            # db_manager (default None) -- akibatnya _check_consecutive_losses()
+            # di dalam validate_signal() SELALU return di baris pertama
+            # (if db_manager is None: return), sehingga fitur "consecutive
+            # losses fatigue penalty" tidak pernah aktif di jalur produksi
+            # sama sekali walau sudah diimplementasikan lengkap & benar.
+            # Fix: oper _db yang sudah didapat di atas. asyncio.run() di dalam
+            # _check_consecutive_losses AMAN dipanggil dari worker thread
+            # (beda kasus dgn asyncio.get_event_loop() di scorer.py yg sudah
+            # difix terpisah) -- sudah diverifikasi tidak ada masalah runtime,
+            # cuma nambah 1 query DB per simbol per siklus scoring (trade-off
+            # yg disetujui user).
             from intelligence.validator import validate_and_apply
             loop = asyncio.get_running_loop()
             scored, _vr = await loop.run_in_executor(
                 None,
                 validate_and_apply,
                 scored,
+                _db,
             )
 
             # [TAMBAHAN] Logging pasif sentiment_score untuk pipeline v7.

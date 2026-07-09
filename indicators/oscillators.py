@@ -32,13 +32,19 @@ Changelog v3 (full re-audit baris-per-baris, Tier A verification):
             benar (10/3 per unit), cuma offset additive yg salah anchor.
             Dibuktikan dgn scan numerik di semua 5 boundary; sekarang semua
             kontinu (selisih <0.001 di kedua sisi tiap boundary).
-  [CATATAN] iset.oscillators.* (cci_divergence, cci_trend, willr_trend,
-            roc_crossover, roc_slope) TIDAK PERNAH dicek di
-            intelligence/validator.py -- berbeda dgn trend/momentum/strength/
-            volatility/structure/patterns yg semua sudah punya
-            _check_*_context() sendiri. Hanya composite_score yg dipakai
-            (via _compute_tf_score & scorer.py). Belum diupgrade -- perlu
-            keputusan eksplisit krn ini penambahan fitur, bukan bug fix.
+  [CATATAN -- DIKOREKSI Tier 3 re-audit 2026-07-09] Catatan ini SEBELUMNYA
+            menyatakan iset.oscillators.* (cci_divergence, cci_trend,
+            willr_trend, roc_crossover, roc_slope) "TIDAK PERNAH dicek di
+            intelligence/validator.py". Setelah verifikasi langsung ke kode
+            saat ini, klaim itu TERBUKTI SALAH/BASI: _check_oscillator_context()
+            di intelligence/validator.py SUDAH mengecek cci_trend,
+            cci_divergence, willr_trend, roc_crossover, DAN roc_slope secara
+            eksplisit (bagian "[v2] CCI trend", "[v2] CCI divergence", "[v2]
+            Williams %R trend", "[v2] ROC fast/slow crossover", "ROC -- early
+            warning momentum"), dan fungsi ini dipanggil dari validate_signal().
+            Catatan lama ini kemungkinan ditulis sebelum validator.py diupdate
+            di sesi lain, lalu tidak pernah disinkronkan -- pelajaran: jangan
+            percaya catatan/changelog lama tanpa verifikasi ulang ke kode.
 """
 
 from __future__ import annotations

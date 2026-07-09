@@ -512,16 +512,16 @@
           "fokus_cross_check": "File terbesar di intelligence/ (1809 baris, 36 fungsi). Validasi sinyal sebelum eksekusi — cek SEMUA validator benar2 dipanggil dari commander.py/strategy.py, tidak ada validator yang didefinisikan tapi tidak pernah dipanggil (dead validation = false sense of security).",
           "putaran": {
             "putaran_2_cross_check_dua_arah": {
-              "status": "PENDING",
-              "catatan": null
+              "status": "CROSS_CHECKED_FIXED",
+              "catatan": "1 bug wiring ditemukan & difix (db_manager tidak dioper ke validate_and_apply -> consecutive_losses fatigue penalty mati total di produksi, dikonfirmasi ke user, user pilih aktifkan). 1 dead code didokumentasikan (SignalValidator class). 1 comment basi dikoreksi (oscillators.py v2 field claim). Semua 22 _check_*_context dikonfirmasi ter-wire di validate_signal(). Caller (simulate_test.py, strategy.py via validate_and_apply) diverifikasi manual. jalur.json referenced_in_files utk ValidationResult.reject -> commander.py dikonfirmasi FALSE POSITIVE (grep match .reject( lain, bukan ValidationResult)."
             },
             "putaran_3_validasi_matematika": {
               "status": "SKIP_TIDAK_RELEVAN",
-              "catatan": "File ini tidak mengandung kalkulasi/formula matematis signifikan (murni I/O, orkestrasi, atau notifikasi)."
+              "catatan": "File ini murni scoring/threshold/confidence-adjustment berbasis perbandingan & lookup, bukan kalkulasi indikator dari nol (indikatornya sendiri sudah diverifikasi matematis di Tier 2). Beberapa formula sederhana (R/R pivot, jarak persen ke level) dicek sekilas saat baca kode, tidak ada isu ditemukan, tapi tidak masuk kategori validasi matematika independen spt RSI/MACD/dll."
             },
             "putaran_4_kondisi_khusus": {
-              "status": "PENDING",
-              "catatan": null
+              "status": "CROSS_CHECKED_CLEAN",
+              "catatan": "Semua field Optional dicek None-safety dgn benar (bb_middle/bb_position, kc_upper/lower/middle, vwap bands, fib levels, donchian, dll -- konsisten pakai early-return kalau None). _check_indicator_errors menangani critical vs non-critical errors dgn benar (reject utk kritis, warning utk non-kritis). asyncio.run() di _check_consecutive_losses dikonfirmasi aman dipanggil dari worker thread (run_in_executor) -- beda kasus dgn asyncio.get_event_loop() di scorer.py."
             },
             "putaran_5_regresi_akhir": {
               "status": "PENDING",
