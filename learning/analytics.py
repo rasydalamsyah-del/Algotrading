@@ -411,9 +411,21 @@ class AnalyticsEngine:
 
         for col in indicator_cols:
             scores = [r.get(col) for r in score_outcomes]
+            # [BUG-FIX -- ditemukan lewat eksperimen edge case] Sebelumnya:
+            # `if s is not None and not math.isnan(s)` -- math.isnan(s) crash
+            # TypeError kalau s bukan real number (mis. string). Ini bisa
+            # kejadian nyata lewat combined_scores di compute_attribution_with_peer:
+            # cross_learn.py._normalize_score dibungkus
+            # `except (TypeError, ValueError): pass` -- kalau float(val) gagal,
+            # value ASLI (bisa non-numeric) tetap lolos ke dict tanpa
+            # dinormalisasi, bukan di-null-kan. Data peer (dari DB
+            # algotrader_test yang skema/versinya bisa beda) punya jaminan tipe
+            # lebih lemah dibanding data lokal sendiri. Fix: bungkus dgn
+            # isinstance check dulu sebelum math.isnan, treat non-numeric sbg
+            # None (skip), bukan crash.
             valid_pairs = [
-                (s, o) for s, o in zip(scores, outcomes_binary)
-                if s is not None and not math.isnan(s)
+                (float(s), o) for s, o in zip(scores, outcomes_binary)
+                if isinstance(s, (int, float)) and not math.isnan(s)
             ]
 
             if len(valid_pairs) < self._min_ind:

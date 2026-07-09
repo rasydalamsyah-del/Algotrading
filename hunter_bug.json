@@ -841,20 +841,24 @@
           "fokus_cross_check": "compute_attribution() — konsumen utama cross_learn.py & sumber data untuk meta_learner.py generate_suggestions(). Cek attribution report yang dihasilkan benar2 dipakai meta_learner dengan struktur field yang sama persis (nama key dict dsb).",
           "putaran": {
             "putaran_2_cross_check_dua_arah": {
-              "status": "PENDING",
-              "catatan": null
+              "status": "CROSS_CHECKED_FIXED",
+              "catatan": "1 bug ditemukan & difix (isnan crash non-numeric). Caller main.py/simulate_test.py diverifikasi cocok."
             },
             "putaran_3_validasi_matematika": {
-              "status": "PENDING",
-              "catatan": null
+              "status": "CROSS_CHECKED_CLEAN",
+              "catatan": "_pearson_r, _profit_factor, _rolling_win_rate, _bootstrap_confidence_interval semua diverifikasi independen + edge case, CLEAN."
             },
             "putaran_4_kondisi_khusus": {
-              "status": "PENDING",
-              "catatan": null
+              "status": "CROSS_CHECKED_FIXED",
+              "catatan": "Bug crash non-numeric (putaran 2) adalah temuan kondisi khusus edge-data. Tidak ada state global, tidak ada risiko race."
             },
             "putaran_5_regresi_akhir": {
-              "status": "PENDING",
-              "catatan": null
+              "status": "DONE",
+              "catatan": "107 PASSED 0 FAILED."
+            },
+            "putaran_1_baca_ulang_full": {
+              "status": "DONE",
+              "catatan": "1188 baris dibaca tuntas."
             }
           }
         },
