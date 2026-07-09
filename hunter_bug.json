@@ -195,6 +195,13 @@
               "status": "PENDING",
               "catatan": null
             }
+          },
+          "putaran_ulang_metode_ketat": {
+            "2026_07_09_supertrend_independent": {
+              "apa_yang_dicek": "Cross-check matematika Supertrend vs implementasi independen -- formula TERAKHIR dari seri verifikasi matematika independen Tier 2.",
+              "hasil": "TIDAK ADA BUG. Cocok persis di banyak titik termasuk skenario crossing.",
+              "status": "CROSS_CHECKED_CLEAN"
+            }
           }
         },
         {
@@ -253,6 +260,13 @@
               "status": "PENDING",
               "catatan": null
             }
+          },
+          "putaran_ulang_metode_ketat": {
+            "2026_07_09_cci_willr_independent": {
+              "apa_yang_dicek": "Cross-check matematika CCI & Williams %R vs implementasi independen.",
+              "hasil": "TIDAK ADA BUG di kedua formula. Semua cocok persis dgn textbook.",
+              "status": "CROSS_CHECKED_CLEAN"
+            }
           }
         },
         {
@@ -282,6 +296,11 @@
               "apa_yang_dicek": "_wilder_smooth di volatility.py memiliki pola struktural identik dengan bug leading-NaN yang ditemukan & difix di strength.py (commit 05d7b50). Saat ini TIDAK ke-trigger (tr di _calc_atr tidak punya leading NaN), tapi diperbaiki demi konsistensi/pertahanan-mendalam.",
               "hasil": "Fix diterapkan (deteksi first_valid index, seed = rata-rata period nilai valid pertama). 8/8 eksperimen PASS: regresi no-leading-NaN identik dgn versi lama (max diff=0.0), leading-NaN seed sekarang benar, full pipeline (calculate_atr_enhanced, calculate_bollinger_bands, calculate_keltner_channels, calculate_all, calculate_squeeze) tidak crash.",
               "status": "FIXED_DEFENSIVE_NO_ACTIVE_BUG"
+            },
+            "2026_07_09_bb_keltner_independent": {
+              "apa_yang_dicek": "Cross-check matematika Bollinger Bands & Keltner Channel vs implementasi independen.",
+              "hasil": "TIDAK ADA BUG di kedua formula. Semua cocok persis dgn textbook/standar.",
+              "status": "CROSS_CHECKED_CLEAN"
             }
           }
         },

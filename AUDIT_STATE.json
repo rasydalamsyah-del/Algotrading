@@ -116,6 +116,12 @@
         ],
         "catatan_arsitektur_sudah_terdokumentasi_sebelumnya": "iset.oscillators.* (cci_divergence, cci_trend, willr_trend, roc_crossover, roc_slope) TIDAK dicek di intelligence/validator.py (beda dgn trend/momentum/strength/volatility/structure/patterns yg semua sudah punya _check_*_context()). Sudah didokumentasikan di changelog v3 file ini sendiri sebagai keputusan pending (fitur belum diupgrade, bukan bug), tidak diubah sesi ini.",
         "status": "DONE_RE_AUDIT_TUNTAS (1 bug ditemukan & difix + dites, 15/15 fungsi tercakup eksperimen langsung)"
+      },
+      "putaran_ulang_metode_ketat_2026_07_09_cci_willr": {
+        "konteks": "Verifikasi matematika independen CCI (Lambert 1980) dan Williams %R -- lanjutan seri verifikasi RSI/MACD/dst.",
+        "hasil_cci": "TIDAK ADA BUG. Formula (TP-SMA)/(0.015*MAD) cocok persis (diff=0.0) dgn implementasi independen di berbagai window. Implementasi vectorized (stride_tricks) diverifikasi identik dgn versi loop-based textbook. min_bars guard & flat-price (mad=0) guard benar. Observasi: calculate_cci_trend=flat pada uptrend kuat itu perilaku CCI yg benar (CCI oscillates around own SMA, bukan bug).",
+        "hasil_willr": "TIDAK ADA BUG. Formula (HH-Close)/(HH-LL)*-100 cocok persis dgn textbook. Slicing array manual di calculate_willr_trend (rawan off-by-one) diverifikasi benar per-titik vs implementasi independen. min_bars & flat-price guard benar.",
+        "status": "DONE_NO_BUG_VERIFIED_INDEPENDENT"
       }
     },
     "indicators/patterns.py": {
@@ -201,6 +207,11 @@
         "observasi_kosmetik": "Komentar baris ~422 'Zona upper band (>=upper_1): slight bearish -> 55' salah kata (55>50 artinya net BULLISH-leaning, bukan bearish) -- cuma typo komentar, logika/nilai skor sendiri sudah benar. Tidak diubah (murni kosmetik, prioritas sangat rendah).",
         "status": "DONE_RE_AUDIT_TUNTAS (1 bug ditemukan & difix + dites, 8/8 fungsi tercakup eksperimen)",
         "penutupan_celah": "_calc_ema (dipakai internal calculate_ema_stack & calculate_golden_dead_cross) sebelumnya cuma teruji tidak langsung -- ditambah 3 assersi langsung (cocok manual EMA adjust=False, series kosong, period>panjang data). 3/3 PASS. Sekarang benar-benar 8/8 fungsi tercakup eksperimen langsung."
+      },
+      "putaran_ulang_metode_ketat_2026_07_09_supertrend": {
+        "konteks": "Verifikasi matematika independen Supertrend -- formula TERAKHIR dalam seri verifikasi matematika independen Tier 2 (setelah ADX, RSI, MACD, CCI, Williams%R, BB, Keltner, MFI).",
+        "hasil": "TIDAK ADA BUG. Algoritma (TR->Wilder ATR->basic bands->final bands sticky rule->direction) cocok persis dgn implementasi independen textbook di banyak titik berbeda (10 window, termasuk skenario crossing). ATR seed di sini SUDAH pakai SMA-based (np.mean(tr[:period])) sejak awal -- aman krn tr tidak pernah leading-NaN (konstruksi langsung dari OHLC, prev_close[0]=close[0] fallback), jadi tidak kena isu leading-NaN yg sudah difix di strength.py/volatility.py. min_bars guard benar. Adaptive multiplier (fitur upgrade, bukan textbook standar) tidak crash & scoring konsisten dgn direction.",
+        "status": "DONE_NO_BUG_VERIFIED_INDEPENDENT"
       }
     },
     "indicators/volatility.py": {
@@ -239,6 +250,12 @@
         "fix": "Diperbaiki jadi pola sama seperti strength.py (deteksi first_valid, seed = rata-rata period nilai valid pertama sejak first_valid) -- pertahanan-mendalam, bukan fix bug aktif.",
         "bukti": "8/8 eksperimen PASS: regresi no-leading-NaN max diff=0.0 (identik perilaku lama), leading-NaN case sekarang seed benar (dibuktikan vs implementasi lama yg salah), full pipeline (ATR/BB/KC/squeeze/calculate_all) tidak crash.",
         "status": "DONE_DEFENSIVE_FIX_NO_ACTIVE_BUG"
+      },
+      "putaran_ulang_metode_ketat_2026_07_09_bb_keltner": {
+        "konteks": "Verifikasi matematika independen Bollinger Bands dan Keltner Channel -- lanjutan seri verifikasi.",
+        "hasil_bb": "TIDAK ADA BUG. Middle=SMA(N), Upper/Lower=Middle+/-k*std(population,ddof=0) cocok persis dgn definisi Bollinger standar. Observasi: bb_position di-clamp ke [0,1] saat breakout (kehilangan info magnitude) tapi TIDAK berdampak ke skor krn _score_bb cuma pakai threshold bukan magnitude -- bukan bug.",
+        "hasil_keltner": "TIDAK ADA BUG. Middle=EMA(close,N) [standar modern/Raschke, dikonfirmasi cocok dgn seed pine_ema TradingView], Upper/Lower=Middle+/-mult*ATR cocok persis dgn implementasi independen. kc_position TIDAK di-clamp (beda dari BB) dan penanganan >1.0/<0.0 sudah benar by design.",
+        "status": "DONE_NO_BUG_VERIFIED_INDEPENDENT"
       }
     },
     "intelligence/classifier.py": {
