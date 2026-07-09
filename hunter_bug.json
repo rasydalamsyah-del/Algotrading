@@ -995,20 +995,24 @@
           "fokus_cross_check": "70 fungsi, endpoint terbanyak. Cek SEMUA endpoint yang dipanggil telegram_bot.py sudah 100% konsisten (sudah sebagian dicek saat audit telegram_bot.py — lanjutkan untuk endpoint yang dipakai dashboard/index.html yang BELUM pernah di-cross-check).",
           "putaran": {
             "putaran_2_cross_check_dua_arah": {
-              "status": "PENDING",
-              "catatan": null
+              "status": "CROSS_CHECKED_FIXED",
+              "catatan": "1 bug KRITIS ditemukan & difix: universe_add/universe_remove SELALU crash TypeError (kwarg is_active tidak ada di signature database.py). Kedua endpoint 100% non-fungsional sebelum fix. Dibuktikan via eksperimen + diverifikasi ulang end-to-end setelah fix. Callee (database.py) sudah diverifikasi lengkap hari ini sehingga mismatch ini langsung ketahuan."
             },
             "putaran_3_validasi_matematika": {
-              "status": "SKIP_TIDAK_RELEVAN",
-              "catatan": "File ini tidak mengandung kalkulasi/formula matematis signifikan (murni I/O, orkestrasi, atau notifikasi)."
+              "status": "CROSS_CHECKED_CLEAN",
+              "catatan": "Calmar ratio annualization fix diverifikasi numerik (skenario realistis, selisih ~989x antara pola lama vs baru). Formula lain (probability_up, threshold_gap, dll) dibaca & konsisten dgn pola yg sudah diverifikasi di file lain."
             },
             "putaran_4_kondisi_khusus": {
-              "status": "PENDING",
-              "catatan": null
+              "status": "CROSS_CHECKED_CLEAN",
+              "catatan": "Verifikasi end-to-end via FastAPI TestClient: API key enforcement (401 tanpa/salah key, 200 dgn key benar, endpoint publik tetap 200), rate limiter (429 trigger nyata setelah >120 req/menit). Semua klaim security v9 dikonfirmasi valid dgn pengujian nyata, bukan cuma baca changelog."
             },
             "putaran_5_regresi_akhir": {
-              "status": "PENDING",
-              "catatan": null
+              "status": "DONE",
+              "catatan": "107 PASSED 0 FAILED."
+            },
+            "putaran_1_baca_ulang_full": {
+              "status": "DONE",
+              "catatan": "2299 baris dibaca tuntas (file terbesar di proyek, 70 endpoint/fungsi)."
             }
           }
         },

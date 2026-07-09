@@ -4,21 +4,26 @@
   "sesi_terakhir_update": "2026-07-03",
   "file_sudah_diaudit_dan_fix": {
     "api_server.py": {
-      "status": "DONE",
+      "status": "DONE_METODE_KETAT",
       "bug_fixed": [
         "rate_limiter_dead_code",
         "11_endpoint_tanpa_auth",
         "landing_page_drift",
         "open_tanpa_with",
         "reset_regime_terhubung",
-        "get_intelligence_score_detail_history_attributeerror_dict_as_object"
+        "get_intelligence_score_detail_history_attributeerror_dict_as_object",
+        "universe_add() dan universe_remove() SELALU crash TypeError -- keduanya memanggil db.upsert_universe_override(..., is_active=..., ...) tapi signature ASLI di database.py TIDAK PUNYA parameter is_active sama sekali (fungsi itu selalu set is_active=True tanpa syarat). SETIAP panggilan /api/universe/add DAN /api/universe/remove selalu TypeError -> HTTP 500. Bahkan seandainya param itu ada, universe_remove tidak akan pernah benar2 menonaktifkan symbol (upsert_universe_override selalu set True). Dibuktikan via eksperimen (pola pemanggilan persis -> TypeError nyata utk kedua endpoint). Fix: universe_add hapus kwarg is_active (fungsi memang selalu True, cocok semantik add); universe_remove pakai deactivate_universe_override() (fungsi terpisah yg memang sudah ada & benar utk tujuan ini, dipakai coin_swap.py & exchange.py). Diverifikasi end-to-end: kedua endpoint sekarang tidak crash DAN remove benar2 efektif menonaktifkan."
       ],
       "catatan": "Bug classifier #16b (reset_regime) diperbaiki di sesi hari ini [TEMUAN BARU dari audit database.py] Endpoint GET /api/intelligence/scores/{symbol}: history_rows dari get_signal_scores() diakses dengan sintaks atribut (r.timestamp dll) padahal return type adalah List[Dict] bukan SQLAlchemy object — AttributeError/HTTP500 setiap kali endpoint dipanggil. Dikonfirmasi via simulasi. Fix: ubah ke akses dict (r['timestamp'] dll). Catatan: 'latest' dari get_latest_signal_score() mengembalikan SQLAlchemy object langsung sehingga latest.xxx di bawahnya tetap benar dan tidak diubah. [UPDATE dari audit learning/analytics.py]: endpoint /api/analytics/regime_performance memanggil compute_attribution(group_by='regime') yang sebelumnya menyebabkan TypeError/HTTP 500 -- root cause SUDAH diperbaiki di learning/analytics.py (param group_by ditambahkan ke compute_attribution). Tidak ada perubahan kode di api_server.py itu sendiri.",
       "audit_level": "SERIUS",
       "bug_fixed_tambahan_dari_audit_file_lain": [
         "Dari audit telegram_bot.py: whitelist /api/config/update kekurangan rsi_min/rsi_max/lookback_candles (key config global valid yang dipakai main.py dan sudah divalidasi telegram_bot.py, tapi disaring habis di sini). Ditambahkan.",
         "BUG HUNT PUTARAN 3 dari risk.py (fix detail di entry risk.py): /api/metrics endpoint mengirim total_ret_pct (return HANYA dari rentang snapshot yang di-load, ~5.2 hari) sebagai annualized_return_pct ke compute_calmar_ratio() -- calmar_ratio yang ditampilkan ke user SANGAT understated. Fix: hitung CAGR dari rentang hari sungguhan (timestamp snapshot pertama vs terakhir) sebelum dikirim."
-      ]
+      ],
+      "catatan_investigasi": [
+        "[Tier 6, 2026-07-09] File terbesar di proyek (2299 baris, 70 fungsi) dibaca tuntas -- sudah sangat terdokumentasi dari sesi 'v9 TIER-A SECURITY AUDIT' sebelumnya (rate limiter dead-code diaktifkan, 11 endpoint tanpa auth diproteksi, landing page drift diperbaiki). Diverifikasi ULANG end-to-end via FastAPI TestClient (bukan cuma percaya changelog lama): (1) API key wajib -- 401 tanpa key/key salah, 200 dgn key benar, endpoint publik (/api/status, /health) tetap 200 tanpa key; (2) rate limiter benar2 trigger 429 setelah >120 request/menit dari IP sama (bukan cuma terpasang tapi diam); (3) Calmar ratio annualization fix (dulu return mentah window snapshot ~5 hari langsung dipakai sbg 'annualized return', understated drastis) diverifikasi numerik -- skenario realistis menghasilkan selisih ~989x antara pola lama vs baru, mengonfirmasi signifikansi fix. Semua klaim security v9 TERKONFIRMASI VALID lewat pengujian nyata."
+      ],
+      "test": "Eksperimen universe_add/remove TypeError proof + fix verification end-to-end. FastAPI TestClient: API key enforcement (401/200) + rate limiter (429 trigger nyata). Calmar annualization numerik verification. Regression simulate_test.py: 107 PASSED, 0 FAILED."
     },
     "core/models.py": {
       "status": "DONE_METODE_KETAT",

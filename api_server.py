@@ -2151,8 +2151,18 @@ def create_app(bot_getter) -> FastAPI:
         b   = bot()
         sym = req.symbol.upper().strip()
         try:
+            # [BUG-FIX -- ditemukan lewat eksperimen] Sebelumnya memanggil
+            # upsert_universe_override(..., is_active=True, ...) -- tapi
+            # signature asli di database.py TIDAK PUNYA parameter is_active
+            # sama sekali (fungsi itu SELALU set is_active=True tanpa
+            # syarat, baik utk row baru maupun existing). Setiap panggilan
+            # endpoint ini SELALU TypeError "unexpected keyword argument
+            # is_active" -> HTTP 500, tertutup oleh except Exception generik.
+            # Dibuktikan via eksperimen (pola pemanggilan persis -> TypeError
+            # nyata). Fix: hapus kwarg is_active (fungsi memang selalu
+            # set True, cocok dgn semantik "add").
             await b.db.upsert_universe_override(
-                symbol=sym, source="api", is_active=True, notes=req.notes
+                symbol=sym, source="api", notes=req.notes or ""
             )
             log.info("Universe override ADD: %s via API", sym)
             return {"status": "added", "symbol": sym, "timestamp": _iso(_utcnow())}
@@ -2168,9 +2178,18 @@ def create_app(bot_getter) -> FastAPI:
         b   = bot()
         sym = req.symbol.upper().strip()
         try:
-            await b.db.upsert_universe_override(
-                symbol=sym, source="api", is_active=False, notes="Removed via API"
-            )
+            # [BUG-FIX -- ditemukan lewat eksperimen] Sebelumnya memanggil
+            # upsert_universe_override(..., is_active=False, ...) -- DUA
+            # masalah sekaligus: (1) parameter is_active tidak ada di
+            # signature -> TypeError, SELALU crash (dibuktikan eksperimen);
+            # (2) SEANDAINYA parameter itu ada pun, upsert_universe_override
+            # SELALU set is_active=True tanpa syarat (baik row baru maupun
+            # existing) -- tidak akan pernah benar2 menonaktifkan symbol
+            # walau tidak crash. Fungsi yang benar utk deaktivasi adalah
+            # deactivate_universe_override() (sudah ada di database.py,
+            # dipakai coin_swap.py & exchange.py auto_scan_and_populate utk
+            # tujuan yang sama). Fix: pakai fungsi yang benar.
+            await b.db.deactivate_universe_override(symbol=sym)
             log.info("Universe override REMOVE: %s via API", sym)
             return {"status": "removed", "symbol": sym, "timestamp": _iso(_utcnow())}
         except Exception as e:
