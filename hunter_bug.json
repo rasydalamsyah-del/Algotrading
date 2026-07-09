@@ -249,12 +249,12 @@
               "catatan": "1 bug: score_oscillators composite tidak exclude+renormalize sub-indikator None (pola sama dgn trend.py cross_ok). Sudah difix + dites 55 skenario, 15/15 fungsi tercakup langsung."
             },
             "putaran_3_validasi_matematika": {
-              "status": "PENDING",
-              "catatan": null
+              "status": "CROSS_CHECKED_CLEAN",
+              "catatan": "[Putaran ulang lebih dalam] CCI, Williams %R, ROC exact match vs referensi independen ditulis dari nol. Scan kontinuitas score_roc di SEMUA 5 boundary (klaim fix v3 anchor -2.0 vs -5.0) -- max jump 0.001, kontinu, fix terkonfirmasi masih valid. score_cci dan score_williams_r JUGA di-scan kontinuitas boundary (bukan cuma yg diklaim sudah difix) -- semua 0 jump/kontinu sempurna, tidak ada diskontinuitas tersembunyi lain."
             },
             "putaran_4_kondisi_khusus": {
-              "status": "PENDING",
-              "catatan": null
+              "status": "CROSS_CHECKED_CLEAN",
+              "catatan": "score_oscillators exclusion/renormalize logic (klaim fix lama) diuji dgn data 15-bar (CCI invalid butuh>=20, Williams/ROC valid) -- composite dihitung ulang manual dari 2 komponen valid saja, match persis. Tidak ada state global. Caller observer.py diverifikasi signature cocok."
             },
             "putaran_5_regresi_akhir": {
               "status": "PENDING",
