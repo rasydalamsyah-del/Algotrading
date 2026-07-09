@@ -111,6 +111,10 @@
             "putaran_5_regresi_akhir": {
               "status": "PENDING",
               "catatan": null
+            },
+            "putaran_re_verifikasi_2026_07_09": {
+              "status": "CROSS_CHECKED_CLEAN",
+              "catatan": "Re-verifikasi penuh: 889 baris dibaca ulang, 5 eksperimen independen (statistik + 3 bug kritis SL floor/sell sizing/LOW_BALANCE cap) semua PASS. asyncio.Lock usage & _persist_halt dikonfirmasi aman via cek caller. Tidak ada bug baru."
             }
           },
           "putaran_ulang_metode_ketat": {

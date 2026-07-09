@@ -668,7 +668,7 @@
       "test": "6 eksperimen independen (fail-closed slippage, filled=0, anti-phantom-position, breakout falsy, metadata type-safety, iceberg chunk sizing) -- semua PASS. Regression simulate_test.py: 107 PASSED, 0 FAILED (tidak ada kode diubah)."
     },
     "risk.py": {
-      "status": "DONE",
+      "status": "DONE_METODE_KETAT",
       "bug_fixed": [
         "evaluate_order_sell_self_exchange_attributeerror",
         "main_py_close_position_pnl_pakai_pos_amount_bukan_trade_filled",
@@ -729,7 +729,11 @@
           "restore_halt_state_saat_startup": "Diverifikasi ke main.py baris 325-348: hanya MAX_DRAWDOWN/PANIC_BUTTON yang di-restore saat startup (butuh review manual), DAILY_LOSS/LOW_BALANCE dibersihkan otomatis saat restart. Desain ini masuk akal dan disengaja, bukan bug.",
           "kesimpulan": "SEKARANG barulah SEMUA 37 fungsi risk.py benar-benar tercakup: 33 fungsi dibaca+diuji langsung (termasuk 2 bug kritis ditemukan & difix di iterasi sebelumnya), 4 sisanya (is_approved/__str__/property sederhana is_halted dkk) trivial tidak butuh eksperimen terpisah."
         }
-      }
+      },
+      "catatan_investigasi": [
+        "[Re-verifikasi Tier 1, 2026-07-09] File dibaca ulang tuntas 889 baris (38 fungsi). Verifikasi matematika independen: Sharpe/Sortino/Calmar/MaxDrawdown/ProfitFactor -- semua exact match vs referensi ditulis dari nol. 3 bug kritis yg diklaim sudah difix dikonfirmasi via eksperimen: (1) SL<=0 utk BUY (skenario persis dari comment: price=1.0,atr=0.5,mult=2.0->sl=0.0) -- sekarang di-floor dgn benar, tidak ada trade tanpa SL; (2) sizing sell/close TIDAK lagi dibatasi max_position_size_pct (posisi $500 ditutup penuh, bukan ke-cap $200); (3) LOW_BALANCE threshold di-cap 50% initial_equity (skenario modal $33 risk_per_trade=35% -> threshold 16.5, bukan melebihi modal). _evaluate_lock (asyncio.Lock) dikonfirmasi tepat -- evaluate_order selalu dipanggil via await langsung (main.py x2, commander.py), TIDAK pernah via run_in_executor, jadi asyncio.Lock (bukan threading.Lock) sudah benar. _persist_halt (asyncio.get_running_loop()) dikonfirmasi aman -- satu-satunya caller update_portfolio_state selalu dipanggil dari dalam async def _refresh_portfolio yg sedang berjalan (loop pasti aktif). Tidak ada state global module-level -- murni instance-based."
+      ],
+      "test": "5 eksperimen independen (Sharpe/Sortino/Calmar/MaxDD/PF exact match, SL floor guard, sell sizing uncapped, LOW_BALANCE cap) -- semua PASS. Regression simulate_test.py: 107 PASSED, 0 FAILED (tidak ada kode diubah)."
     },
     "strategy.py": {
       "status": "DONE",
