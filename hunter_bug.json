@@ -489,16 +489,16 @@
           "fokus_cross_check": "Klasifikasi regime (trending/ranging/volatile). Dipakai is_regime_transition() yang baru saja dipakai fix Jalur Entry 2 di main.py — cek konsistensi definisi transisi regime antara sini dan caller-nya.",
           "putaran": {
             "putaran_2_cross_check_dua_arah": {
-              "status": "PENDING",
-              "catatan": null
+              "status": "CROSS_CHECKED_FIXED",
+              "catatan": "1 bug race condition ditemukan & difix (threading.RLock utk _REGIME_BUFFERS, dipakai dari Gate3 worker thread & position_sync main thread tanpa dedup lintas jalur sebelumnya). Semua caller (position_sync.py, strategy.py, simulate_test.py) diverifikasi manual. classify_from_observation terkonfirmasi dead code. db_manager param terkonfirmasi harmless phantom param. Detail lengkap di AUDIT_STATE.json."
             },
             "putaran_3_validasi_matematika": {
-              "status": "PENDING",
-              "catatan": null
+              "status": "CROSS_CHECKED_CLEAN",
+              "catatan": "_calc_confidence, _classify_raw, _count_bullish/bearish_ema_pairs, _is_volatile, _is_ranging dicek terhadap constants.py -- logika threshold ADX/BB-width/ATR-percentile konsisten, tidak ada isu skala/unit. MarketRegime(str, Enum) dikonfirmasi aman utk perbandingan enum==string di strategy.py (prev_regime != \"undefined\")."
             },
             "putaran_4_kondisi_khusus": {
-              "status": "PENDING",
-              "catatan": null
+              "status": "CROSS_CHECKED_FIXED",
+              "catatan": "Race condition _REGIME_BUFFERS (lihat putaran 2) adalah temuan kondisi khusus concurrency, dicatat & difix di sini juga. restore_regimes_from_db menangani MarketRegime(record.regime) invalid dgn except Exception per-symbol (tidak menghentikan restore symbol lain). is_tradeable_regime menangani confidence<min & allowed_regimes dgn benar (fix lama allows_long terverifikasi masih ada di kode)."
             },
             "putaran_5_regresi_akhir": {
               "status": "PENDING",

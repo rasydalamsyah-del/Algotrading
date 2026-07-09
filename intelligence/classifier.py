@@ -7,6 +7,7 @@ AlgoTrader Pro v7.0 — "The Intelligence Pipeline"
 from __future__ import annotations
 
 import logging
+import threading
 from collections import deque
 from dataclasses import dataclass, field
 from typing import Deque, Dict, Optional, Tuple
@@ -70,11 +71,29 @@ class _RegimeBuffer:
         return self.current_regime, self.current_confidence
 
 _REGIME_BUFFERS: Dict[str, _RegimeBuffer] = {}
+# [BUG-FIX] _REGIME_BUFFERS diakses dari 2 jalur berbeda yg bisa jalan
+# BERSAMAAN: (1) Gate3 worker via run_in_executor (worker thread terpisah,
+# lihat strategy.py get_scored_signal), dan (2) run_position_sync_loop
+# (main thread langsung, main.py, interval 5 menit) -- kedua jalur bisa
+# mengenai SYMBOL YANG SAMA (symbol tanpa posisi terbuka di DB relevan utk
+# Gate3 scan, TAPI juga bisa punya balance non-dust di Binance yg terdeteksi
+# position_sync). Tidak ada dedup lintas jalur (beda dgn _pipeline_active yg
+# cuma melindungi dalam 1 jalur Gate3). _RegimeBuffer.propose() melakukan
+# beberapa statement read-modify-write berurutan (history.append, lalu
+# pending_count/current_regime) yg TIDAK atomik sbg satu kesatuan -- window
+# race nyata ada di level bytecode antar 2 OS thread (dibuktikan lewat stress
+# test paralel, meski tidak selalu menghasilkan korupsi kelihatan tiap run).
+# Fix: lock ringan (bukan asyncio.Lock -- ini perlu melindungi lintas THREAD,
+# bukan cuma lintas coroutine dalam 1 thread) membungkus get-buffer+propose
+# sbg satu critical section atomik. Critical section murni CPU, tanpa I/O,
+# jadi aman & cepat (tidak memblokir event loop lama).
+_REGIME_BUFFERS_LOCK = threading.RLock()
 
 def _get_buffer(symbol: str) -> _RegimeBuffer:
-    if symbol not in _REGIME_BUFFERS:
-        _REGIME_BUFFERS[symbol] = _RegimeBuffer()
-    return _REGIME_BUFFERS[symbol]
+    with _REGIME_BUFFERS_LOCK:
+        if symbol not in _REGIME_BUFFERS:
+            _REGIME_BUFFERS[symbol] = _RegimeBuffer()
+        return _REGIME_BUFFERS[symbol]
 
 def _count_bullish_ema_pairs(iset: IndicatorSet) -> int:
     pairs = [
@@ -232,10 +251,11 @@ def classify_regime(
 ) -> Tuple[MarketRegime, float]:
     raw_regime, raw_confidence = _classify_raw(iset)
 
-    buf = _get_buffer(symbol)
-    effective_regime, effective_confidence = buf.propose(
-        raw_regime, raw_confidence, hysteresis_bars
-    )
+    with _REGIME_BUFFERS_LOCK:
+        buf = _get_buffer(symbol)
+        effective_regime, effective_confidence = buf.propose(
+            raw_regime, raw_confidence, hysteresis_bars
+        )
 
     log.debug(
         "%s: raw=%s(%.2f) → effective=%s(%.2f) | pending=%s(%d/%d)",
@@ -300,32 +320,36 @@ def is_tradeable_regime(
     return True, f"Regime {regime.value} OK (confidence={confidence:.2f})"
 
 def get_regime_history(symbol: str, last_n: int = 10) -> list:
-    buf = _get_buffer(symbol)
-    return list(buf.history)[-last_n:]
+    with _REGIME_BUFFERS_LOCK:
+        buf = _get_buffer(symbol)
+        return list(buf.history)[-last_n:]
 
 def get_current_regime(symbol: str) -> Tuple[MarketRegime, float]:
-    buf = _REGIME_BUFFERS.get(symbol)
-    if buf is None:
-        return MarketRegime.UNDEFINED, 0.0
-    return buf.current_regime, buf.current_confidence
+    with _REGIME_BUFFERS_LOCK:
+        buf = _REGIME_BUFFERS.get(symbol)
+        if buf is None:
+            return MarketRegime.UNDEFINED, 0.0
+        return buf.current_regime, buf.current_confidence
 
 def reset_regime(symbol: str) -> None:
-    if symbol in _REGIME_BUFFERS:
-        del _REGIME_BUFFERS[symbol]
-        log.info("Regime buffer reset: %s", symbol)
+    with _REGIME_BUFFERS_LOCK:
+        if symbol in _REGIME_BUFFERS:
+            del _REGIME_BUFFERS[symbol]
+            log.info("Regime buffer reset: %s", symbol)
 
 def summarize_all_regimes() -> str:
-    if not _REGIME_BUFFERS:
-        return "⚪ Belum ada data regime. Jalankan strategy loop terlebih dahulu."
+    with _REGIME_BUFFERS_LOCK:
+        if not _REGIME_BUFFERS:
+            return "⚪ Belum ada data regime. Jalankan strategy loop terlebih dahulu."
 
-    lines = ["🌐 Market Regimes:"]
-    for symbol, buf in sorted(_REGIME_BUFFERS.items()):
-        emoji = buf.current_regime.emoji
-        name  = buf.current_regime.display_name
-        conf  = buf.current_confidence
-        lines.append(f"  {emoji} {symbol:<12} {name:<20} (conf={conf:.0%})")
+        lines = ["🌐 Market Regimes:"]
+        for symbol, buf in sorted(_REGIME_BUFFERS.items()):
+            emoji = buf.current_regime.emoji
+            name  = buf.current_regime.display_name
+            conf  = buf.current_confidence
+            lines.append(f"  {emoji} {symbol:<12} {name:<20} (conf={conf:.0%})")
 
-    return "\n".join(lines)
+        return "\n".join(lines)
 
 
 class MarketClassifier:
@@ -339,11 +363,12 @@ async def restore_regimes_from_db(symbols: list, db) -> None:
             record = await db.get_latest_regime(symbol)
             if record is None:
                 continue
-            buf = _get_buffer(symbol)
-            buf.current_regime     = MarketRegime(record.regime)
-            buf.current_confidence = record.regime_confidence
-            buf.pending_regime     = MarketRegime.UNDEFINED
-            buf.pending_count      = 0
+            with _REGIME_BUFFERS_LOCK:
+                buf = _get_buffer(symbol)
+                buf.current_regime     = MarketRegime(record.regime)
+                buf.current_confidence = record.regime_confidence
+                buf.pending_regime     = MarketRegime.UNDEFINED
+                buf.pending_count      = 0
             log.info(
                 "Regime restored [%s]: %s (conf=%.2f) dari %s",
                 symbol, record.regime, record.regime_confidence, record.timestamp,
@@ -357,7 +382,8 @@ def is_regime_transition(symbol: str) -> tuple:
     """Cek apakah regime symbol sedang dalam transisi (pending != current).
     Return: (is_transitioning: bool, from_regime: str, to_regime: str)
     """
-    buf = _get_buffer(symbol)
-    if buf.pending_regime == MarketRegime.UNDEFINED:
-        return False, buf.current_regime.value, buf.current_regime.value
-    return True, buf.current_regime.value, buf.pending_regime.value
+    with _REGIME_BUFFERS_LOCK:
+        buf = _get_buffer(symbol)
+        if buf.pending_regime == MarketRegime.UNDEFINED:
+            return False, buf.current_regime.value, buf.current_regime.value
+        return True, buf.current_regime.value, buf.pending_regime.value
