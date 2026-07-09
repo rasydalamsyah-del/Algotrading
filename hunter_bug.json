@@ -706,20 +706,24 @@
           "fokus_cross_check": "get_dynamic_threshold() dipakai scorer.py & validator.py — cek kedua caller memakai return value dengan asumsi skala/tipe yang sama persis.",
           "putaran": {
             "putaran_2_cross_check_dua_arah": {
-              "status": "PENDING",
-              "catatan": null
+              "status": "CROSS_CHECKED_CLEAN",
+              "catatan": "get_profile_thresholds/get_dynamic_threshold/get_transition_action dipakai luas di scorer.py/validator.py/commander.py/strategy.py -- signature & return value konsisten, sudah diverifikasi tersebar sepanjang audit hari ini."
             },
             "putaran_3_validasi_matematika": {
-              "status": "PENDING",
-              "catatan": null
+              "status": "CROSS_CHECKED_CLEAN",
+              "catatan": "Automated consistency check independen (bukan cuma baca) utk semua tabel x semua profile -- CLEAN kecuali 2 minor rsi_gc_min (didokumentasikan, bukan bug)."
             },
             "putaran_4_kondisi_khusus": {
-              "status": "PENDING",
-              "catatan": null
+              "status": "CROSS_CHECKED_CLEAN",
+              "catatan": "Tidak ada state mutable selain _THRESHOLD_REGISTRY yang di-populate SEKALI saat import (immutable setelahnya) -- tidak ada risiko race condition."
             },
             "putaran_5_regresi_akhir": {
               "status": "PENDING",
               "catatan": null
+            },
+            "putaran_1_baca_ulang_full": {
+              "status": "DONE",
+              "catatan": "929 baris dibaca tuntas."
             }
           }
         },
