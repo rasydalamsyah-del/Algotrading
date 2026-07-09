@@ -155,6 +155,15 @@
             "status_fix": "SUDAH DIFIX + DITES (14 skenario cross-check independen + regresi 38 test lama, semua PASS)"
           }
         ]
+      },
+      "putaran_ulang_metode_ketat_2026_07_09_mfi": {
+        "konteks": "Verifikasi matematika independen MFI (_calc_mfi) -- lanjutan dari RSI/MACD/CCI/Williams%R/BB/Keltner (semua sudah clean/fixed).",
+        "temuan": "Bug asimetris ditemukan: sum_neg.replace(0.0, NaN) menyamakan DUA kondisi berbeda -- (a) sum_pos>0,sum_neg=0 (semua money flow POSITIF, seharusnya MFI=100 extreme overbought) DAN (b) sum_pos=0,sum_neg=0 (benar2 flat, MFI=50 netral BENAR) -- keduanya jadi NaN->fillna(50). Kasus (a) salah dilaporkan sbg netral padahal seharusnya sangat overbought. ASIMETRIS dgn kasus sebaliknya (sum_pos=0,sum_neg>0) yg sudah benar memberi MFI=0 (krn 0/sum_neg=0.0 valid, tidak kena replace).",
+        "bukti": "Eksperimen: 30 bar harga naik terus (sum_neg=0) -> MFI lama=50.0 (SALAH), seharusnya=100.0.",
+        "fix": "Pola sama dgn fix RSI (avg_gain>0 & avg_loss==0 -> 100): mfi.where(sum_neg>0, np.where(sum_pos>0, 100.0, 50.0)) -- MFI=100 hanya kalau sum_pos>0 DAN sum_neg==0, kalau keduanya 0 (flat total) tetap 50.",
+        "dampak_skor": "Signifikan -- _score_mfi(100)=22.0 vs _score_mfi(50)=62.0, selisih 40 poin. Bug lama membuat kondisi extreme overbought (semua momentum positif) terlihat seperti kondisi netral biasa di skor bot.",
+        "verifikasi": "7/7 eksperimen PASS: fix utama benar (MFI=100 sekarang), regresi turun-terus & flat-total masih benar, skenario normal (mixed) cocok persis dgn implementasi independen textbook, full pipeline (calculate_money_flow, score_strength) tidak crash, dampak skor signifikan terbukti.",
+        "status": "DONE_BUG_FIXED_VERIFIED"
       }
     },
     "indicators/structure.py": {

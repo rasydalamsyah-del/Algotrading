@@ -445,8 +445,32 @@ def _calc_mfi(df: pd.DataFrame, period: int) -> pd.Series:
     negative_mf  = raw_mf.where(tp_change < 0, 0.0).abs()
     sum_pos  = positive_mf.rolling(window=period, min_periods=period).sum()
     sum_neg  = negative_mf.rolling(window=period, min_periods=period).sum()
-    money_ratio = (sum_pos / sum_neg.replace(0.0, np.nan)).replace([np.inf, -np.inf], np.nan)
-    mfi         = 100.0 - (100.0 / (1.0 + money_ratio))
+    # [BUG-FIX -- ditemukan lewat verifikasi matematika independen, pola
+    # sama seperti bug RSI lama] Sebelumnya:
+    #   money_ratio = (sum_pos / sum_neg.replace(0.0, np.nan)).replace([inf,-inf], NaN)
+    #   mfi = 100 - 100/(1+money_ratio)  lalu fillna(SCORE_NEUTRAL=50)
+    # Ini MENYAMAKAN dua kondisi yang secara matematis BERBEDA saat
+    # sum_neg==0:
+    #   (a) sum_pos>0, sum_neg==0 -> SEMUA money flow POSITIF (tidak ada
+    #       tekanan jual sama sekali dlm window) -> money_ratio -> takhingga
+    #       -> MFI seharusnya 100 (extreme overbought) TAPI kode lama
+    #       memberi 50 (netral) krn sum_neg.replace(0,NaN) membuat rasio
+    #       NaN, lalu fillna(50) di akhir menyamarkan kasus ini.
+    #   (b) sum_pos==0, sum_neg==0 -> BENAR-BENAR flat (tidak ada
+    #       perubahan typical price sama sekali dlm window) -> MFI=50
+    #       (netral) BENAR.
+    # Dibuktikan lewat eksperimen: 30 bar harga naik terus (sum_neg=0) ->
+    # MFI lama=50.0, seharusnya=100.0. Asimetris dgn kasus turun terus
+    # (sum_pos=0) yang SUDAH benar memberi MFI=0.0 (krn 0/sum_neg=0.0
+    # valid, tidak kena replace). Fix: MFI=100 HANYA kalau sum_pos>0 DAN
+    # sum_neg==0; kalau keduanya 0 (flat total), MFI=50 (netral) --
+    # persis pola fix RSI (avg_gain>0 & avg_loss==0 -> 100, keduanya 0 ->
+    # 50).
+    sum_neg_safe = sum_neg.replace(0.0, np.nan)
+    money_ratio = (sum_pos / sum_neg_safe).replace([np.inf, -np.inf], np.nan)
+    mfi = 100.0 - (100.0 / (1.0 + money_ratio))
+    mfi = mfi.where(sum_neg > 0, np.where(sum_pos > 0, 100.0, 50.0))
+    mfi = pd.Series(mfi, index=close.index)
 
     return mfi.fillna(SCORE_NEUTRAL)
 

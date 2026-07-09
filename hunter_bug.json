@@ -306,6 +306,13 @@
               "status": "PENDING",
               "catatan": null
             }
+          },
+          "putaran_ulang_metode_ketat": {
+            "2026_07_09_mfi_asymmetric_zero_fix": {
+              "apa_yang_dicek": "Verifikasi matematika independen MFI, pola sama seperti yg menemukan bug RSI/ADX.",
+              "hasil": "Bug asimetris ditemukan & difix: sum_neg=0 (semua positif) salah dilaporkan MFI=50 (netral), seharusnya 100 (overbought). Dampak skor signifikan (40 poin). 7/7 eksperimen PASS.",
+              "status": "FIXED"
+            }
           }
         },
         {
