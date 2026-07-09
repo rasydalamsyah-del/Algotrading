@@ -729,20 +729,24 @@
           "fokus_cross_check": "get_coin_profile()/apply_parameter_override()/revert_parameter_override() — dipakai main.py, api_server.py, meta_learner.py, simulate_test.py. Cek apply/revert benar-benar симetris (apply lalu revert menghasilkan state identik dengan sebelum apply).",
           "putaran": {
             "putaran_2_cross_check_dua_arah": {
-              "status": "PENDING",
-              "catatan": null
+              "status": "CROSS_CHECKED_FIXED",
+              "catatan": "3 bug ditemukan & difix: load_all_overrides_from_db tidak pernah dipanggil dari main.py (fix cross-file, wiring startup); clear_profile_override old_value dibaca setelah del (order-of-ops); apply_parameter_override coroutine tidak di-close (minor, resource warning). Semua caller (main.py, strategy.py, intelligence/commander.py) diverifikasi manual."
             },
             "putaran_3_validasi_matematika": {
               "status": "SKIP_TIDAK_RELEVAN",
-              "catatan": "File ini tidak mengandung kalkulasi/formula matematis signifikan (murni I/O, orkestrasi, atau notifikasi)."
+              "catatan": "File ini murni logic pemilihan/override profil, bukan kalkulasi matematis dari indikator."
             },
             "putaran_4_kondisi_khusus": {
-              "status": "PENDING",
-              "catatan": null
+              "status": "CROSS_CHECKED_CLEAN",
+              "catatan": "Concurrency dicek: get_coin_profile/auto_classify_profile tidak pernah via run_in_executor, tidak ada await internal -> aman dari race condition. revert_parameter_override pakai .pop() yang atomik (capture + remove sekaligus) -- benar, tidak ada bug order-of-ops di situ."
             },
             "putaran_5_regresi_akhir": {
               "status": "PENDING",
               "catatan": null
+            },
+            "putaran_1_baca_ulang_full": {
+              "status": "DONE",
+              "catatan": "769 baris dibaca tuntas."
             }
           }
         }

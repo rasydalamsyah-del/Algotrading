@@ -257,6 +257,25 @@ class TradingBot:
         await self.db.init_db()
         log.info("Database ready: %s", self.config["database_url"])
 
+        # [BUG-FIX] load_all_overrides_from_db() sudah pernah difix (async def
+        # yang benar, sebelumnya coroutine tidak pernah di-await -> override
+        # tidak pernah ter-load) TAPI tidak pernah benar-benar dipanggil dari
+        # manapun -- persis seperti dicatat eksplisit di comment
+        # profiles/registry.py ("CATATAN UNTUK AUDIT main.py --
+        # SENTUHAN_PERLU_REAUDIT"). Akibatnya parameter override dari sesi
+        # sebelumnya (disimpan operator via set_parameter_override, dsb) tidak
+        # pernah aktif lagi setelah bot di-restart -- cuma ter-load lazy
+        # per-symbol lewat get_coin_profile(..., db_manager=...) yang PUN
+        # tidak pernah dipanggil dengan db_manager di seluruh codebase (jadi
+        # jalur lazy-load itu sendiri juga dead). Fix: panggil sekali di
+        # startup, sebelum strategy/profile apapun dipakai.
+        try:
+            from profiles.registry import load_all_overrides_from_db
+            _n_overrides = await load_all_overrides_from_db(self.db)
+            log.info("Parameter overrides dari DB di-restore: %d symbol.", _n_overrides)
+        except Exception as _ovr_err:
+            log.warning("Gagal load parameter overrides dari DB (non-fatal): %s", _ovr_err)
+
         _exid       = self.config["exchange_id"]
         _passphrase = self.config.get("api_passphrase", "")
         _exchanges_need_passphrase = {"okx", "kucoin", "bitget"}

@@ -450,6 +450,15 @@ def clear_profile_override(symbol: str, db_manager=None) -> bool:
     existed = base in _MANUAL_PROFILE_OVERRIDES
 
     if existed:
+        # [BUG-FIX] Sebelumnya old_value dibaca dari _MANUAL_PROFILE_OVERRIDES
+        # SETELAH `del _MANUAL_PROFILE_OVERRIDES[base]` -- karena key sudah
+        # dihapus, .get(base, "override") SELALU jatuh ke default "override",
+        # tidak pernah menampilkan profile asli yang di-clear. Dibuktikan via
+        # eksperimen: old_value yang tersimpan ke DB selalu literal "override"
+        # bukan "trend_follow"/dst. Dampak: audit-trail parameter_history di
+        # DB jadi tidak akurat (bukan bug yang mempengaruhi trading, cuma
+        # riwayat log). Fix: simpan nilai lama SEBELUM del.
+        old_profile_value = _MANUAL_PROFILE_OVERRIDES[base]
         del _MANUAL_PROFILE_OVERRIDES[base]
         _invalidate_cache(base)
         log.info("Profile override cleared: %s", base)
@@ -462,7 +471,7 @@ def clear_profile_override(symbol: str, db_manager=None) -> bool:
                     symbol=base,
                     profile=_COIN_PROFILE_MAP.get(base, "unknown"),
                     parameter_name="_profile_override",
-                    old_value=_MANUAL_PROFILE_OVERRIDES.get(base, "override"),
+                    old_value=old_profile_value,
                     new_value="(cleared)",
                     reason="Profile override cleared",
                     approved_by="manual",
@@ -521,7 +530,19 @@ def apply_parameter_override(
                     asyncio.get_running_loop().create_task(res)
                 except RuntimeError:
                     # No running loop; best-effort fire-and-forget.
-                    pass
+                    # [BUG-FIX minor] Sebelumnya coroutine `res` dibiarkan
+                    # begitu saja di sini kalau tidak ada running loop --
+                    # tidak di-close() spt _fire_and_forget_db (helper serupa
+                    # di file yg sama) melakukannya, sehingga Python akan
+                    # memunculkan RuntimeWarning "coroutine was never awaited"
+                    # saat garbage collection. Bukan bug fungsional (data
+                    # override tetap tersimpan ke _ACTIVE_OVERRIDES in-memory),
+                    # cuma noise di log/warning. Konsistenkan dgn pola
+                    # _fire_and_forget_db.
+                    try:
+                        res.close()
+                    except Exception:
+                        pass
         except Exception as exc:
             log.warning("Gagal simpan parameter override ke DB: %s", exc)
 
