@@ -494,7 +494,7 @@
       "catatan": "Bug 1: SIGNAL_CONFIRMATION_MATRIX didefinisikan 2x (baris 443 dan 495), isi identik — definisi pertama selalu ditimpa definisi kedua, rawan bug kalau suatu saat dua versi tidak sengaja dibuat berbeda. Definisi pertama dihapus. Bug 2: PRODUCTION_INDICATOR_COLS tidak dipakai di manapun (dead code), dan komentar 'Referensikan via konstanta ini' tidak akurat. Juga tidak lengkap (DMP_14, DMN_14, VWMA_20, ICH_* tidak ada). Komentar diperbaiki untuk refleksi kenyataan. Tambahan: validasi konsistensi SIGNAL_CONFIRMATION_MATRIX vs REGIME_SCORE_MODIFIERS ditambahkan ke _validate_constants() — harus punya key yang sama persis. Cross-check: semua regime name konsisten di seluruh codebase. Sebelumnya TIDAK_JELAS_LOW_PRIORITY, sekarang diaudit serius."
     },
     "database.py": {
-      "status": "DONE",
+      "status": "DONE_METODE_KETAT",
       "bug_fixed": [
         "get_trades_with_regime_action_taken_filter_terlalu_sempit",
         "silent_except_get_indicator_effectiveness",
@@ -505,7 +505,12 @@
       "audit_level": "SERIUS",
       "bug_fixed_tambahan_dari_audit_file_lain": [
         "[TAMBAHAN, baru dicommit saat audit learning/meta_learner.py] get_trade_stats() ditambah param since:Optional[datetime] untuk filter trade >= waktu tertentu — dibutuhkan _evaluate_outcome() di meta_learner.py supaya evaluasi outcome parameter change tidak tercampur trade dari SEBELUM parameter diubah. Perubahan ini sempat ada di working tree tanpa ter-commit dari sesi sebelumnya, sekarang dicommit resmi."
-      ]
+      ],
+      "catatan_investigasi": [
+        "[Tier 6, 2026-07-09] File CLEAN -- tidak ada bug baru, tidak ada kode diubah. 1972 baris (66 method, file terbesar kedua di proyek) dibaca tuntas -- sudah sangat terdokumentasi dgn baik dari sesi-sesi lalu (banyak [BUG-FIX] comment detail: action_taken filter case-sensitivity, get_signal_scores field hilang, gross_profit/loss serialization, get_pending_outcomes threshold, get_db_health silent except). Verifikasi eksperimen: close_position cost-basis & realized_pnl_pct math benar (termasuk entry_price=0 edge case tidak crash div-by-zero); get_trade_stats profit_factor/win_count/loss_count exact match referensi; save_trade IntegrityError (duplicate order_id) ditangani benar (idempotent, ambil existing bukan crash/duplicate row); link_latest_signal_to_trade end-to-end benar termasuk double-link prevention (2 kesalahan waktu di test saya sendiri dikoreksi sebelum simpulkan bug -- signal_score.timestamp diisi SAAT insert oleh DB default, bukan saat variabel python di-capture, jadi trade_timestamp harus benar2 SETELAH signal insert selesai, sesuai urutan nyata scoring->trade).",
+        "Concurrency: upsert_position pakai .with_for_update() (row lock DB) tapi close_position tidak -- awalnya dicurigai inkonsistensi race-condition, diselidiki via cek caller: 2 call site di main.py -- satu di _reconcile_positions_on_startup (HANYA jalan sekali saat startup, SEBELUM loop trading manapun mulai, dikonfirmasi via single call site), satu di SL/TP monitor flow (diproteksi self._closing_symbols dedup). Keduanya temporal/logically terpisah, TIDAK ada race nyata -- CLEAN, bukan bug."
+      ],
+      "test": "5 set eksperimen (close_position cost-basis+edge case, get_trade_stats profit_factor, save_trade duplicate handling, link_latest_signal_to_trade end-to-end+double-link prevention) -- semua PASS setelah 2 kesalahan waktu di test saya sendiri dikoreksi. Regression simulate_test.py: 107 PASSED, 0 FAILED (tidak ada kode diubah)."
     },
     "exchange.py": {
       "status": "DONE_METODE_KETAT",

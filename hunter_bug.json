@@ -914,20 +914,24 @@
           "fokus_cross_check": "Cek SEMUA kolom yang ditambahkan di sesi-sesi audit sebelumnya (sentiment_score, param since di get_trade_stats) benar2 dipakai konsisten di migration/schema, tidak ada mismatch tipe data antara model dataclass dan kolom SQL.",
           "putaran": {
             "putaran_2_cross_check_dua_arah": {
-              "status": "PENDING",
-              "catatan": null
+              "status": "CROSS_CHECKED_CLEAN",
+              "catatan": "close_position caller (main.py x2) diverifikasi TIDAK ada race nyata -- satu startup-only, satu diproteksi dedup. upsert_position with_for_update() dikonfirmasi tepat scope-nya."
             },
             "putaran_3_validasi_matematika": {
-              "status": "SKIP_TIDAK_RELEVAN",
-              "catatan": "File ini tidak mengandung kalkulasi/formula matematis signifikan (murni I/O, orkestrasi, atau notifikasi)."
+              "status": "CROSS_CHECKED_CLEAN",
+              "catatan": "close_position cost-basis, get_trade_stats profit_factor semua exact match referensi + edge case (entry_price=0)."
             },
             "putaran_4_kondisi_khusus": {
-              "status": "PENDING",
-              "catatan": null
+              "status": "CROSS_CHECKED_CLEAN",
+              "catatan": "save_trade duplicate order_id idempotent. link_latest_signal_to_trade double-link prevention benar. Tidak ada state global module-level."
             },
             "putaran_5_regresi_akhir": {
-              "status": "PENDING",
-              "catatan": null
+              "status": "DONE",
+              "catatan": "107 PASSED 0 FAILED."
+            },
+            "putaran_1_baca_ulang_full": {
+              "status": "DONE",
+              "catatan": "1972 baris dibaca tuntas (file terbesar kedua proyek, 66 method)."
             }
           }
         },
