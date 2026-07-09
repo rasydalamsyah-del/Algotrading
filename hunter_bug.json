@@ -374,20 +374,24 @@
           "fokus_cross_check": "Candlestick pattern recognition. Cek pola deteksi tidak overlap/kontradiksi (mis. bullish & bearish pattern true bersamaan tanpa prioritas jelas).",
           "putaran": {
             "putaran_2_cross_check_dua_arah": {
-              "status": "PENDING",
-              "catatan": null
+              "status": "CROSS_CHECKED_CLEAN",
+              "catatan": "Caller tunggal observer.py score_pattern(df, bb_lower=, bb_upper=, ema_values=, higher_tf_aligned=, errors=) -- signature cocok persis."
             },
             "putaran_3_validasi_matematika": {
-              "status": "PENDING",
-              "catatan": null
+              "status": "CROSS_CHECKED_CLEAN",
+              "catatan": "Verifikasi eksperimen simetri bullish/bearish pattern scoring (klaim fix besar 'audit menyeluruh, didiskusikan & disetujui user'): volume_confirmed sekarang mempengaruhi bearish dgn arah benar (confirmed -> skor makin rendah/ekstrem turun); higher_tf_aligned arah dikonfirmasi benar (align mendorong menjauh dari 50, tidak-align mendorong mendekati 50 -- BUKAN sebaliknya spt bug lama); context (NEAR_RESISTANCE vs NEAR_SUPPORT) mirror benar dari bullish. _is_volume_confirmed iloc[-2] fix (candle closed, bukan candle live iloc[-1]) diverifikasi dgn skenario persis dari changelog -- benar."
             },
             "putaran_4_kondisi_khusus": {
-              "status": "PENDING",
-              "catatan": null
+              "status": "CROSS_CHECKED_CLEAN",
+              "catatan": "Tidak ada state global module-level. Semua fungsi deteksi pattern menangani data pendek (<2-3 bar) dgn early-return PatternType.NONE, tidak crash."
             },
             "putaran_5_regresi_akhir": {
-              "status": "PENDING",
-              "catatan": null
+              "status": "DONE",
+              "catatan": "Regression simulate_test.py: 107 PASSED, 0 FAILED."
+            },
+            "putaran_1_baca_ulang_full": {
+              "status": "DONE",
+              "catatan": "773 baris dibaca tuntas."
             }
           },
           "putaran_ulang_metode_ketat": {
