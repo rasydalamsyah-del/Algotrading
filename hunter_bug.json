@@ -385,6 +385,13 @@
               "status": "PENDING",
               "catatan": null
             }
+          },
+          "putaran_ulang_metode_ketat": {
+            "2026_07_09_full_audit": {
+              "apa_yang_dicek": "Audit total: 15 skenario candle terkontrol utk verifikasi semua deteksi pattern (Engulfing, Hammer/Shooting Star, Doji varian, Marubozu, Volume Climax), plus investigasi kecurigaan asimetri scoring bullish/bearish.",
+              "hasil": "2 bug ditemukan & difix di _score_single_pattern: (1) bearish pattern tidak dapat penyesuaian volume/context sama sekali (asimetri), (2) arah higher_tf_aligned=False TERBALIK untuk bearish (mendorong makin ekstrem, seharusnya makin netral). Didiskusikan dengan user, diputuskan fix (simetriskan). Validasi konsistensi sinyal 1000 trial acak: 0 pelanggaran dari 29 skenario bearish nyata.",
+              "status": "CROSS_CHECKED_FIXED"
+            }
           }
         },
         {

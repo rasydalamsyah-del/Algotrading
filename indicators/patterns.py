@@ -583,22 +583,58 @@ def _score_single_pattern(
 
     score = adjusted
 
-    if not is_bearish_penalty:
+    # [BUG-FIX -- ditemukan lewat audit menyeluruh, didiskusikan & disetujui
+    # user] Sebelumnya SEMUA penyesuaian di bawah ini (volume_confirmed,
+    # context, higher_tf_aligned=True) di-gate `if not is_bearish_penalty`,
+    # artinya pattern BEARISH tidak pernah mendapat penyesuaian volume/
+    # context sama sekali (skor bearish engulfing selalu identik terlepas
+    # dari volume tinggi/rendah atau posisi context) -- kehilangan sinyal
+    # yang berarti, padahal bullish mendapat penyesuaian penuh (dibuktikan:
+    # volume_confirmed mengubah skor bullish 35 poin, bearish 0 poin).
+    # LEBIH PARAH: `elif higher_tf_aligned is False: score -= 8.0` berlaku
+    # ke KEDUA arah tanpa disadari arahnya salah untuk bearish -- karena
+    # skor bearish sudah di bawah 50, -8 mendorongnya MAKIN JAUH dari 50
+    # (makin ekstrem), padahal "tidak align dengan HTF" seharusnya berarti
+    # SEMAKIN TIDAK RELIABLE (mendorong ke arah netral 50), bukan sebaliknya.
+    # Fix root-cause: simetriskan explicit per arah. Konfirmasi (volume
+    # tinggi / context selaras arah / HTF align) mendorong skor MENJAUH
+    # dari 50 sesuai arah pattern (bullish naik, bearish turun). Tidak-
+    # konfirmasi mendorong skor MENDEKATI 50 (kurang reliable) untuk KEDUA
+    # arah. Context "selaras" utk bearish adalah NEAR_RESISTANCE (resistance
+    # tertahan menguatkan reversal turun) -- mirror dari NEAR_SUPPORT utk
+    # bullish; NEAR_SUPPORT justru melemahkan bearish (support berpotensi
+    # bertahan) -- mirror dari NEAR_RESISTANCE utk bullish.
+    if is_bearish_penalty:
+        if volume_confirmed:
+            score -= PATTERN_VOLUME_CONFIRM_BONUS
+        else:
+            score -= PATTERN_NO_CONFIRM_PENALTY   # PATTERN_NO_CONFIRM_PENALTY sudah negatif -> score += 20 (menuju netral)
+
+        if context == PatternContext.NEAR_RESISTANCE:
+            score -= PATTERN_CONTEXT_SUPPORT_BONUS
+        elif context == PatternContext.NEAR_SUPPORT:
+            score += 10.0
+
+        if higher_tf_aligned is True:
+            score -= PATTERN_HIGHER_TF_ALIGN_BONUS
+        elif higher_tf_aligned is False:
+            score += 8.0
+    else:
         if volume_confirmed:
             score += PATTERN_VOLUME_CONFIRM_BONUS
         else:
             score += PATTERN_NO_CONFIRM_PENALTY
-    if not is_bearish_penalty:
+
         if context == PatternContext.NEAR_SUPPORT:
             score += PATTERN_CONTEXT_SUPPORT_BONUS
         elif context == PatternContext.NEAR_RESISTANCE:
             score -= 10.0
 
-    if higher_tf_aligned is True and not is_bearish_penalty:
-        score += PATTERN_HIGHER_TF_ALIGN_BONUS
-    elif higher_tf_aligned is False:
-        score -= 8.0
-        
+        if higher_tf_aligned is True:
+            score += PATTERN_HIGHER_TF_ALIGN_BONUS
+        elif higher_tf_aligned is False:
+            score -= 8.0
+
     return clamp_score(score)
 
 def score_pattern(

@@ -125,12 +125,28 @@
       }
     },
     "indicators/patterns.py": {
-      "status": "DONE",
+      "status": "DONE_METODE_KETAT",
       "bug_fixed": [
         "iloc_minus1_ke_minus2",
         "dead_param_require_volume_confirmation"
       ],
-      "audit_level": "SERIUS"
+      "audit_level": "SERIUS",
+      "putaran_ulang_metode_ketat_2026_07_09": {
+        "konteks": "Audit total pertama dengan metode ketat untuk indicators/patterns.py (736 baris, 16 fungsi: Engulfing, Hammer/Shooting Star, Doji varian, Marubozu, Volume Climax, scoring composite). Semua pattern diverifikasi dengan candle sintetis terkontrol sesuai definisi textbook (bukan cross-check formula matematis seperti RSI/MACD, karena pattern candlestick adalah rule-based bukan formula kontinu).",
+        "verifikasi_deteksi_pattern_semua_clean": "15/15 skenario terkontrol PASS: Bullish/Bearish Engulfing, Hammer (+context gating near_support), Shooting Star (+context gating near_resistance), Standard/Dragonfly/Gravestone Doji, Bullish/Bearish Marubozu, Volume Climax -- semua terdeteksi benar sesuai definisi textbook. Klaim changelog v2 (_is_volume_confirmed pakai iloc[-2] bukan iloc[-1], konsisten di SEMUA fungsi detect_*) diverifikasi ulang dan benar.",
+        "bug_ditemukan_dan_difix": {
+          "lokasi": "_score_single_pattern() -- penyesuaian volume_confirmed, context, higher_tf_aligned",
+          "masalah_1_asimetri": "SEMUA penyesuaian (volume_confirmed, context) di-gate `if not is_bearish_penalty`, artinya pattern BEARISH tidak pernah mendapat penyesuaian volume/context sama sekali -- kehilangan sinyal berarti. Dibuktikan: volume_confirmed mengubah skor BULLISH engulfing 35 poin (55->90), tapi BEARISH engulfing 0 poin (selalu 25.0 terlepas dari volume).",
+          "masalah_2_arah_terbalik": "LEBIH PARAH dari asimetri: `elif higher_tf_aligned is False: score -= 8.0` berlaku ke KEDUA arah tanpa gate, TAPI arahnya SALAH untuk bearish -- karena skor bearish sudah di bawah 50, -8 mendorongnya MAKIN JAUH dari 50 (makin ekstrem/reliable), padahal \"tidak align dengan HTF\" seharusnya berarti KURANG reliable (mendorong ke arah netral). Dibuktikan: bearish engulfing aligned=None -> 25.0, aligned=False -> 17.0 (turun, seharusnya naik mendekati netral).",
+          "keputusan": "Didiskusikan dengan user (beda karakter dari kasus market_structure_score/LEVEL2_WEIGHTS -- ini BUKAN menciptakan bobot baru, tapi menerapkan ulang bonus/penalti yang SUDAH dikalibrasi & dipakai live untuk bullish, ke arah bearish yang sudah punya base score sendiri). User memutuskan PERBAIKI (simetriskan), dengan alasan: (1) ada preseden simetris di codebase sendiri (MACD zero-cross bullish/bearish sudah simetris, market_structure BOS/CHoCH sudah simetris), (2) struktur kode mengindikasikan oversight bukan desain sengaja, (3) risiko lebih rendah drpd kasus LEVEL2_WEIGHTS karena reuse konstanta yang sudah teruji, bukan angka baru.",
+          "fix": "Simetriskan explicit per arah (is_bearish_penalty True/False sebagai 2 cabang eksplisit, bukan gate parsial). Confirming signal (volume tinggi, context searah, HTF align) mendorong skor MENJAUH dari 50 sesuai arah pattern; non-confirming mendorong MENDEKATI 50 (kurang reliable) untuk KEDUA arah. Context \"confirming\" untuk bearish = NEAR_RESISTANCE (mirror NEAR_SUPPORT untuk bullish); \"weakening\" = NEAR_SUPPORT (mirror NEAR_RESISTANCE untuk bullish)."
+        },
+        "verifikasi_fix": {
+          "unit_test": "14/14 PASS: regresi bullish 100% identik dengan sebelum fix (4 skenario, 1 gagal awal krn tes sendiri salah tebak konstanta, dikoreksi terbuka), bearish sekarang terpengaruh volume/context sesuai arah benar, arah higher_tf_aligned=False untuk bearish sekarang benar (menuju netral, bukan makin ekstrem), simetri kuantitatif dikonfirmasi (magnitude delta bullish == bearish, cuma dibalik arah -- bukan angka baru yang dikarang), semua 5 jenis pattern bearish (SHOOTING_STAR, GRAVESTONE_DOJI, EVENING_STAR, BEARISH_MARUBOZU, BEARISH_ENGULFING) ikut simetris.",
+          "validasi_konsistensi_sinyal_BUKAN_backtest_PnL": "PENTING -- disclosure jujur ke user: sandbox ini TIDAK punya akses data historis harga crypto asli (tidak ada koneksi exchange, tidak ada OHLCV tersimpan di database kosong, tidak ada file data historis di repo) sehingga backtest P&L sungguhan TIDAK MUNGKIN dilakukan di sini. Sebagai gantinya dilakukan stress-test konsistensi LOGIKA lewat pipeline PENUH score_pattern() (bukan cuma unit function terisolasi) di 1000 trial candle acak sintetis: dari 1000 trial, 29 menghasilkan bearish pattern nyata, dan SEMUA 29 (0 pelanggaran) menunjukkan skor bergerak arah yang benar & konsisten (confirming signal -> makin ekstrem, weakening signal -> makin netral) melalui pipeline penuh termasuk detect_all dan composite_score. Ini memvalidasi KEBENARAN LOGIKA fix, BUKAN bukti bahwa fix ini menghasilkan P&L lebih baik di pasar nyata -- itu butuh backtest dengan data historis asli yang tidak tersedia di sesi ini."
+        },
+        "status": "DONE_2_BUG_DITEMUKAN_DAN_DIFIX"
+      }
     },
     "indicators/strength.py": {
       "status": "DONE",
