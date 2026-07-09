@@ -968,20 +968,24 @@
           "fokus_cross_check": "Cek SEMUA notify_* dipanggil dgn parameter yang benar dari main.py/telegram_bot.py — termasuk 2 fix trigger take_profit/stop_loss yang baru dibuat di main.py, pastikan notify_sl_tp_hit menangani kedua trigger dengan format pesan yang benar-benar berbeda dan jelas.",
           "putaran": {
             "putaran_2_cross_check_dua_arah": {
-              "status": "PENDING",
-              "catatan": null
+              "status": "CROSS_CHECKED_CLEAN",
+              "catatan": "Caller NotificationManager (main.py) diverifikasi cocok."
             },
             "putaran_3_validasi_matematika": {
-              "status": "SKIP_TIDAK_RELEVAN",
-              "catatan": "File ini tidak mengandung kalkulasi/formula matematis signifikan (murni I/O, orkestrasi, atau notifikasi)."
+              "status": "CROSS_CHECKED_CLEAN",
+              "catatan": "notify_trade_closed pnl_pct fee-consistent fix diverifikasi eksperimen. Edge case entry_price=0 aman."
             },
             "putaran_4_kondisi_khusus": {
-              "status": "PENDING",
-              "catatan": null
+              "status": "CROSS_CHECKED_CLEAN",
+              "catatan": "WhaleNotifier window/delay threshold benar. asyncio.Lock dipakai tepat (selalu dipanggil via await langsung)."
             },
             "putaran_5_regresi_akhir": {
-              "status": "PENDING",
-              "catatan": null
+              "status": "DONE",
+              "catatan": "107 PASSED 0 FAILED."
+            },
+            "putaran_1_baca_ulang_full": {
+              "status": "DONE",
+              "catatan": "899 baris dibaca tuntas."
             }
           }
         },

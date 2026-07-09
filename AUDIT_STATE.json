@@ -765,13 +765,17 @@
       ]
     },
     "notifications.py": {
-      "status": "DONE",
+      "status": "DONE_METODE_KETAT",
       "audit_level": "SERIUS",
       "bug_fixed": [
         "notify_trade_closed_pnl_pct_inkonsisten_dengan_realized_pnl",
         "notify_whale_dead_guard_none_dihapus"
       ],
-      "catatan": "Bug 1: notify_trade_closed menghitung pnl_pct dari pergerakan harga mentah ((exit-entry)/entry*100) tanpa fee, tidak konsisten dengan realized_pnl yang sudah memperhitungkan fee. User bisa lihat pnl_pct positif tapi realized_pnl negatif (karena fee) — membingungkan. Fix: hitung dari realized_pnl/position_value. Bug 2: notify_whale punya guard 'if self._whale_notifier is None: return' yang dead code — _whale_notifier SELALU diinit di __init__. Dihapus. Cross-check: semua signature notify_* cocok dengan caller di main.py, strategy.py, learning/coin_swap.py. File 878 baris, dibaca menyeluruh, semua method ditest."
+      "catatan": "Bug 1: notify_trade_closed menghitung pnl_pct dari pergerakan harga mentah ((exit-entry)/entry*100) tanpa fee, tidak konsisten dengan realized_pnl yang sudah memperhitungkan fee. User bisa lihat pnl_pct positif tapi realized_pnl negatif (karena fee) — membingungkan. Fix: hitung dari realized_pnl/position_value. Bug 2: notify_whale punya guard 'if self._whale_notifier is None: return' yang dead code — _whale_notifier SELALU diinit di __init__. Dihapus. Cross-check: semua signature notify_* cocok dengan caller di main.py, strategy.py, learning/coin_swap.py. File 878 baris, dibaca menyeluruh, semua method ditest.",
+      "catatan_investigasi": [
+        "[Tier 6, 2026-07-09] File CLEAN -- tidak ada bug baru, tidak ada kode diubah. 899 baris (31 fungsi/method) dibaca tuntas -- sebagian besar message-formatting (risiko bug matematis rendah), tapi bagian numerik diverifikasi eksperimen: notify_trade_closed pnl_pct fix (klaim lama: dulu dihitung dari raw price move tanpa fee, sekarang dari realized_pnl/position_value -- fee-consistent) dikonfirmasi via eksperimen (entry=100,exit=110 = +10% raw price move, tapi realized_pnl cuma $5 stlh fee -> pnl_pct tampil +5.00% benar, BUKAN +10.00%). entry_price*amount=0 edge case tidak crash. WhaleNotifier._count_recent_whales window 300s + auto-cleanup expired events diverifikasi benar. _get_delete_delay threshold (>3 whale -> 60s, <=3 -> 300s) benar. Tidak ada state global module-level (WhaleNotifier instance-based dgn asyncio.Lock sendiri, dipanggil selalu via await langsung -- konsisten dgn pola aman yg sudah dikonfirmasi berulang kali hari ini)."
+      ],
+      "test": "3 set eksperimen (pnl_pct fee-consistent, entry_price=0 edge case, WhaleNotifier window+delay threshold) -- semua PASS. Regression simulate_test.py: 107 PASSED, 0 FAILED."
     },
     "profiles/thresholds.py": {
       "status": "DONE_METODE_KETAT",
