@@ -78,6 +78,10 @@
             "putaran_5_regresi_akhir": {
               "status": "PENDING",
               "catatan": null
+            },
+            "putaran_re_verifikasi_2026_07_09": {
+              "status": "CROSS_CHECKED_CLEAN",
+              "catatan": "Re-verifikasi penuh atas permintaan user (jangan percaya dokumentasi lama). 956 baris dibaca ulang tuntas, 6 eksperimen independen dijalankan (fail-closed slippage, filled=0 handling, anti-phantom-position via _verify_order_filled, breakout_dist_pct=0.0 falsy fix, metadata type-safety, iceberg chunk reduction). SEMUA klaim fix lama terkonfirmasi valid dgn bukti eksperimen baru (bukan cuma percaya narasi lama). Tidak ada bug baru."
             }
           },
           "putaran_ulang_metode_ketat": {

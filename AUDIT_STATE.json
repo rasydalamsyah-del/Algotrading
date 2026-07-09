@@ -564,7 +564,7 @@
       }
     },
     "execution.py": {
-      "status": "DONE_RE_AUDIT_TUNTAS (9 temuan total, semua difix + dites, 20/20 eksperimen PASS)",
+      "status": "DONE_METODE_KETAT",
       "bug_fixed": [
         "iceberg_chunk_tidak_cek_min_amount_min_cost",
         "type_hint_max_slippage_override"
@@ -661,7 +661,11 @@
           ],
           "total_eksperimen_sesi_ini": "20 skenario, 20/20 PASS (setelah semua fix, termasuk regresi)"
         }
-      }
+      },
+      "catatan_investigasi": [
+        "[Re-verifikasi Tier 1, 2026-07-09, atas permintaan user] File dibaca ulang tuntas 956 baris (12 fungsi) -- TIDAK dipercaya begitu saja dari dokumentasi sesi lalu, diverifikasi ulang dgn eksperimen tertulis independen: (1) fail-closed slippage guard -- WS mati + REST exception -> order ditolak (dibuktikan, bukan fail-open); (2) filled=0 (order tak benar2 tereksekusi) tercatat 0.0 persis, TIDAK salah fallback ke amount diminta (mencegah phantom trade); (3) _verify_order_filled -- order status='open' terus-menerus (tidak pernah closed/filled) menghasilkan None (order TIDAK dicatat sbg trade) -- fix kritis anti-posisi-fiktif dikonfirmasi bekerja; (4) breakout_dist_pct=0.0 (valid, persis di level) tidak hilang dari signal_origin (falsy-check fix dikonfirmasi); (5) metadata non-string (strategy_version=int) tidak crash; (6) logic reduksi chunk_count iceberg (turun otomatis kalau chunk di bawah minimum exchange) diverifikasi benar & tidak infinite loop. SEMUA klaim fix dalam dokumentasi lama TERKONFIRMASI VALID -- tidak ada bug baru ditemukan, tidak ada kode diubah. Caller (main.py execute_signal x2) diverifikasi cocok. Tidak ada state global module-level -- murni instance-based, tidak ada risiko race condition."
+      ],
+      "test": "6 eksperimen independen (fail-closed slippage, filled=0, anti-phantom-position, breakout falsy, metadata type-safety, iceberg chunk sizing) -- semua PASS. Regression simulate_test.py: 107 PASSED, 0 FAILED (tidak ada kode diubah)."
     },
     "risk.py": {
       "status": "DONE",
