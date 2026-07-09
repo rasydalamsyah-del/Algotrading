@@ -279,12 +279,12 @@
               "catatan": "1 bug: _bb_trend inkonsisten dgn _atr_trend_direction (current bar disertakan/dikecualikan beda). Sudah difix + dites 42 skenario, 16/16 fungsi tercakup. Plus konfirmasi dgn angka nyata: _wilder_smooth beda hasil vs ta_compat.py."
             },
             "putaran_3_validasi_matematika": {
-              "status": "PENDING",
-              "catatan": null
+              "status": "CROSS_CHECKED_CLEAN",
+              "catatan": "[Putaran ulang lebih dalam] ATR Wilder, Bollinger Bands, ATR percentile (rank-based) semua exact match vs referensi independen ditulis dari nol. _bb_trend vs _atr_trend_direction diuji konsistensi (klaim fix lama) -- ditemukan awalnya string output beda ('expanding' vs 'rising') yg SEMPAT saya kira bug, tapi setelah investigasi ini vocab BERBEDA BY DESIGN (bb_width pakai expanding/contracting, atr value pakai rising/falling) utk konsep yg sama -- metodologi (window exclusion current bar) dikonfirmasi identik via inspeksi source code. BUKAN bug, kesalahan asumsi di test saya sendiri, dikoreksi."
             },
             "putaran_4_kondisi_khusus": {
-              "status": "PENDING",
-              "catatan": null
+              "status": "CROSS_CHECKED_CLEAN",
+              "catatan": "kc_squeeze_valid = True (fix lama dari 'kc_ok or True' yg selalu True) dikonfirmasi eksplisit dan benar. Tidak ada state global. Caller observer.py diverifikasi cocok."
             },
             "putaran_5_regresi_akhir": {
               "status": "PENDING",
