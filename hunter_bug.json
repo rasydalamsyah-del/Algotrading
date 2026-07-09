@@ -224,6 +224,11 @@
               "apa_yang_dicek": "Cross-check matematika RSI vs implementasi textbook independen (SMA-seeded Wilder), sama seperti metode yg menemukan bug ADX.",
               "hasil": "Bukan bug coding, tapi deviasi metodologi terukur dari definisi baku. User memutuskan align ke SMA-seeded Wilder (matching TradingView rma()) setelah penjelasan trade-off. Fix diterapkan, 8/8 eksperimen PASS, konsisten dgn strength.py (lazy-import sama).",
               "status": "FIXED_DESIGN_DECISION"
+            },
+            "2026_07_09_macd_independent_check": {
+              "apa_yang_dicek": "Cross-check MACD (_ema, macd line/signal/histogram, zero-cross) vs implementasi independen mengikuti Pine Script ta.ema() resmi TradingView.",
+              "hasil": "TIDAK ADA BUG -- 9/9 eksperimen PASS, semua cocok persis (diff=0.0) dgn referensi independen. Beda dari RSI: MACD/_ema TIDAK butuh SMA-seed krn TradingView ta.ema() sendiri seed dgn nilai pertama (bukan SMA) -- dikonfirmasi via web search.",
+              "status": "CROSS_CHECKED_CLEAN"
             }
           }
         },

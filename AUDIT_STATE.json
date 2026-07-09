@@ -68,6 +68,13 @@
         "fix": "_calc_rsi diganti dari ewm-based ke _wilder_smooth (SMA-seeded, pola sama persis dgn fix ADX di strength.py). Dicek juga strength.py -- ternyata lazy-import _calc_rsi langsung dari momentum.py (bukan implementasi terpisah), jadi fix otomatis konsisten di kedua tempat, diverifikasi eksperimen.",
         "bukti": "8/8 eksperimen PASS: cocok PERSIS (diff=0.0000000000) dgn implementasi textbook independen di semua bar, titik seed yg dulu deviasi 46.7% sekarang persis 0, regresi flat/up/down price masih benar (RSI 50/100/0), min_bars guard (16 bar) masih valid, full pipeline score_momentum tidak crash, dan score_strength (pemakai bersama rsi_series) hasilnya konsisten sama persis dgn/tanpa shared rsi_series.",
         "status": "DONE_METHODOLOGY_ALIGNED_WITH_STANDARD"
+      },
+      "putaran_ulang_metode_ketat_2026_07_09_macd": {
+        "konteks": "Verifikasi matematika independen MACD (calculate_macd_enhanced) -- lanjutan dari RSI, sebelum lanjut ke formula lain.",
+        "metodologi": "Dicek dulu via web search: apakah _ema (ewm(span, adjust=False), seed=nilai pertama) sesuai standar? Dikonfirmasi -- Pine Script ta.ema() resmi TradingView JUGA seed dgn nilai pertama itu sendiri (bukan SMA), formula: alpha=2/(length+1), sum:=na(sum[1])?src:alpha*src+(1-alpha)*nz(sum[1]). Jadi BEDA dari RSI/ADX (yg pakai rma()/Wilder, SMA-seeded) -- MACD/_ema TIDAK butuh fix seed.",
+        "hasil": "TIDAK ADA BUG. 9/9 eksperimen PASS: _ema cocok persis (diff=0.0) dgn implementasi independen pine_ema, MACD line/signal/histogram cocok persis (diff=0.0), histogram=macd-signal konsisten, zero-cross bullish&bearish terdeteksi benar (dibuktikan True sungguhan, bukan cuma not-None spt draft tes awal yg lemah -- diperbaiki sebelum dianggap valid), min_bars guard (slow+signal+2=37) benar, scoring symmetry bullish(+15)/bearish(-15) zero-cross valid (fix v2 lama terverifikasi ulang).",
+        "observasi_minor": "bearish_zero_cross dihitung internal calculate_macd_enhanced tapi TIDAK diekspos di dataclass MomentumIndicators (beda dgn macd_zero_cross yg diekspos) -- efeknya sudah masuk ke macd_score jadi bukan bug fungsional, cuma observasi transparansi data (caller lain tidak bisa tahu APAKAH terjadi bearish cross, cuma lihat dampak skornya).",
+        "status": "DONE_NO_BUG_VERIFIED_INDEPENDENT"
       }
     },
     "indicators/orderbook.py": {
