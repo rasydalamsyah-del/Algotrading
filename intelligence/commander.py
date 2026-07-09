@@ -875,6 +875,43 @@ class IntelligenceCommander:
                 symbol, exc, exc_info=True,
             )
 
+        # [BUG-FIX -- efisiensi, ditemukan lewat pelacakan reachability]
+        # Sebelumnya: pengecekan `if symbol in open_symbols: return` baru
+        # dilakukan SETELAH get_scored_signal() dipanggil. get_scored_signal()
+        # menjalankan pipeline intelligence PENUH (observe+classify+score+
+        # validate, lewat run_in_executor) -- mahal secara komputasi. Satu-
+        # satunya caller process() di seluruh repo adalah run_strategy_loop
+        # (main.py), yang HANYA memanggil process() untuk symbol yang SUDAH
+        # ADA di open_positions (loop "for pos in open_positions"). Artinya
+        # `if symbol in open_symbols: return` di bawah SELALU True untuk
+        # setiap pemanggilan process() di produksi -- dibuktikan lewat
+        # eksperimen (register_position tidak pernah terpanggil). Akibatnya
+        # seluruh hasil get_scored_signal()+decide() SELALU dibuang percuma,
+        # setiap symbol, setiap siklus run_strategy_loop (CANDLE_POLL_INTERVAL)
+        # -- pemborosan CPU/thread-pool nyata, bukan cuma dead code kosmetik.
+        # Fix: pindahkan pengecekan open_symbols ke SEBELUM get_scored_signal,
+        # supaya entry-evaluation yang mahal di-skip lebih awal saat memang
+        # sudah pasti tidak akan dipakai -- exit_signals (generate_signals)
+        # tetap dihitung seperti biasa krn itu fungsi utama loop ini.
+        try:
+            open_positions_raw = await self._db.get_open_positions()
+            open_symbols       = [p.symbol for p in open_positions_raw]
+            portfolio_value    = 0.0
+        except Exception as exc:
+            log.warning(
+                "Commander.process: gagal ambil open positions: %s", exc
+            )
+            open_symbols    = []
+            portfolio_value = 0.0
+
+        if symbol in open_symbols:
+            log.debug(
+                "Commander.process: [%s] already in position — skip entry "
+                "evaluation (get_scored_signal dilewati, efisiensi).",
+                symbol,
+            )
+            return signals
+
         try:
             scored = await strategy.get_scored_signal(
                 symbol,
@@ -893,25 +930,6 @@ class IntelligenceCommander:
         if scored is None:
             log.debug(
                 "Commander.process: [%s] ScoredSignal=None — no entry candidate.",
-                symbol,
-            )
-            return signals
-
-        try:
-            open_positions_raw = await self._db.get_open_positions()
-            open_symbols       = [p.symbol for p in open_positions_raw]
-            portfolio_value    = 0.0
-
-        except Exception as exc:
-            log.warning(
-                "Commander.process: gagal ambil open positions: %s", exc
-            )
-            open_symbols    = []
-            portfolio_value = 0.0
-
-        if symbol in open_symbols:
-            log.debug(
-                "Commander.process: [%s] already in position — skip entry.",
                 symbol,
             )
             return signals

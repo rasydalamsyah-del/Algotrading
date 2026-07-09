@@ -624,6 +624,28 @@
               "catatan": "Atas permintaan user utk verifikasi lebih dalam (bukan cuma baca), dilakukan putaran tambahan dgn eksperimen tertulis (bukan penalaran manual) utk _compute_sl_tp_quick/wave, _detect_exit_mode, _compute_confidence, dan stress-test pipeline end-to-end 9 skenario adversarial. Ditemukan 2 bug tambahan (_compute_sl_tp_wave atr<=0 guard hilang; sync_position_state bisa membuat tracker entry_price=0 yg crash ZeroDivisionError di banyak fungsi hilir). Keduanya difix + dites before/after. Metodologi: baca kode SAJA tidak cukup utk menemukan bug kelas ini -- harus dieksekusi dgn nilai adversarial (0, negatif, None, ekstrem) utk setiap fungsi matematis."
             }
           }
+        },
+        {
+          "file": "intelligence/commander.py",
+          "catatan_cakupan": "Bukan bagian dari 7 file resmi Tier 3 di hunter_bug.json awal, tapi ditemukan sbg gap penting saat baca HANDOFF_NEXT_SESSION_DETAIL.md (file ini bagian nyata dari intelligence/ decision layer, 1109 baris, py sudah pernah difix 1 bug kritis di sesi sebelumnya -- _gate_spread). Diaudit ulang metode ketat atas permintaan user, ditemukan 1 bug efisiensi nyata (get_scored_signal dipanggil sia-sia) + 4 dead code items. Detail lengkap di AUDIT_STATE.json.",
+          "putaran": {
+            "putaran_1_baca_ulang_full": {
+              "status": "DONE",
+              "catatan": "1109 baris dibaca tuntas. Bug _gate_spread lama (sudah difix sesi sebelumnya) diverifikasi masih ada fix-nya di kode."
+            },
+            "putaran_2_cross_check_dua_arah": {
+              "status": "CROSS_CHECKED_FIXED",
+              "catatan": "Ditemukan & difix: get_scored_signal dipanggil sia-sia sebelum cek open_symbols (pemborosan komputasi nyata, dibuktikan eksperimen reachability). Semua caller (run_strategy_loop main.py, Gate4.5 module-level decide) diverifikasi manual satu-satu."
+            },
+            "putaran_3_validasi_matematika": {
+              "status": "CROSS_CHECKED_CLEAN",
+              "catatan": "Kelly Criterion, correlation penalty, _refine_sl_tp diverifikasi independen dari nol + stress-test edge case. Semua CLEAN."
+            },
+            "putaran_4_kondisi_khusus": {
+              "status": "CROSS_CHECKED_CLEAN",
+              "catatan": "Tidak ada state global module-level di file ini, tidak ada risiko race condition."
+            }
+          }
         }
       ]
     },
