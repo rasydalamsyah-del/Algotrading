@@ -314,12 +314,12 @@
               "catatan": "REVISI: 2 bug KRITIS ADX ditemukan lewat cross-check matematika independen (fillna prematur + _wilder_smooth salah tangani leading-NaN). Bias sampai 37.9% di bar minimum. Sudah difix, exact match (diff=0.0000) dgn implementasi independen di semua ukuran data."
             },
             "putaran_3_validasi_matematika": {
-              "status": "PENDING",
-              "catatan": null
+              "status": "CROSS_CHECKED_CLEAN",
+              "catatan": "[Putaran ulang lebih dalam] ADX (Wilder, indikator paling kompleks) diverifikasi independen dari definisi textbook -- AWALNYA ada deviasi ~0.007 (0.03%) yg saya kira bug, tapi setelah investigasi mendalam ternyata kesalahan di REFERENSI SAYA SENDIRI (asumsi salah: TR bar pertama harus di-skip, padahal implementasi sengaja pakai prev_close[0]=close[0] supaya TR[0] valid & tidak kehilangan 1 bar data -- konvensi sah). Setelah referensi diperbaiki: EXACT MATCH (1e-8). MFI edge cases (naik-terus=100, turun-terus=0, flat=50) semua benar. OBV exact match vs referensi independen."
             },
             "putaran_4_kondisi_khusus": {
-              "status": "PENDING",
-              "catatan": null
+              "status": "CROSS_CHECKED_CLEAN",
+              "catatan": "Tidak ada state global module-level. shared rsi_series param (perf optimization) diverifikasi backward-compatible (fallback hitung sendiri kalau None/panjang beda). Caller observer.py cocok."
             },
             "putaran_5_regresi_akhir": {
               "status": "PENDING",
