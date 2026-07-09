@@ -797,10 +797,14 @@
       "test": "Import sukses (validasi otomatis modul lulus). Automated consistency check independen (9 tabel x 6 profile) -- 0 issue fungsional (2 minor rsi_gc_min sudah dicatat). Bounds check (semua default value dalam bounds sendiri) -- 0 issue. Regression simulate_test.py: 107 PASSED, 0 FAILED, 2 WARNED (non-terkait)."
     },
     "smoke_api.py": {
-      "status": "DONE",
+      "status": "DONE_METODE_KETAT",
       "audit_level": "SERIUS",
       "bug_fixed": [],
-      "catatan": "File bersih — 18 baris, tidak ada bug. Fungsi: start minimal FastAPI instance untuk smoke-test tanpa TradingBot. _bot_getter() return None → semua endpoint yang butuh bot() return HTTP 503 (by design, guard 'if b is None: raise HTTPException(503)' di api_server.py). Endpoint yang jalan tanpa bot: / (dashboard/index.html atau endpoint list) dan /health (return ok). Cross-check: create_app signature (bot_getter) -> FastAPI cocok dengan pemanggilan di smoke_api.py. Tidak dipanggil dari file manapun — dijalankan manual untuk testing. Tidak ada caller, tidak ada dependency lain."
+      "catatan": "File bersih — 18 baris, tidak ada bug. Fungsi: start minimal FastAPI instance untuk smoke-test tanpa TradingBot. _bot_getter() return None → semua endpoint yang butuh bot() return HTTP 503 (by design, guard 'if b is None: raise HTTPException(503)' di api_server.py). Endpoint yang jalan tanpa bot: / (dashboard/index.html atau endpoint list) dan /health (return ok). Cross-check: create_app signature (bot_getter) -> FastAPI cocok dengan pemanggilan di smoke_api.py. Tidak dipanggil dari file manapun — dijalankan manual untuk testing. Tidak ada caller, tidak ada dependency lain.",
+      "catatan_investigasi": [
+        "[Tier 6, 2026-07-09] File trivial (18 baris, 1 fungsi) -- entry point smoke-test yg cuma create_app(bot_getter=None). Diverifikasi: import & instansiasi FastAPI app tidak crash. CLEAN."
+      ],
+      "test": "Import + instansiasi app diverifikasi tidak crash."
     },
     "profiles/registry.py": {
       "status": "DONE_METODE_KETAT",

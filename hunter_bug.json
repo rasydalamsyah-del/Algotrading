@@ -1049,20 +1049,24 @@
           "fokus_cross_check": "File kecil (18 baris) tapi pastikan endpoint yang di-smoke-test masih match dengan yang ada di api_server.py setelah semua perubahan sesi ini.",
           "putaran": {
             "putaran_2_cross_check_dua_arah": {
-              "status": "PENDING",
-              "catatan": null
+              "status": "CROSS_CHECKED_CLEAN",
+              "catatan": "create_app(bot_getter) signature cocok dgn api_server.py."
             },
             "putaran_3_validasi_matematika": {
               "status": "SKIP_TIDAK_RELEVAN",
-              "catatan": "File ini tidak mengandung kalkulasi/formula matematis signifikan (murni I/O, orkestrasi, atau notifikasi)."
+              "catatan": "Tidak ada matematika."
             },
             "putaran_4_kondisi_khusus": {
-              "status": "PENDING",
-              "catatan": null
+              "status": "CROSS_CHECKED_CLEAN",
+              "catatan": "Diverifikasi import/instansiasi tidak crash."
             },
             "putaran_5_regresi_akhir": {
-              "status": "PENDING",
-              "catatan": null
+              "status": "DONE",
+              "catatan": "N/A -- tidak ada kode diubah."
+            },
+            "putaran_1_baca_ulang_full": {
+              "status": "DONE",
+              "catatan": "18 baris, trivial."
             }
           }
         }
