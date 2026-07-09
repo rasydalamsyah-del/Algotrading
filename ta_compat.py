@@ -178,12 +178,50 @@ def _rsi_raw(series: pd.Series, length: int) -> pd.Series:
     """
     RSI computation — shared helper untuk rsi() dan stochrsi().
     Termasuk edge-case fix (avg_loss==0 → RSI=100 jika ada gain, bukan 50).
+
+    [BUG-FIX -- keputusan desain, konsisten dgn fix indicators/momentum.py
+    _calc_rsi (sesi verifikasi matematika independen)] Sebelumnya avg_gain/
+    avg_loss pakai _wilder_smooth() bersama (ewm(com=length-1, adjust=False)
+    -- seed di bar PERTAMA), BUKAN SMA-seeded seperti definisi Wilder baku
+    (1978) / rma() TradingView. Karena file ini (ta_compat.py) dipakai untuk
+    dashboard diagnostic yang operator bandingkan visual terhadap TradingView/
+    exchange chart, DAN indicators/momentum.py (RSI utk keputusan trading
+    nyata) sudah diperbaiki ke SMA-seeded -- dashboard yang masih pakai
+    metode lama akan menampilkan angka RSI yang BEDA dari yang benar-benar
+    dipakai bot, persis risiko arsitektur yang sudah dikonfirmasi utk ADX
+    (commit 05d7b50). Fix scope SENGAJA dibatasi ke _rsi_raw() saja (dipakai
+    rsi() & stochrsi()), TIDAK mengubah _wilder_smooth() bersama yang juga
+    dipakai adx()/atr() -- untuk ADX sudah diverifikasi sebelumnya bahwa
+    versi ewm cukup benar setelah fix premature-fillna, jadi tidak diubah
+    lagi supaya tidak berisiko ke fungsi yang sudah diverifikasi.
     """
-    delta    = series.diff()
-    gain     = delta.clip(lower=0)
-    loss     = (-delta).clip(lower=0)
-    avg_gain = _wilder_smooth(gain, length)
-    avg_loss = _wilder_smooth(loss, length)
+    delta = series.diff()
+    gain  = delta.clip(lower=0)
+    loss  = (-delta).clip(lower=0)
+
+    def _sma_seeded_wilder(s: pd.Series, period: int) -> pd.Series:
+        arr = s.values.astype(float)
+        n = len(arr)
+        result = np.full(n, np.nan)
+        if n < period:
+            return pd.Series(result, index=s.index)
+        first_valid = 0
+        while first_valid < n and np.isnan(arr[first_valid]):
+            first_valid += 1
+        seed_idx = first_valid + period - 1
+        if seed_idx >= n:
+            return pd.Series(result, index=s.index)
+        window = arr[first_valid: first_valid + period]
+        result[seed_idx] = np.nanmean(window) if np.any(np.isnan(window)) else float(np.mean(window))
+        for i in range(seed_idx + 1, n):
+            if np.isnan(result[i - 1]) or np.isnan(arr[i]):
+                result[i] = result[i - 1] if not np.isnan(result[i - 1]) else np.nan
+            else:
+                result[i] = (result[i - 1] * (period - 1) + arr[i]) / period
+        return pd.Series(result, index=s.index)
+
+    avg_gain = _sma_seeded_wilder(gain, length)
+    avg_loss = _sma_seeded_wilder(loss, length)
     rs       = avg_gain / avg_loss.replace(0, np.nan)
     result   = 100.0 - (100.0 / (1.0 + rs))
     no_loss  = avg_loss == 0

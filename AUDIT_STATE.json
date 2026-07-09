@@ -352,6 +352,14 @@
           "status_fix": "SUDAH DIFIX. _wilder_smooth (ewm-based) dikonfirmasi SUDAH BENAR menangani leading-NaN (skip otomatis), tidak perlu fix tambahan seperti di strength.py. Self-test bawaan 57/57 tetap PASS setelah fix.",
           "catatan_severity": "Lebih rendah dari strength.py karena ta_compat.py HANYA dipakai dashboard diagnostic (api_server.py), TIDAK memengaruhi keputusan trading nyata -- tapi tetap diperbaiki demi konsistensi & akurasi dashboard."
         }
+      },
+      "putaran_ulang_metode_ketat_2026_07_09_rsi_consistency": {
+        "konteks": "Jawaban atas pertanyaan user \"apakah jalur penghubung sudah tepat\" -- cross-check jalur pemanggil untuk fix RSI (indicators/momentum.py) menemukan ta_compat.py punya RSI TERPISAH (_rsi_raw) yang masih pakai _wilder_smooth lama (ewm(com,adjust=False), seed di bar pertama) -- deviasi yang SAMA seperti yang baru difix di indicators/momentum.py.",
+        "dampak": "ta_compat.py RSI dipakai main.py/telegram_bot.py/strategy.py (indikator diagnostic) dan api_server.py (dashboard) -- operator bisa melihat RSI dashboard berbeda dari yang benar2 dipakai bot utk keputusan trading (indicators/momentum.py, sudah fix). Dibuktikan: selisih 0.5351 poin pada data uji (mirip skala dampak di gerbang produksi RSI sebelumnya).",
+        "keputusan_scope": "Fix DIBATASI ke _rsi_raw() saja (dipakai rsi() & stochrsi()), TIDAK mengubah _wilder_smooth() bersama yg jg dipakai adx()/atr() di file sama -- utk ADX sdh diverifikasi sebelumnya (commit 05d7b50) bahwa versi ewm cukup benar setelah fix premature-fillna, jadi tidak diubah lagi supaya tidak berisiko ke fungsi yg sudah diverifikasi.",
+        "fix": "_rsi_raw() diganti ke SMA-seeded Wilder (helper lokal _sma_seeded_wilder), pola sama persis dgn indicators/momentum.py._calc_rsi.",
+        "bukti": "6/6 eksperimen PASS: ta_compat RSI sekarang cocok PERSIS (diff=0.0) dgn indicators/momentum.py RSI (dulu selisih 0.5351), regresi flat/up/down masih benar, self-test bawaan 60/60 PASS (0 fail), stochrsi() (dependent) tidak regresi.",
+        "status": "DONE_CONSISTENCY_FIX_VERIFIED"
       }
     },
     "simulate_test.py": {
