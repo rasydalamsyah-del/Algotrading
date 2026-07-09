@@ -208,6 +208,13 @@
           "score_volatility: SUDAH BENAR pakai exclude+renormalize (bb_ok/kc_squeeze_valid/atr_ok) -- diverifikasi skenario kc invalid (butuh 42 bar) sementara bb&atr valid (35 bar) -> composite TIDAK tercampur skor palsu kc"
         ],
         "status": "DONE_RE_AUDIT_TUNTAS (1 bug ditemukan & difix + dites, 1 temuan arsitektur dikonfirmasi dgn angka, 16/16 fungsi tercakup eksperimen langsung)"
+      },
+      "putaran_ulang_metode_ketat_2026_07_08": {
+        "konteks": "Lanjutan re-audit ADX (commit 05d7b50): dicek apakah _wilder_smooth di volatility.py rentan bug leading-NaN yang sama.",
+        "temuan": "_wilder_smooth versi volatility.py strukturnya IDENTIK dgn versi lama strength.py yg terbukti salah (seed nanmean(arr[:period]) di index absolut period-1, tidak menangani leading-NaN). Saat ini TIDAK termanifestasi sbg bug aktif krn satu-satunya caller (_calc_atr) selalu memberi tr tanpa leading NaN.",
+        "fix": "Diperbaiki jadi pola sama seperti strength.py (deteksi first_valid, seed = rata-rata period nilai valid pertama sejak first_valid) -- pertahanan-mendalam, bukan fix bug aktif.",
+        "bukti": "8/8 eksperimen PASS: regresi no-leading-NaN max diff=0.0 (identik perilaku lama), leading-NaN case sekarang seed benar (dibuktikan vs implementasi lama yg salah), full pipeline (ATR/BB/KC/squeeze/calculate_all) tidak crash.",
+        "status": "DONE_DEFENSIVE_FIX_NO_ACTIVE_BUG"
       }
     },
     "intelligence/classifier.py": {

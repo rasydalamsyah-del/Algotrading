@@ -78,8 +78,37 @@ def _wilder_smooth(series: pd.Series, period: int) -> pd.Series:
     if n < period:
         return pd.Series(result, index=series.index)
 
-    result[period - 1] = np.nanmean(arr[:period])
-    for i in range(period, n):
+    # [BUG-FIX -- pertahanan-mendalam, pola identik dgn yg ditemukan &
+    # diperbaiki di indicators/strength.py._wilder_smooth (commit 05d7b50)]
+    # Sebelumnya seed SELALU dipasang di index ABSOLUT `period-1` memakai
+    # nanmean(arr[:period]) -- ini cuma benar kalau `series` tidak punya
+    # leading NaN. Saat ini (`_calc_atr` memanggil dgn `tr` yang memang
+    # selalu mulai dari index 0 tanpa NaN) bug ini TIDAK ke-trigger --
+    # tapi kode ini identik strukturnya dgn versi lama strength.py yang
+    # TERBUKTI salah utk input leading-NaN (dx pada calculate_adx): seed
+    # nanmean(arr[:period]) di index absolut period-1 cuma merata-ratakan
+    # SATU nilai real yg kebetulan ada, bukan rata-rata `period` nilai
+    # real pertama sesuai metodologi Wilder baku. Diperbaiki sekarang
+    # supaya fungsi generik ini aman dipakai dgn input leading-NaN apa pun
+    # di masa depan, bukan menunggu sampai benar-benar ada bug nyata yg
+    # termanifestasi.
+    first_valid = 0
+    while first_valid < n and np.isnan(arr[first_valid]):
+        first_valid += 1
+
+    seed_idx = first_valid + period - 1
+    if seed_idx >= n:
+        return pd.Series(result, index=series.index)
+
+    window = arr[first_valid: first_valid + period]
+    if np.any(np.isnan(window)):
+        # NaN "di tengah" window (bukan cuma leading) -- fallback ke
+        # nanmean drpd crash/seed sembarangan.
+        result[seed_idx] = np.nanmean(window)
+    else:
+        result[seed_idx] = float(np.mean(window))
+
+    for i in range(seed_idx + 1, n):
         if np.isnan(result[i - 1]) or np.isnan(arr[i]):
             result[i] = result[i - 1] if not np.isnan(result[i - 1]) else np.nan
         else:

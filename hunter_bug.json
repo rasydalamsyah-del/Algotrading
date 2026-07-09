@@ -264,6 +264,13 @@
               "status": "PENDING",
               "catatan": null
             }
+          },
+          "putaran_ulang_metode_ketat": {
+            "2026_07_08_wilder_smooth_defense": {
+              "apa_yang_dicek": "_wilder_smooth di volatility.py memiliki pola struktural identik dengan bug leading-NaN yang ditemukan & difix di strength.py (commit 05d7b50). Saat ini TIDAK ke-trigger (tr di _calc_atr tidak punya leading NaN), tapi diperbaiki demi konsistensi/pertahanan-mendalam.",
+              "hasil": "Fix diterapkan (deteksi first_valid index, seed = rata-rata period nilai valid pertama). 8/8 eksperimen PASS: regresi no-leading-NaN identik dgn versi lama (max diff=0.0), leading-NaN seed sekarang benar, full pipeline (calculate_atr_enhanced, calculate_bollinger_bands, calculate_keltner_channels, calculate_all, calculate_squeeze) tidak crash.",
+              "status": "FIXED_DEFENSIVE_NO_ACTIVE_BUG"
+            }
           }
         },
         {
