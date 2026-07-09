@@ -424,11 +424,16 @@
       "test": "Eksperimen with_override chaining + bounds violation + AdaptiveParams math independen -- semua PASS. Regression simulate_test.py: 107 PASSED, 0 FAILED."
     },
     "profiles/weights.py": {
-      "status": "DONE",
+      "status": "DONE_METODE_KETAT",
       "bug_fixed": [
         "mean_revert_5_dari_8_kategori"
       ],
-      "audit_level": "SERIUS"
+      "audit_level": "SERIUS",
+      "catatan_investigasi": [
+        "File ini CLEAN secara fungsional -- tidak ada bug yang mempengaruhi trading, tidak ada kode diubah. 564 baris dibaca tuntas. Desain self-validation KUAT (sama seperti thresholds.py): validate_all_weight_tables() jalan OTOMATIS saat modul di-import, cek sum=1.0 (toleransi 0.001) utk SEMUA weight table (L1 & L2), PLUS cross-check L1 vs L2 coverage per kategori (ada bug lama yg pernah lolos - mean_revert hilang 3 kategori L2 - sekarang fail-fast di import). compute_category_score dan compute_weighted_score sudah diverifikasi matematis independen di sesi awal hari ini (saat audit scorer.py).",
+        "update_level2_weight() adalah DEAD CODE (tidak dipanggil dari manapun, grep seluruh repo nihil) DAN punya gap desain: fungsi menghitung normalisasi weight baru dgn benar tapi TIDAK PERNAH menulis balik hasilnya ke LEVEL2_WEIGHTS (cuma return dict baru, caller harus assign manual). Kalau nanti diwire (misal dari learning/meta_learner.py utk adaptive reweighting), perlu ditambah `LEVEL2_WEIGHTS[profile_name][category] = normalized` di dalam fungsi atau di caller. Tidak diubah sekarang krn dead code (di luar scope aktif), didokumentasikan utk operator/audit learning/meta_learner.py nanti (Tier 5)."
+      ],
+      "test": "Import sukses (validasi otomatis lulus, termasuk cross-check L1/L2 coverage). Regression simulate_test.py: 107 PASSED, 0 FAILED."
     },
     "ta_compat.py": {
       "status": "DONE",
