@@ -844,7 +844,7 @@
       ]
     },
     "learning/cross_learn.py": {
-      "status": "DONE",
+      "status": "DONE_METODE_KETAT",
       "audit_level": "SERIUS",
       "peran": "Cross-Bot Learning Reader — baca trades & signal_scores dari DB algotrader_test, normalisasi skala score, sediakan untuk analytics.py & meta_learner.py.",
       "bug_fixed": [
@@ -852,8 +852,12 @@
         "Minor: get_peer_signal_scores pakai \"if thresh_raw:\" (truthy check) untuk threshold_used — nilai 0.0 (valid tapi falsy) lolos tanpa dinormalisasi. Fix: \"if thresh_raw is not None:\"."
       ],
       "cross_file_check": "analytics.py (compute_attribution: get_peer_trades+get_peer_signal_scores+get_peer_regime_stats dipanggil sekuensial per request — sekarang benar2 dapat manfaat cache), meta_learner.py (get_peer_regime_stats, get_peer_signal_scores, get_peer_trades), main.py & api_server.py (get_summary, tidak di-cache by design karena untuk status on-demand). Semua signature caller tetap kompatibel (return type tidak berubah).",
-      "test": "Syntax OK, Import OK, Functional PASS (cache benar2 aktif — hasil kedua tetap sama walau DB fisik dihapus; cache key spesifik per parameter/lookback_days; get_summary tidak terpengaruh)",
-      "catatan": "get_summary() sengaja TIDAK di-cache karena dipakai untuk status check on-demand (Telegram/API) yang perlu data terbaru, bukan data periodik seperti 3 method fetch lainnya."
+      "test": "Eksperimen _normalize_score (6 profile, boundary, edge case) PASS. Regression simulate_test.py: 107 PASSED, 0 FAILED.",
+      "catatan": "get_summary() sengaja TIDAK di-cache karena dipakai untuk status check on-demand (Telegram/API) yang perlu data terbaru, bukan data periodik seperti 3 method fetch lainnya.",
+      "catatan_investigasi": [
+        "File CLEAN -- 451 baris dibaca tuntas, tidak ada bug baru. Verifikasi independen _normalize_score: skor tepat di test_threshold menghasilkan prod_threshold persis (6 profile dicek), bounds [0,100] dijaga, profile tak dikenal fallback ke default 65/70 dgn benar. Klaim fix lama (cache TTL 30 menit sekarang benar2 aktif, threshold_used=0.0 falsy-check fix) dikonfirmasi masih valid via baca kode.",
+        "get_cross_learn_reader() singleton pattern (check-then-create, module-level 'global _reader') dipanggil dari 6 tempat (main.py, api_server.py, analytics.py x2, meta_learner.py x2) -- SEMUA dari konteks 'async def' biasa, TIDAK ditemukan bukti pemanggilan via run_in_executor (worker thread). Risiko race disini lebih rendah dari kasus _REGIME_BUFFERS/_OBSERVATION_CACHE/_state_registry yang sudah difix hari ini (yang punya bukti konkret jalur worker-thread) -- TIDAK ditambah lock krn tidak ada bukti risiko nyata (beda dgn kasus lain yg tetap saya lock sbg defense-in-depth krn punya bukti tidak langsung/jalur executor); didokumentasikan sbg catatan, bukan fix, supaya jujur soal tingkat kepastian."
+      ]
     },
     "learning/meta_learner.py": {
       "status": "DONE",
