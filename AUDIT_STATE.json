@@ -413,11 +413,15 @@
       ]
     },
     "profiles/base_profile.py": {
-      "status": "DONE",
+      "status": "DONE_METODE_KETAT",
       "bug_fixed": [
         "with_override_crash_second_call"
       ],
-      "audit_level": "SERIUS"
+      "audit_level": "SERIUS",
+      "catatan_investigasi": [
+        "File ini CLEAN -- tidak ada bug ditemukan, tidak ada kode diubah. 421 baris dibaca tuntas. Diverifikasi via eksperimen (bukan cuma baca): with_override() dipanggil 2x berantai (klaim fix lama soal dataclasses.asdict rekursif merusak param_bounds jadi dict biasa) -- terkonfirmasi masih benar, param_bounds tetap ParameterBounds setelah chaining. with_override() dgn value di luar bounds -- ValueError benar. AdaptiveParams.adjust_for_market: atr_pct/atr_ratio dihitung benar (diverifikasi independen), boundary atr_ratio>2.0 vs >1.5 dicek tepat di batas (2.0 -> ELEVATED_VOLATILITY bukan HIGH_VOLATILITY, sesuai definisi > bukan >=). cur_price=0 tidak crash (guard sudah ada)."
+      ],
+      "test": "Eksperimen with_override chaining + bounds violation + AdaptiveParams math independen -- semua PASS. Regression simulate_test.py: 107 PASSED, 0 FAILED."
     },
     "profiles/weights.py": {
       "status": "DONE",
