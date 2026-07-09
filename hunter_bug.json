@@ -161,16 +161,16 @@
               "catatan": "Re-audit ketat: 84 assersi total (57 self-test bawaan + 27 helper privat tambahan), 0 bug fungsional. 1 docstring menyesatkan diperbaiki. Temuan penting: indicators/*.py (bukan ta_compat.py) yang benar-benar dipakai jalur trading nyata -- prioritas audit dialihkan ke sana. REVISI: ditemukan bug SAMA (fillna prematur di adx()) saat audit ulang strength.py -- sudah difix juga. Kontaminasi murni ~12.6 poin (34%) di bar minimum, lebih parah drpd versi strength.py krn ewm."
             },
             "putaran_3_validasi_matematika": {
-              "status": "PENDING",
-              "catatan": null
+              "status": "CROSS_CHECKED_FIXED",
+              "catatan": "[Putaran ulang lebih dalam atas permintaan user] BUG SERIUS DITEMUKAN: _wilder_smooth() bersama (dipakai adx/atr/supertrend/keltner) masih pakai ewm(com=period-1, adjust=False) -- metodologi LAMA yg sudah terbukti salah & difix di RSI (indicators/momentum.py) dan di file ini sendiri utk _rsi_raw(), TAPI sengaja TIDAK diubah utk fungsi bersama ini dgn alasan tertulis 'ADX sudah diverifikasi cukup benar'. Klaim itu TERBUKTI SALAH: diuji ulang dgn data DEKAT bar minimum (bukan cuma bar banyak spt verifikasi lama) -- ADX meleset rata2 113% (maks 218%) pada 29 bar (persis MIN_BARS dokumentasi); ATR meleset rata2 ~10-12% (maks ~20%) pada 15-20 bar. Dampak: enrich_production() (dipakai fungsi ini) HANYA dipakai api_server.py utk dashboard diagnostic (/api/diagnosa) -- TIDAK dipakai jalur trading nyata (itu pakai indicators/*.py yg sudah benar) -- BUKAN risiko uang langsung, TAPI dashboard operator bisa menampilkan ADX/ATR sangat berbeda dari yg bot pakai, PALING PARAH justru di skenario paling kritis (koin baru/data tipis) -- operator kehilangan sanity-check yg semestinya bisa dipercaya. Fix: _wilder_smooth() diubah ke SMA-seeded (identik pola indicators/*.py & _rsi_raw), root-cause di fungsi bersama sehingga otomatis benerin ADX/ATR/Supertrend/Keltner sekaligus. REGRESI TERDETEKSI SAAT FIX: supertrend() ternyata berasumsi ATR selalu valid dari index 0 (loop rekursif final_ub[0]=raw_ub[0]) -- setelah _wilder_smooth SMA-seeded punya leading NaN, supertrend() korup (NaN merambat di rekursi, int(direction) exception). Fix tambahan: supertrend() sekarang mulai rekursi dari index valid pertama (pola identik indicators/trend.py _calculate_supertrend_raw yg sudah benar). keltner() dikonfirmasi AMAN (arithmetic sederhana, NaN propagate tanpa corrupt). TEST: self-test bawaan 57/57 PASS (sempat 1 gagal stlh fix pertama, diperbaiki). Verifikasi ulang ADX & ATR vs indicators/*.py di SEMUA bar count (termasuk minimum): exact match (0.000000%) setelah fix. Bollinger Bands & RSI & MACD dikonfirmasi konsisten juga. Regression simulate_test.py: 107 PASSED, 0 FAILED."
             },
             "putaran_4_kondisi_khusus": {
-              "status": "PENDING",
-              "catatan": null
+              "status": "CROSS_CHECKED_CLEAN",
+              "catatan": "Tidak ada state global bermasalah (df.ta accessor stateless per-panggilan). Self-test suite bawaan sudah cover banyak edge case (flat price, pure uptrend, dll)."
             },
             "putaran_5_regresi_akhir": {
-              "status": "PENDING",
-              "catatan": null
+              "status": "DONE",
+              "catatan": "Self-test 57/57 PASS + simulate_test.py 107 PASSED 0 FAILED."
             }
           }
         },

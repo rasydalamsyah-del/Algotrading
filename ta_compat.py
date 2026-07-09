@@ -139,8 +139,65 @@ def _ema_series(series: pd.Series, span: int) -> pd.Series:
 
 
 def _wilder_smooth(series: pd.Series, period: int) -> pd.Series:
-    """Wilder's smoothing — identik dengan ewm(com=period-1, adjust=False)."""
-    return series.ewm(com=period - 1, adjust=False).mean()
+    """
+    Wilder's smoothing — metodologi baku (Wilder 1978) / rma() TradingView:
+    seed = rata-rata SEDERHANA (SMA) dari `period` nilai valid pertama,
+    baru direkursi Wilder setelahnya.
+
+    [BUG-FIX -- ditemukan lewat verifikasi cross-file lebih dalam, 2026-07-09]
+    Sebelumnya fungsi ini pakai `series.ewm(com=period-1, adjust=False).mean()`
+    -- seed di bar PERTAMA (bukan SMA dari `period` nilai pertama). Ini PERSIS
+    bug yang sudah diidentifikasi & difix di indicators/momentum.py._calc_rsi,
+    indicators/strength.py._wilder_smooth, indicators/volatility.py._wilder_smooth
+    (semua "commit 05d7b50" & sesi verifikasi matematika independen RSI), DAN
+    di _rsi_raw() (docstring-nya sendiri di file ini menyebut fix ini eksplisit)
+    -- TAPI fungsi _wilder_smooth() BERSAMA ini (dipakai supertrend()/atr()/
+    keltner()/adx()) SENGAJA TIDAK diubah saat itu, dgn alasan tertulis "untuk
+    ADX sudah diverifikasi sebelumnya bahwa versi ewm cukup benar". Klaim itu
+    TERBUKTI SALAH setelah diverifikasi ulang dgn data DEKAT bar minimum
+    (bukan cuma bar banyak): ADX (4 lapis _wilder_smooth berantai: TR/+DM/-DM
+    lalu DX->ADX) meleset rata-rata 113% (maks 218%) pada 29 bar (persis
+    MIN_BARS dokumentasi ADX = period*2+1); ATR meleset rata-rata ~10-12%
+    (maks ~20%) pada 15-20 bar. Fungsi df.ta.enrich_production() (yang
+    memakai fungsi ini) HANYA dipakai api_server.py utk dashboard diagnostic
+    (/api/diagnosa) -- TIDAK dipakai jalur trading nyata (observer.py/
+    strategy.py/scorer.py pakai indicators/*.py yang sudah benar) -- jadi
+    BUKAN risiko uang langsung, TAPI dashboard operator bisa menampilkan
+    ADX/ATR yang sangat berbeda dari yang benar-benar dipakai bot utk
+    memutuskan trading, justru paling parah di skenario paling kritis
+    (koin baru listing / data tipis) -- operator kehilangan alat sanity-check
+    yang seharusnya bisa dipercaya. Fix: root-cause di fungsi bersama ini
+    (bukan cuma di ADX), otomatis benerin ATR/Supertrend/Keltner/ADX
+    sekaligus, konsisten dgn semua indicators/*.py.
+    """
+    result = np.full(len(series), np.nan)
+    arr    = series.values.astype(float)
+    n      = len(arr)
+
+    if n < period:
+        return pd.Series(result, index=series.index)
+
+    first_valid = 0
+    while first_valid < n and np.isnan(arr[first_valid]):
+        first_valid += 1
+
+    seed_idx = first_valid + period - 1
+    if seed_idx >= n:
+        return pd.Series(result, index=series.index)
+
+    window = arr[first_valid: first_valid + period]
+    if np.any(np.isnan(window)):
+        result[seed_idx] = np.nanmean(window)
+    else:
+        result[seed_idx] = float(np.mean(window))
+
+    for i in range(seed_idx + 1, n):
+        if np.isnan(result[i - 1]) or np.isnan(arr[i]):
+            result[i] = result[i - 1] if not np.isnan(result[i - 1]) else np.nan
+        else:
+            result[i] = (result[i - 1] * (period - 1) + arr[i]) / period
+
+    return pd.Series(result, index=series.index)
 
 
 def _true_range(df: pd.DataFrame) -> pd.Series:
@@ -189,11 +246,17 @@ def _rsi_raw(series: pd.Series, length: int) -> pd.Series:
     nyata) sudah diperbaiki ke SMA-seeded -- dashboard yang masih pakai
     metode lama akan menampilkan angka RSI yang BEDA dari yang benar-benar
     dipakai bot, persis risiko arsitektur yang sudah dikonfirmasi utk ADX
-    (commit 05d7b50). Fix scope SENGAJA dibatasi ke _rsi_raw() saja (dipakai
-    rsi() & stochrsi()), TIDAK mengubah _wilder_smooth() bersama yang juga
-    dipakai adx()/atr() -- untuk ADX sudah diverifikasi sebelumnya bahwa
-    versi ewm cukup benar setelah fix premature-fillna, jadi tidak diubah
-    lagi supaya tidak berisiko ke fungsi yang sudah diverifikasi.
+    (commit 05d7b50). Fungsi ini (_rsi_raw) sudah punya _sma_seeded_wilder
+    sendiri sejak awal (di bawah), independen dari _wilder_smooth() bersama.
+    [UPDATE 2026-07-09] _wilder_smooth() bersama (dipakai adx()/atr()/
+    supertrend()/keltner()) SEKARANG JUGA sudah difix ke SMA-seeded --
+    klaim lama "untuk ADX sudah diverifikasi cukup benar" TERBUKTI SALAH
+    setelah diverifikasi ulang dgn data dekat bar minimum (ADX meleset rata2
+    113%, maks 218% pada 29 bar). Lihat docstring _wilder_smooth() utk detail
+    lengkap. _rsi_raw() dan _wilder_smooth() sekarang PAKAI METODOLOGI YANG
+    SAMA (meski implementasinya duplikat terpisah, bukan dipanggil dari satu
+    fungsi bersama -- dipertahankan terpisah supaya tidak menambah risiko
+    perubahan struktural di luar scope fix ini).
     """
     delta = series.diff()
     gain  = delta.clip(lower=0)
@@ -498,21 +561,48 @@ class _TAAccessor:
         n     = len(close)
         atr   = _wilder_smooth(_true_range(df), length).to_numpy(dtype=float)
 
+        # [BUG-FIX -- ditemukan lewat regresi self-test setelah _wilder_smooth
+        # diperbaiki ke SMA-seeded, 2026-07-09] _wilder_smooth() SMA-seeded
+        # sekarang punya leading NaN (index 0..length-2) sebelum seed
+        # terbentuk -- BEDA dari versi ewm lama yang selalu punya nilai dari
+        # index 0 (walau kurang akurat di warm-up). Loop rekursif di bawah
+        # SEBELUMNYA berasumsi atr[0] selalu valid (final_ub[0] = raw_ub[0]),
+        # padahal skrg raw_ub[0..length-2] = NaN -- NaN merambat ke seluruh
+        # rekursi final_ub/final_lb selamanya (perbandingan dgn NaN selalu
+        # False, bukan exception, tapi hasil jadi rusak diam-diam), lalu
+        # int(direction[-1]) di caller (self-test) exception krn NaN->int
+        # tidak valid. Fix: mulai rekursi dari index VALID PERTAMA (bukan
+        # index 0), pola identik dgn indicators/trend.py
+        # _calculate_supertrend_raw yang sudah benar menangani ini
+        # (`start = period - 1`). Index sebelum start diisi NaN (belum ada
+        # sinyal, konsisten dgn semantik "data belum cukup").
+        first_valid = 0
+        while first_valid < n and np.isnan(atr[first_valid]):
+            first_valid += 1
+
         hl2    = (high + low) / 2.0
         raw_ub = hl2 + multiplier * atr
         raw_lb = hl2 - multiplier * atr
 
-        final_ub  = np.empty(n)
-        final_lb  = np.empty(n)
+        final_ub  = np.full(n, np.nan)
+        final_lb  = np.full(n, np.nan)
         direction = np.zeros(n, dtype=int)
-        st_line   = np.empty(n)
+        st_line   = np.full(n, np.nan)
 
-        final_ub[0] = raw_ub[0]
-        final_lb[0] = raw_lb[0]
-        direction[0] = 1
-        st_line[0]   = final_lb[0]
+        if first_valid >= n:
+            st  = pd.Series(st_line, index=df.index)
+            d   = pd.Series(direction.astype(float), index=df.index)
+            if append:
+                df[col_val] = st
+                df[col_dir] = d
+            return st, d
 
-        for i in range(1, n):
+        final_ub[first_valid] = raw_ub[first_valid]
+        final_lb[first_valid] = raw_lb[first_valid]
+        direction[first_valid] = 1
+        st_line[first_valid]   = final_lb[first_valid]
+
+        for i in range(first_valid + 1, n):
             final_ub[i] = (raw_ub[i]
                            if raw_ub[i] < final_ub[i-1] or close[i-1] > final_ub[i-1]
                            else final_ub[i-1])

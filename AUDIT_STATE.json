@@ -440,10 +440,11 @@
       "test": "Import sukses (validasi otomatis lulus, termasuk cross-check L1/L2 coverage). Regression simulate_test.py: 107 PASSED, 0 FAILED."
     },
     "ta_compat.py": {
-      "status": "DONE",
+      "status": "DONE_METODE_KETAT",
       "bug_fixed": [
         "ols_slope_v5_fix",
-        "loc_vs_iloc_datetimeindex"
+        "loc_vs_iloc_datetimeindex",
+        "wilder_smooth_ewm_vs_sma_seeded_adx_atr_supertrend_dashboard_discrepancy"
       ],
       "audit_level": "SERIUS",
       "putaran_2_reaudit_ketat_2026_07_07": {
