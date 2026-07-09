@@ -345,7 +345,15 @@ for label, df in [("BULL", df_bull), ("BEAR", df_bear), ("FLAT", df_range), ("VO
         iset = IndicatorSet(symbol="SOL/USDT", timeframe="15m")
         iset.momentum   = calculate_rsi_enhanced(df)
         iset.volatility = calculate_atr_enhanced(df)
-        iset.trend      = calculate_trend_indicators(df, df["close"].iloc[-1])
+        # [BUG-FIX] Sebelumnya calculate_trend_indicators(df, df["close"].iloc[-1])
+        # -- signature score_trend() sebenarnya (df, errors=None, timeframe="15m"),
+        # jadi harga current_price (numpy.float64) salah terkirim sebagai
+        # parameter `errors` (diharapkan list), menyebabkan AttributeError saat
+        # calculate_ema_stack(df, errors) mencoba errors.append(...). Ditemukan
+        # saat verifikasi regresi menyeluruh sesi ini (4/4 skenario BULL/BEAR/
+        # FLAT/VOLATILE gagal dgn error identik). score_trend tidak butuh
+        # current_price -- dihitung sendiri dari df secara internal.
+        iset.trend      = calculate_trend_indicators(df)
         iset.strength   = _str_all(df)
         iset.patterns   = _pat_score(df)
         iset.oscillators = calculate_oscillator_indicators(df)
