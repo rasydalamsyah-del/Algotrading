@@ -337,7 +337,25 @@ class VolumetricBreakoutStrategy(BaseStrategy):
         self._in_position:  Dict[str, bool]               = {s: False for s in symbols}
         self._pos_trackers: Dict[str, PositionTracker]    = {}
         self._profiles:     Dict[str, Optional[CoinProfile]] = {}
-        self._lock = threading.Lock()
+        # [BUG-FIX KRITIS -- DEADLOCK] Sebelumnya threading.Lock() biasa
+        # (non-reentrant). sync_position_state() memegang self._lock (baris
+        # ~554) lalu, MASIH DI DALAM lock yang sama, memanggil
+        # self._resolve_params() (baris ~575) yang JUGA mencoba
+        # `with self._lock:` -- thread yang sama mencoba mengambil lock yang
+        # sudah dipegangnya sendiri -> DEADLOCK PERMANEN (thread menunggu
+        # dirinya sendiri melepas lock, tidak akan pernah terjadi).
+        # sync_position_state dipanggil SYNCHRONOUS (bukan lewat executor,
+        # bukan di-await) langsung dari main.py setelah strategy dikonstruksi
+        # -- setiap kali bot restart dgn MINIMAL SATU posisi terbuka yang
+        # py_data-nya tersedia dari DB, seluruh proses startup bot akan
+        # menggantung selamanya di baris ini, bot TIDAK PERNAH benar-benar
+        # mulai jalan. Dibuktikan via eksperimen: thread terpisah yang
+        # memanggil sync_position_state() dgn 1 posisi terbuka tidak pernah
+        # selesai setelah 5 detik (deadlock nyata, bukan lambat). Fix:
+        # threading.RLock() (reentrant) -- thread yang sama boleh
+        # mengambil lock berkali-kali tanpa deadlock, tetap melindungi dari
+        # race antar-thread berbeda (worker thread Gate3 vs main thread).
+        self._lock = threading.RLock()
         self._pending_entry: Set[str] = set()
         self._last_entry_params: Dict[str, Dict] = {}
         self._last_regime: Dict[str, str] = {}

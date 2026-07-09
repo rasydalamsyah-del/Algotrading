@@ -604,16 +604,16 @@
           "fokus_cross_check": "File besar (1751 baris, 43 fungsi) — generate_signals, check_trailing_exit, SL/TP calculation. Cek SEMUA method dipanggil dari main.py dengan parameter yang benar (terutama df/confirmation_df/confirmation_timeframe di commander.process vs strategy.generate_signals langsung — dua jalur berbeda yang harus konsisten hasilnya).",
           "putaran": {
             "putaran_2_cross_check_dua_arah": {
-              "status": "PENDING",
-              "catatan": null
+              "status": "CROSS_CHECKED_FIXED",
+              "catatan": "2 bug ditemukan & difix: (1) DEADLOCK KRITIS -- self._lock non-reentrant + sync_position_state memanggil _resolve_params dari dalam lock yang sama -> startup bot menggantung permanen setiap restart dgn posisi terbuka. Fix: RLock. (2) refresh_profiles() dead code -> profil initial watchlist tidak pernah auto-classify. Fix: wire ke main.py _delayed_refresh. Semua 43 fungsi/method dibaca tuntas. Semua 23 titik self._lock dicek satu-satu utk pola nested-lock serupa (RLock menyelesaikan semua kategori ini sekaligus). Caller check_atg/score_signal/validate_and_apply/observe (sudah dicek di file2 sebelumnya hari ini) konsisten. Detail lengkap di AUDIT_STATE.json."
             },
             "putaran_3_validasi_matematika": {
-              "status": "PENDING",
-              "catatan": null
+              "status": "CROSS_CHECKED_CLEAN",
+              "catatan": "_compute_confidence: bobot 0.30 breakout + 0.25 volume + 0.20 rsi + 0.20 trend + 0.05 gc_bonus = 1.0 exact, clamped [0,1] -- konsisten. _compute_sl_tp_quick/wave, _detect_exit_mode, get_profit_zone (via trade_guardian, sudah dicek terpisah) semua formula sudah diverifikasi di audit lama (~10 skenario test) + dibaca ulang sekarang, tidak ada isu baru."
             },
             "putaran_4_kondisi_khusus": {
-              "status": "PENDING",
-              "catatan": null
+              "status": "CROSS_CHECKED_FIXED",
+              "catatan": "Deadlock (putaran 2) adalah temuan kondisi khusus concurrency paling signifikan di seluruh Tier 3. sentiment cache pakai asyncio.Lock dgn benar (dicek: cuma dipanggil dari coroutine yg di-await langsung, tidak pernah lewat run_in_executor -- beda kasus dgn state global lain yg butuh threading.Lock/RLock)."
             },
             "putaran_5_regresi_akhir": {
               "status": "PENDING",

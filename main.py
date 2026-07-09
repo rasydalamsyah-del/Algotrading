@@ -311,13 +311,32 @@ class TradingBot:
             len(self.config["universe_watchlist"]),
             len(self.config["universe_watchlist"]),
         )
-        # Refresh PROFILE_CACHE sekali setelah WS ready (30 detik)
+        # [BUG-FIX] Sebelumnya _delayed_refresh() cuma clear _PROFILE_CACHE
+        # (cache modul di profiles/registry.py) TANPA pernah memanggil
+        # self.strategy.refresh_profiles(). Akibatnya self.strategy._profiles
+        # (dict INSTANCE terpisah di strategy.py yang BENAR-BENAR dipakai di
+        # get_scored_signal/dsb utk scoring/threshold/SL-TP) tidak pernah
+        # ter-refresh -- tetap berisi profil hasil _load_profiles() SAAT
+        # __init__, ketika self._ws_feed masih None (strategy dikonstruksi
+        # SEBELUM self.strategy._ws_feed = self.ws_feed diinject, lihat baris
+        # ~384), sehingga auto_classify_profile() SELALU di-skip untuk SELURUH
+        # watchlist awal -- semua koin di luar ~30 manual_keys hardcoded
+        # jatuh ke profil konservatif default, PERMANEN, seumur hidup proses
+        # bot (tidak pernah dikoreksi lagi, krn tidak ada mekanisme lain yang
+        # me-refresh self._profiles utk symbol yang SUDAH ada di dict itu).
+        # Fix: panggil self.strategy.refresh_profiles() (method yang memang
+        # sudah ada & dirancang persis utk kasus ini -- clear _PROFILE_CACHE
+        # + auto-classified entries di _COIN_PROFILE_MAP, lalu _load_profiles()
+        # ulang dgn self._ws_feed yang sekarang sudah live) -- method ini
+        # sebelumnya ada tapi dead code (tidak pernah dipanggil dari manapun).
         async def _delayed_refresh():
             await asyncio.sleep(30)
-            if self.strategy:
-                from profiles.registry import _PROFILE_CACHE
-                _PROFILE_CACHE.clear()
-                log.info("Profile cache di-clear — akan di-rebuild dengan data ticker real")
+            if self.strategy and hasattr(self.strategy, "refresh_profiles"):
+                self.strategy.refresh_profiles()
+                log.info(
+                    "Profile strategy.py di-refresh — koin non-manual "
+                    "diklasifikasi ulang dengan data ticker real."
+                )
         asyncio.create_task(_delayed_refresh(), name="refresh_profiles")
 
         self.risk_manager = RiskManager(self.config, db=self.db)
