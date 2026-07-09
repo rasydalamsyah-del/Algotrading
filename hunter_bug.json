@@ -184,12 +184,12 @@
               "catatan": "1 bug baru: cross_ok hardcode True (bug integrasi antar sub-indikator score_trend), sudah difix + dites 20 skenario."
             },
             "putaran_3_validasi_matematika": {
-              "status": "PENDING",
-              "catatan": null
+              "status": "CROSS_CHECKED_CLEAN",
+              "catatan": "[Putaran ulang atas permintaan user -- verifikasi lebih dalam] calculate_ema_stack (EMA9/21/50/100/200 exact match vs pandas ewm standar), _calculate_supertrend_raw (verifikasi independen dgn multiplier fixed, exact match), calculate_vwap_multiday (VWAP + std-band diverifikasi independen -- formula deviasi dari ROLLING vwap per-titik waktu, bukan vwap akhir tunggal, exact match setelah eksperimen saya sendiri dikoreksi 2x), calculate_golden_dead_cross (anchor 50.0 di gap_pct=0 boundary terverifikasi persis). Semua CLEAN, cocok dgn referensi ditulis dari nol."
             },
             "putaran_4_kondisi_khusus": {
-              "status": "PENDING",
-              "catatan": null
+              "status": "CROSS_CHECKED_CLEAN",
+              "catatan": "score_trend exclusion logic (ema_ok/cross_ok/st_ok/vwap_ok) diuji dgn data 1-bar (semua invalid -> SCORE_NEUTRAL, benar) dan 3-bar (cuma vwap valid krn vwap cuma butuh >=2 bar beda dgn ema/cross/supertrend yg butuh lebih banyak -- composite=vwap_score murni, BUKAN bug, exclusion bekerja benar utk 3 komponen lain). Tidak ada state global di file ini (murni fungsional) -- tidak ada risiko race condition. Caller (observer.py score_trend, simulate_test.py) diverifikasi signature cocok."
             },
             "putaran_5_regresi_akhir": {
               "status": "PENDING",
