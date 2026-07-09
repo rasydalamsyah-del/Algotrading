@@ -66,12 +66,68 @@ def _ema(series: pd.Series, period: int) -> pd.Series:
 def _sma(series: pd.Series, period: int) -> pd.Series:
     return series.rolling(window=period, min_periods=period).mean()
 
+def _wilder_smooth(series: pd.Series, period: int) -> pd.Series:
+    """
+    [BUG-FIX -- keputusan desain, dikonfirmasi user setelah penjelasan
+    trade-off] Wilder smoothing SMA-seeded, textbook baku (Wilder 1978) --
+    pola sama persis dgn _wilder_smooth di strength.py/volatility.py
+    (sudah teruji lewat cross-check independen utk ADX, commit 05d7b50).
+    Seed = rata-rata SEDERHANA (SMA) dari `period` nilai valid pertama,
+    baru direkursi Wilder setelahnya. Ini JUGA metode yang dipakai
+    TradingView rma() (rujukan standar yang dipakai operator utk verifikasi
+    visual manual bot ini terhadap chart).
+    """
+    result = np.full(len(series), np.nan)
+    arr    = series.values.astype(float)
+    n      = len(arr)
+
+    if n < period:
+        return pd.Series(result, index=series.index)
+
+    first_valid = 0
+    while first_valid < n and np.isnan(arr[first_valid]):
+        first_valid += 1
+
+    seed_idx = first_valid + period - 1
+    if seed_idx >= n:
+        return pd.Series(result, index=series.index)
+
+    window = arr[first_valid: first_valid + period]
+    if np.any(np.isnan(window)):
+        result[seed_idx] = np.nanmean(window)
+    else:
+        result[seed_idx] = float(np.mean(window))
+
+    for i in range(seed_idx + 1, n):
+        if np.isnan(result[i - 1]) or np.isnan(arr[i]):
+            result[i] = result[i - 1] if not np.isnan(result[i - 1]) else np.nan
+        else:
+            result[i] = (result[i - 1] * (period - 1) + arr[i]) / period
+
+    return pd.Series(result, index=series.index)
+
 def _calc_rsi(close: pd.Series, period: int = 14) -> pd.Series:
     delta    = close.diff()
     gain     = delta.clip(lower=0)
     loss     = (-delta).clip(lower=0)
-    avg_gain = gain.ewm(com=period - 1, adjust=False).mean()
-    avg_loss = loss.ewm(com=period - 1, adjust=False).mean()
+    # [BUG-FIX -- keputusan desain, dikonfirmasi user setelah verifikasi
+    # matematika independen] Sebelumnya avg_gain/avg_loss pakai
+    # `ewm(com=period-1, adjust=False)` -- ini rekursi Wilder tapi SEED-nya
+    # dipasang di bar PERTAMA (gain[0]/loss[0] itu sendiri), BUKAN rata-rata
+    # `period` nilai pertama seperti metodologi Wilder baku ("New Concepts
+    # in Technical Trading Systems", 1978) maupun rma() TradingView (rujukan
+    # yang dipakai operator utk verifikasi visual manual). Dibuktikan lewat
+    # implementasi independen: di batas bar minimum RSI (16 bar) deviasi
+    # bisa sampai 46.7%; bahkan di gerbang produksi (MIN_CANDLES_FOR_
+    # INDICATORS=60 bar di observer.py) deviasi rata2 ~0.5 poin, maks ~1.7
+    # poin -- kecil tapi TIDAK nol, paling berpengaruh justru di momen
+    # paling kritis (koin baru listing / bot baru restart, data masih
+    # tipis). Fix: pakai _wilder_smooth (SMA-seeded) -- pola sama yang
+    # sudah diterapkan & diverifikasi utk ADX (strength.py, commit
+    # 05d7b50) -- supaya konsisten dgn definisi baku & bisa diverifikasi
+    # visual terhadap TradingView/exchange chart.
+    avg_gain = _wilder_smooth(gain, period)
+    avg_loss = _wilder_smooth(loss, period)
 
     avg_loss_safe = avg_loss.replace(0.0, np.nan)
     rs = (avg_gain / avg_loss_safe).replace([np.inf, -np.inf], np.nan)

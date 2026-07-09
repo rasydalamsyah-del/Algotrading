@@ -60,6 +60,14 @@
           "Cross-check ke intelligence/observer.py: shared_rsi_series period=14 konsisten dipakai momentum.py DAN strength.py, tidak ada mismatch"
         ],
         "status": "DONE_RE_AUDIT_TUNTAS (1 bug ditemukan & difix + dites, 17/17 fungsi tercakup eksperimen langsung)"
+      },
+      "putaran_ulang_metode_ketat_2026_07_09": {
+        "konteks": "Verifikasi matematika independen RSI (_calc_rsi) vs implementasi textbook Wilder RSI (SMA-seeded) ditulis dari nol -- kelanjutan metode yang menemukan bug ADX (commit 05d7b50).",
+        "temuan": "_calc_rsi pakai ewm(com=period-1, adjust=False) -- seed di bar pertama (bukan SMA dari period nilai pertama seperti definisi Wilder baku / rma() TradingView). Di batas bar minimum internal (16 bar) deviasi bisa 46.7%; di gerbang produksi (60 bar, observer.py) deviasi lebih kecil (rata2 ~0.5 poin, maks ~1.7 poin) tapi TIDAK nol. BUKAN bug coding (bukan pola falsy/fillna), tapi penyimpangan terukur dari definisi baku -- dikonfirmasi via web search bahwa TradingView rma() (rujukan verifikasi visual operator) pakai SMA-seeded Wilder.",
+        "keputusan": "Setelah dijelaskan trade-off ke user (verifiability vs TradingView/exchange chart, konsistensi dgn fix ADX, biaya fix rendah) -- user memutuskan ganti ke SMA-seeded Wilder, samakan definisi baku.",
+        "fix": "_calc_rsi diganti dari ewm-based ke _wilder_smooth (SMA-seeded, pola sama persis dgn fix ADX di strength.py). Dicek juga strength.py -- ternyata lazy-import _calc_rsi langsung dari momentum.py (bukan implementasi terpisah), jadi fix otomatis konsisten di kedua tempat, diverifikasi eksperimen.",
+        "bukti": "8/8 eksperimen PASS: cocok PERSIS (diff=0.0000000000) dgn implementasi textbook independen di semua bar, titik seed yg dulu deviasi 46.7% sekarang persis 0, regresi flat/up/down price masih benar (RSI 50/100/0), min_bars guard (16 bar) masih valid, full pipeline score_momentum tidak crash, dan score_strength (pemakai bersama rsi_series) hasilnya konsisten sama persis dgn/tanpa shared rsi_series.",
+        "status": "DONE_METHODOLOGY_ALIGNED_WITH_STANDARD"
       }
     },
     "indicators/orderbook.py": {

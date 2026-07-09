@@ -218,6 +218,13 @@
               "status": "PENDING",
               "catatan": null
             }
+          },
+          "putaran_ulang_metode_ketat": {
+            "2026_07_09_rsi_wilder_seed_alignment": {
+              "apa_yang_dicek": "Cross-check matematika RSI vs implementasi textbook independen (SMA-seeded Wilder), sama seperti metode yg menemukan bug ADX.",
+              "hasil": "Bukan bug coding, tapi deviasi metodologi terukur dari definisi baku. User memutuskan align ke SMA-seeded Wilder (matching TradingView rma()) setelah penjelasan trade-off. Fix diterapkan, 8/8 eksperimen PASS, konsisten dgn strength.py (lazy-import sama).",
+              "status": "FIXED_DESIGN_DECISION"
+            }
           }
         },
         {
