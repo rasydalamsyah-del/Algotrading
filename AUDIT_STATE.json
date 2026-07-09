@@ -504,7 +504,7 @@
       ]
     },
     "exchange.py": {
-      "status": "DONE",
+      "status": "DONE_METODE_KETAT",
       "bug_fixed": [
         "websocketfeed_init_symbols_none_crash",
         "websocketfeed_missing_get_orderbook_tambahan",
@@ -561,7 +561,11 @@
           "residual_belum_dites_dengan_justifikasi": "disconnect(), start() (task-spawning wrapper), __init__ kedua class, _stale_threshold, get_price/get_orderbook/get_current_spread_pct/get_feed_status (trivial getter satu-baris), _poll_one_ticker, auto_scan_and_populate (orkestrator yg manggil fungsi2 yang SUDAH dites), serta retry-loop INTERNAL _watch_ticker/_watch_orderbook/_poll_orderbooks_rest (pola retry/backoff-nya STRUKTURAL IDENTIK dengan _watch_tickers_all yang sudah dites self-healing-nya, dan _retry yang sudah dites 4 skenario terpisah) -- diputuskan tidak dites ulang terpisah karena kompleksitas rendah/pola sudah diverifikasi di tempat lain, bukan diabaikan tanpa alasan. Dilaporkan jujur ke user, bukan diklaim '100% selesai'.",
           "dead_code_ditemukan": "get_min_order_cost() tidak dipanggil di mana pun (verified via grep) -- bukan bug, cuma catatan."
         }
-      }
+      },
+      "catatan_investigasi": [
+        "[Re-verifikasi Tier 1, 2026-07-09] File dibaca ulang tuntas 1116 baris (50 fungsi, file terbesar Tier 1). Verifikasi via 6 eksperimen independen: (1) WebSocketFeed(symbols=None) tidak crash, self.symbols/self._ticker_dead ter-guard jadi [] / {} dgn benar; (2) get_market_depth_slippage weighted-avg-fill-price matematika benar (awalnya kelihatan mismatch 100.1661 vs 100.1667 di tes saya, ternyata kesalahan formula referensi SAYA SENDIRI -- fill_qty level kedua BUKAN 0.5 tapi 50/100.5, dikoreksi, exact match); (3) _retry(retries=0) menghasilkan RuntimeError jelas, bukan TypeError 'raise None' lama; (4) _stale_threshold scaling dgn jumlah symbol (50 symbol->120, 1 symbol->30) benar; (5) add_symbols tidak membuat WS ticker task duplikat saat mode multiplexed aktif (fix resource-leak lama dikonfirmasi). Semua klaim fix dalam dokumentasi lama (symbols=None crash, WS self-healing restart, save_universe_json parameter salah 100x, auto_scan_and_populate blocking call fix via run_in_executor, get_orderbook method hilang) dikonfirmasi masih ada & benar via baca kode langsung. Tidak ada state global mutable module-level (_STABLES/_LEVERAGE/_UNIVERSE_FILE semua read-only konstanta) -- kelas utama instance-based, tidak ada risiko race condition."
+      ],
+      "test": "6 eksperimen independen (symbols=None, market depth slippage, retry fallback, stale threshold, add_symbols no-duplicate) -- semua PASS setelah 1 kesalahan test saya sendiri dikoreksi. Regression simulate_test.py: 107 PASSED, 0 FAILED (tidak ada kode diubah)."
     },
     "execution.py": {
       "status": "DONE_METODE_KETAT",
