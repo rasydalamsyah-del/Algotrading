@@ -1027,22 +1027,34 @@ def score_structure(df: pd.DataFrame, errors: Optional[List[str]] = None):
     # [v2] Redistribusi bobot setelah menambah market_structure & donchian:
     # Ichimoku=0.25, MarketStructure=0.20 (paling langsung mencerminkan price-action
     # structure), SAR=0.15, Pivot=0.15, Donchian=0.15, Fib=0.10
-    valid_count = sum([
-        result.ichimoku_score          != 50.0,
-        result.sar_score               != 50.0,
-        result.pivot_score             != 50.0,
-        result.fib_score                != 50.0,
-        result.market_structure_score   != 50.0,
-        result.donchian_score           != 50.0,
-    ])
-    if valid_count > 0:
-        result.composite_score = clamp_score(
-            result.ichimoku_score         * 0.25
-            + result.market_structure_score * 0.20
-            + result.sar_score             * 0.15
-            + result.pivot_score           * 0.15
-            + result.donchian_score        * 0.15
-            + result.fib_score              * 0.10
-        )
+    #
+    # [BUG-FIX -- pola sama dgn cross_ok (trend.py) & exclude+renormalize
+    # (oscillators.py) yg sudah difix sebelumnya] Sebelumnya `valid_count`
+    # cuma dipakai sbg gerbang all-or-nothing (`if valid_count > 0`), BUKAN
+    # utk mengecualikan+menormalisasi ulang bobot komponen yg default ke
+    # neutral 50.0 krn data tidak cukup (mis. df cuma 25 bar -> Ichimoku
+    # butuh 78 bar, Donchian butuh 20, dst -- otomatis fallback 50.0).
+    # Komponen yg DEFAULT ini tetap ikut dihitung bobot PENUH seolah-olah
+    # nilai 50.0 itu sinyal netral yg nyata, mengencerkan sinyal asli dari
+    # komponen yg benar-benar berhasil dihitung. Dibuktikan lewat eksperimen:
+    # df 3 bar (cuma cukup utk SAR & Pivot) -> sar_score=79.5 (bullish kuat),
+    # tapi composite_score cuma 52.925 (nyaris netral) krn 4 komponen lain
+    # yg default 50.0 (bobot gabungan 0.70) tetap dihitung penuh. Fix:
+    # deteksi validitas tiap komponen dari field MENTAH-nya (bukan tebak
+    # dari skor == 50.0, yg ambigu -- skor yg BENAR-BENAR dihitung pun bisa
+    # kebetulan persis 50.0, mis. score_donchian pct_b=0.5 -> 50.0 exact),
+    # lalu exclude+renormalize seperti pola score_oscillators.
+    weighted_components = [
+        (result.ichimoku_score,         0.25, result.tenkan is not None),
+        (result.market_structure_score, 0.20, result.trend_structure not in (None, "undefined")),
+        (result.sar_score,              0.15, result.sar_value is not None),
+        (result.pivot_score,            0.15, result.pivot is not None),
+        (result.donchian_score,         0.15, result.donchian_upper is not None),
+        (result.fib_score,              0.10, result.fib_swing_high is not None),
+    ]
+    available_weight = sum(w for _, w, ok in weighted_components if ok)
+    if available_weight > 0:
+        weighted_sum = sum(score * w for score, w, ok in weighted_components if ok)
+        result.composite_score = clamp_score(weighted_sum / available_weight)
 
     return result

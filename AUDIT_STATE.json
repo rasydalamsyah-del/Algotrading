@@ -173,11 +173,43 @@
       }
     },
     "indicators/structure.py": {
-      "status": "DONE",
+      "status": "DONE_METODE_KETAT",
       "bug_fixed": [
         "ichimoku_pivot_pandas3x"
       ],
-      "audit_level": "SERIUS"
+      "audit_level": "SERIUS",
+      "putaran_ulang_metode_ketat_2026_07_09": {
+        "konteks": "Audit total pertama dgn metode ketat utk indicators/structure.py (1048 baris, 21 fungsi: Ichimoku, Parabolic SAR, Pivot Points, Fibonacci, Market Structure HH/HL/LH/LL+BOS/CHoCH, S/R Zone Clustering, Donchian Channel). File ini sebelumnya sudah pernah diaudit di sesi lampau (changelog v2/v2.1 internal) tapi belum pernah dengan metode BAGIAN 6.5 (verifikasi matematika independen + eksperimen pembuktian).",
+        "bug_ditemukan_dan_difix": {
+          "lokasi": "score_structure() -- composite_score akhir (baris ~1026-1049)",
+          "masalah": "Pola sama persis dengan cross_ok (trend.py) & exclude+renormalize (oscillators.py) yang sudah difix sebelumnya. valid_count cuma dipakai sebagai gerbang all-or-nothing (if valid_count>0), BUKAN untuk exclude+renormalize bobot komponen yang default ke neutral 50.0 karena data tidak cukup (misal Ichimoku butuh 78 bar, Donchian butuh 20 bar). Komponen yang default tetap dihitung bobot PENUH, mengencerkan sinyal asli.",
+          "bukti": "df 3 bar (cuma cukup untuk SAR & Pivot) -> sar_score=79.5 (bullish kuat), tapi composite_score SEBELUM fix cuma 52.925 (nyaris netral) karena 4 komponen default (bobot gabungan 0.70) ikut dihitung penuh. SETELAH fix: composite=59.75 (weighted avg SAR+Pivot only, exclude+renormalize) -- jauh lebih representatif.",
+          "fix": "Deteksi validitas tiap komponen dari field mentah (result.tenkan is not None, dst -- bukan tebak dari skor==50.0 yang ambigu karena skor VALID pun bisa kebetulan persis 50.0), lalu exclude+renormalize seperti pola score_oscillators.",
+          "verifikasi": "6/6 eksperimen PASS: fix utama terbukti, data lengkap (semua 6 valid) identik dengan formula lama (regresi aman), edge case kosong/1-bar tidak crash, skor yang kebetulan persis 50.0 tapi VALID tetap ikut dihitung (beda dari bug lama yang ambigu)."
+        },
+        "formula_diverifikasi_independen_semua_clean": [
+          "Ichimoku Cloud (Tenkan/Kijun/Senkou A&B) -- 9/9 PASS, termasuk verifikasi klaim changelog v2 (_midpoint pakai low.min(), bukan high dobel)",
+          "Parabolic SAR (Wilder 1978) -- 3/3 PASS, 20 trial random trending&choppy + reversal event",
+          "Pivot Points (Classic Daily) + _previous_calendar_day_ohlc/_ticks_per_day -- 12/12 PASS, termasuk verifikasi ulang klaim changelog v2.1 (fix dtype pandas datetime64[us]) vs resample(\"1D\") ground truth di environment pandas 3.0.2 aktual",
+          "Fibonacci Retracement + fractal swing detection -- 10/11 relevan PASS (1 gagal karena tes sendiri salah asumsi soal fractal edge-case, dikoreksi terbuka)",
+          "Market Structure (HH/HL/LH/LL + BOS/CHoCH) -- 6/6 PASS, fitur BARU tanpa referensi textbook, diverifikasi via implementasi independen dari definisi di docstring sendiri",
+          "S/R Zone Clustering -- 9/9 PASS termasuk stress-test 50 trial untuk klaim must-have zone selalu traceable (0 kegagalan dari 100 pengecekan)",
+          "Donchian Channel -- clean, formula & edge case (min_bars, flat price) semua benar"
+        ],
+        "temuan_arsitektur_didokumentasikan_bukan_difix": {
+          "judul": "market_structure_score & donchian_score setengah tersambung ke pipeline keputusan",
+          "detail": "Ada 2 jalur terpisah tempat skor structure dipakai: (1) _compute_tf_score (observer.py) pakai structure.composite_score (SEMUA 6 sub-skor, sudah difix exclude+renormalize) dengan bobot 0.07 -> masuk primary_tf_score/confirmation_tf_score -> dipakai untuk gerbang MTF di strategy.py + komponen confidence di scorer.py. (2) compute_category_score (scorer.py -> profiles/weights.py LEVEL2_WEIGHTS structure) CUMA berisi 4 kunci: ichimoku/sar/pivot/fibonacci -- di SEMUA 6 profil trading, tanpa terkecuali. market_structure_score & donchian_score TIDAK PERNAH masuk ke jalur ini, yang menghasilkan breakdown.structure_raw -> dibobot LEVEL1_WEIGHTS -> jadi bagian total_score yang dibandingkan ke threshold untuk KEPUTUSAN TRIGGER UTAMA.",
+          "dampak": "market_structure_score (bobot internal 0.20) & donchian_score (bobot internal 0.15) mempengaruhi gerbang MTF tapi TIDAK mempengaruhi keputusan trigger/entry utama -- meski keduanya ditandai NEW dan dideskripsikan sebagai indikator struktur paling literal di changelog.",
+          "keputusan": "DIDISKUSIKAN dengan user (bukan bug, tapi rebalancing L2_WEIGHTS 6 profil sekaligus -- keputusan berdampak P&L nyata tanpa data backtest untuk validasi). User memutuskan TIDAK mengubah sekarang (opsi konservatif) -- alasan: (1) menyangkut uang nyata tanpa bukti backtest bahwa rebalancing memperbaiki bukan memperburuk performa, (2) 4 indikator lama kemungkinan sudah battle-tested vs 2 baru yang mungkin sengaja belum diintegrasikan sampai cukup teruji, (3) sudah ada mitigasi parsial via gerbang MTF, (4) konsisten dengan mandat audit ini (fix bug root-cause, bukan redesign fitur yang sudah benar sesuai definisinya).",
+          "rekomendasi_jika_mau_diubah_nanti": "Kalau suatu saat mau diintegrasikan penuh ke LEVEL2_WEIGHTS, WAJIB backtest historis dulu untuk validasi dampak P&L per profile, bukan cuma penalaran kode. Jangan ubah bobot trigger utama berdasarkan analisis statis semata."
+        },
+        "jalur_penghubung_diverifikasi": [
+          "score_structure() dipanggil observer.py (jalur produksi) dan simulate_test.py (test)",
+          "Field lama (nearest_support/nearest_resistance, pivot-only) dikonfirmasi masih dipakai database.py/api_server.py/telegram_bot.py/scorer.py/validator.py TANPA regresi (klaim changelog konsumen existing tidak terdampak terverifikasi benar)",
+          "Field baru nearest_structure_support/resistance (S/R zone clustering) dikonfirmasi terpakai benar di validator.py dengan semantik dan nama field yang cocok"
+        ],
+        "status": "DONE_1_BUG_FIXED_1_TEMUAN_ARSITEKTUR_DIDOKUMENTASIKAN"
+      }
     },
     "indicators/trend.py": {
       "status": "DONE",

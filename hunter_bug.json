@@ -355,6 +355,13 @@
               "status": "PENDING",
               "catatan": null
             }
+          },
+          "putaran_ulang_metode_ketat": {
+            "2026_07_09_full_audit": {
+              "apa_yang_dicek": "Audit total pertama dengan metode ketat: semua 21 fungsi dibaca tuntas, 7 formula/fitur diverifikasi matematika independen (Ichimoku, SAR, Pivot, Fibonacci, Market Structure, SR Zones, Donchian), jalur penghubung ke caller (observer.py, validator.py, scorer.py, database.py, api_server.py, telegram_bot.py) dicek.",
+              "hasil": "1 bug ditemukan & difix (composite_score tidak exclude+renormalize, pola sama dengan cross_ok/oscillators). 1 temuan arsitektur didokumentasikan (market_structure_score & donchian_score tidak masuk LEVEL2_WEIGHTS, jadi tidak mempengaruhi keputusan trigger utama meski mempengaruhi gerbang MTF) -- didiskusikan dengan user, diputuskan TIDAK diubah tanpa backtest.",
+              "status": "CROSS_CHECKED_FIXED"
+            }
           }
         },
         {
