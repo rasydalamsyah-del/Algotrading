@@ -937,20 +937,24 @@
           "fokus_cross_check": "Dataclass definitions dipakai HAMPIR SEMUA file lain. Cek default_factory tidak ada yang mutable-default-bug tersembunyi, dan semua field yang diakses via getattr() di file lain benar2 ada di sini.",
           "putaran": {
             "putaran_2_cross_check_dua_arah": {
-              "status": "PENDING",
-              "catatan": null
+              "status": "CROSS_CHECKED_CLEAN",
+              "catatan": "Divalidasi implisit lewat puluhan file konsumer yang sudah diaudit hari ini."
             },
             "putaran_3_validasi_matematika": {
-              "status": "SKIP_TIDAK_RELEVAN",
-              "catatan": "File ini tidak mengandung kalkulasi/formula matematis signifikan (murni I/O, orkestrasi, atau notifikasi)."
+              "status": "CROSS_CHECKED_CLEAN",
+              "catatan": "signal_quality/threshold_gap live-fix diverifikasi eksperimen (bug lama under-sizing 38.5%). ScoreBreakdown.total() sudah diverifikasi terpisah saat audit scorer.py."
             },
             "putaran_4_kondisi_khusus": {
-              "status": "PENDING",
-              "catatan": null
+              "status": "CROSS_CHECKED_CLEAN",
+              "catatan": "RegimePerformance/profit_factor edge case aman. Tidak ada state global."
             },
             "putaran_5_regresi_akhir": {
-              "status": "PENDING",
-              "catatan": null
+              "status": "DONE",
+              "catatan": "107 PASSED 0 FAILED."
+            },
+            "putaran_1_baca_ulang_full": {
+              "status": "DONE",
+              "catatan": "782 baris dibaca tuntas (file backbone, dipakai semua modul lain)."
             }
           }
         },

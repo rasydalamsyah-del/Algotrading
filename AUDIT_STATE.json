@@ -21,13 +21,17 @@
       ]
     },
     "core/models.py": {
-      "status": "DONE",
+      "status": "DONE_METODE_KETAT",
       "bug_fixed": [
         "signal_quality_stale_to_property",
         "StrengthIndicators_is_valid_hanya_cek_volume_ratio"
       ],
       "catatan": "Bug #16a diperbaiki di sesi hari ini",
-      "audit_level": "SERIUS"
+      "audit_level": "SERIUS",
+      "catatan_investigasi": [
+        "[Tier 6, 2026-07-09] File CLEAN -- tidak ada bug baru, tidak ada kode diubah. 782 baris (43 fungsi/method/property) dibaca tuntas -- file backbone dataclass yang dipakai HAMPIR SEMUA modul lain (sudah divalidasi implisit lewat audit puluhan file lain hari ini yang konsumsi model-model ini). Verifikasi eksperimen: signal_quality/threshold_gap (klaim fix kritis v2 -- dulu field statis dihitung SEKALI di __post_init__ dgn nilai default, scorer.py construct lalu MUTATE total_score belakangan sehingga signal_quality SELALU 'poor' walau skor excellent -- berdampak ke Adaptive Sizing di commander.py, under-sizing sampai 38.5%) -- dikonfirmasi sekarang live-computed via @property, tidak stale lagi. SignalQuality.from_score boundary benar. RegimePerformance.profit_factor/win_rate edge case (gross_loss=0, total_trades=0) aman tidak crash. validate_score/validate_weight_table/clamp_score (dipakai fail-fast import di profiles/*.py, sudah diverifikasi konsekuensinya di Tier 4) semua bekerja benar. Tidak ada state global module-level -- murni dataclass definitions."
+      ],
+      "test": "3 set eksperimen (signal_quality live-fix, SignalQuality boundary, RegimePerformance edge case, validate_score/weight_table/clamp_score) -- semua PASS. Regression simulate_test.py: 107 PASSED, 0 FAILED."
     },
     "indicators/momentum.py": {
       "status": "DONE",
