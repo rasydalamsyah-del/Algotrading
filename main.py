@@ -2540,6 +2540,17 @@ class TradingBot:
             if price > 0 else 0
         )
 
+        # [BUG-FIX -- pasangan fix di risk.py] Ambil minimum order REAL
+        # per-symbol dari exchange (get_min_order_cost, sudah ada di
+        # exchange.py sejak awal tapi tidak pernah dipakai) dan oper ke
+        # evaluate_order supaya validasi tidak cuma pakai config generik
+        # min_order_value_usdt yang sama utk semua symbol.
+        _exchange_min_cost = None
+        try:
+            _exchange_min_cost = self.exchange.get_min_order_cost(symbol)
+        except Exception:
+            pass
+
         assessment = await self.risk_manager.evaluate_order(
             symbol=symbol,
             side="buy",
@@ -2548,6 +2559,7 @@ class TradingBot:
             stop_loss=signal.stop_loss,
             take_profit=signal.take_profit,
             atr=atr,
+            exchange_min_cost=_exchange_min_cost,
         )
 
         if not assessment.is_approved:

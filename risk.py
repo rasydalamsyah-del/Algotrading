@@ -387,12 +387,14 @@ class RiskManager:
         take_profit: Optional[float] = None,
         atr:         Optional[float] = None,
         free_coin_balance: Optional[float] = None,
+        exchange_min_cost: Optional[float] = None,
     ) -> RiskAssessment:
         async with self._evaluate_lock:
             return await self._evaluate_order_locked(
                 symbol=symbol, side=side, price=price, quantity=quantity,
                 stop_loss=stop_loss, take_profit=take_profit, atr=atr,
                 free_coin_balance=free_coin_balance,
+                exchange_min_cost=exchange_min_cost,
             )
 
     async def _evaluate_order_locked(
@@ -405,6 +407,7 @@ class RiskManager:
         take_profit: Optional[float] = None,
         atr:         Optional[float] = None,
         free_coin_balance: Optional[float] = None,
+        exchange_min_cost: Optional[float] = None,
     ) -> RiskAssessment:
 
         if self._halted:
@@ -492,10 +495,31 @@ class RiskManager:
             )
 
         order_value = approved_size * price
-        if order_value < self._min_order_value_usdt:
+        # [BUG-FIX -- ditemukan lewat sapuan dead-code] Sebelumnya cuma cek
+        # thd self._min_order_value_usdt -- nilai KONFIG GENERIK yang SAMA
+        # utk semua symbol (default $10), BUKAN minimum order REAL per-symbol
+        # di exchange (exchange.get_min_order_cost(symbol), yang bisa beda-
+        # beda tiap pair -- exchange.py sudah punya fungsi ini sejak awal,
+        # TAPI tidak pernah dipanggil dari manapun). Kalau minimum riil
+        # exchange utk suatu symbol LEBIH TINGGI dari config generik (mis.
+        # exchange minta $15 tapi config bilang $10 cukup), order bisa LOLOS
+        # validasi risk.py tapi DITOLAK exchange saat eksekusi nyata --
+        # kegagalan order diam-diam yang mestinya bisa dicegah lebih awal.
+        # Fix: pakai nilai MAKSIMUM dari keduanya (caller boleh oper
+        # exchange_min_cost, opsional & backward-compatible -- kalau tidak
+        # dioper, perilaku identik dgn sebelumnya).
+        effective_min = self._min_order_value_usdt
+        if exchange_min_cost is not None and exchange_min_cost > effective_min:
+            effective_min = exchange_min_cost
+        if order_value < effective_min:
             return RiskAssessment(
                 RiskDecision.REJECTED,
-                f"Order value ${order_value:.4f} < minimum ${self._min_order_value_usdt}",
+                f"Order value ${order_value:.4f} < minimum ${effective_min:.4f}"
+                + (
+                    f" (exchange min=${exchange_min_cost:.4f})"
+                    if exchange_min_cost is not None and exchange_min_cost > self._min_order_value_usdt
+                    else ""
+                ),
             )
 
         if side == "buy" and order_value > self._free_balance * 0.99:
