@@ -1723,6 +1723,29 @@ def create_app(bot_getter) -> FastAPI:
             "Manual emergency close from dashboard",
         )
 
+        # [BUG-FIX -- ditemukan lewat sapuan dead-code] notifier.notify_panic()
+        # adalah notifikasi KHUSUS panic-button (detail: posisi ditemukan/
+        # berhasil ditutup/gagal) dgn parameter yg PERSIS cocok dgn data yang
+        # sudah dihitung di atas (len(positions), closed_count, failed) --
+        # tapi TIDAK PERNAH dipanggil dari endpoint ini sejak awal (grep
+        # seluruh repo: nol referensi lain). halt_trading() di atas HANYA
+        # mengubah state internal risk_manager; notifikasi Telegram/email yg
+        # BENAR-BENAR terkirim ke operator soal event halt ini baru terjadi
+        # scr TIDAK LANGSUNG lewat notify_bot_halted() di _refresh_portfolio()
+        # (siklus 15 menit, SNAPSHOT_INTERVAL) -- bisa telat sampai 15 menit
+        # DAN cuma berisi alasan halt generik, bukan rincian panic-close yg
+        # sebenarnya (berapa posisi ketemu/berhasil/gagal). Utk aksi darurat
+        # sekritis panic button, operator seharusnya dapat konfirmasi detail
+        # SEGERA, bukan generik & telat. Fix: panggil notify_panic() langsung.
+        try:
+            await b.notifier.notify_panic(
+                positions_found=len(positions),
+                closed_count=closed_count,
+                failed_symbols=failed,
+            )
+        except Exception as _np_err:
+            log.warning("notify_panic gagal terkirim (non-fatal): %s", _np_err)
+
         return {
             "status":          "panic_executed",
             "positions_found": len(positions),

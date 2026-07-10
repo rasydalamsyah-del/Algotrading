@@ -229,6 +229,22 @@ class MetaLearner:
             lookback_days,
         )
 
+        # [BUG-FIX -- ditemukan lewat sapuan dead-code] expire_old_suggestions()
+        # (menandai suggestion PENDING yang sudah > max_age_hours jadi EXPIRED)
+        # tidak pernah dipanggil dari manapun sejak awal. Akibatnya suggestion
+        # pending lama menumpuk selamanya di dashboard/Telegram (tidak salah
+        # secara fungsional -- operator tetap bisa approve/reject manual --
+        # tapi jadi clutter, dan operator bisa approve suggestion yang datanya
+        # sudah sangat basi tanpa sadar itu seharusnya sudah expired). Fix:
+        # panggil di awal tiap full cycle (dipanggil periodik dari
+        # run_analytics_loop, jadi otomatis rutin tanpa perlu loop terpisah).
+        try:
+            _n_expired = await self.expire_old_suggestions()
+            if _n_expired:
+                log.info("MetaLearner: %d suggestion pending kadaluarsa di-expire.", _n_expired)
+        except Exception as _exp_err:
+            log.warning("expire_old_suggestions gagal (non-fatal): %s", _exp_err)
+
         report = await self._analytics.compute_attribution(
             lookback_days=lookback_days,
             symbol=symbol,

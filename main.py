@@ -536,6 +536,16 @@ class TradingBot:
                 )
                 mode = self.config.get("meta_learner_mode", "advisory")
                 log.info("Meta-learner: AKTIF (mode=%s)", mode)
+                # [BUG-FIX -- ditemukan lewat sapuan dead-code] initialize()
+                # (yang me-load cooling-off cache dari DB via
+                # _load_cooling_from_db) tidak pernah dipanggil dari manapun
+                # sejak awal. self._cooling_cache selalu mulai KOSONG setiap
+                # restart -- cooldown period utk suggestion weight_/
+                # disable_regime_ yang aktif dari sesi SEBELUMNYA hilang
+                # diam-diam, meta-learner bisa langsung re-suggest/re-apply
+                # perubahan parameter berisiko yang seharusnya masih dalam
+                # masa tunggu. Fix: panggil initialize() sekali di sini.
+                await self._meta_learner.initialize()
                 await self.db.save_log(
                     "INFO", "main",
                     f"Meta-learner aktif | mode={mode} | "
