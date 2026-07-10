@@ -339,9 +339,14 @@ async def _gate_kelly_sizing(
 
     if kelly_inputs is None:
         decision.kelly_method_used = "fallback_insufficient_data"
-        decision.add_gate_passed(f"G5_KELLY_FALLBACK(size={base_size_pct:.2f}%)")
+        # [BUG-FIX] base_size_pct sebelumnya dikembalikan mentah tanpa cap,
+        # bisa jauh melebihi KELLY_MAX_SIZE_PCT (pernah tercatat 720.72%
+        # saat trade pertama tanpa histori). Clamp sama seperti jalur
+        # normal supaya konsisten dan aman.
+        capped_size = min(base_size_pct, KELLY_MAX_SIZE_PCT)
+        decision.add_gate_passed(f"G5_KELLY_FALLBACK(size={capped_size:.2f}%)")
         decision.kelly_fraction = None
-        return base_size_pct
+        return capped_size
 
     win_rate, avg_win, avg_loss = kelly_inputs
     kelly_size, method = _calc_kelly_size(

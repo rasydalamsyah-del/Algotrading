@@ -2664,35 +2664,36 @@ class TradingBot:
             except (ValueError, IndexError) as e:
                 log.warning("Gagal parse iceberg_avg_price: %s — fallback executed_price %.8f", e, entry_price)
 
-        try:
-            await self.db.upsert_position(symbol, {
-                "entry_time":        datetime.now(timezone.utc).replace(tzinfo=None),
-                "entry_price":       round(entry_price, 8),
-                "current_price":     round(entry_price, 8),
-                "amount":            round(actual_amount, 8),
-                "side":              "long",
-                "is_open":           True,
-                "is_closing":        False,
-                "stop_loss_price":   assessment.stop_loss,
-                "take_profit_price": assessment.take_profit,
-                "atr_at_entry":      round(float(atr), 8) if atr else None,
-                "strategy_name":     signal.strategy,
-                "entry_order_id":    trade.order_id,
-                "entry_regime":      signal.regime.value if hasattr(signal.regime, "value") else str(signal.regime or "undefined"),
-            })
+        async with self._equity_lock:
+            try:
+                await self.db.upsert_position(symbol, {
+                    "entry_time":        datetime.now(timezone.utc).replace(tzinfo=None),
+                    "entry_price":       round(entry_price, 8),
+                    "current_price":     round(entry_price, 8),
+                    "amount":            round(actual_amount, 8),
+                    "side":              "long",
+                    "is_open":           True,
+                    "is_closing":        False,
+                    "stop_loss_price":   assessment.stop_loss,
+                    "take_profit_price": assessment.take_profit,
+                    "atr_at_entry":      round(float(atr), 8) if atr else None,
+                    "strategy_name":     signal.strategy,
+                    "entry_order_id":    trade.order_id,
+                    "entry_regime":      signal.regime.value if hasattr(signal.regime, "value") else str(signal.regime or "undefined"),
+                })
 
-            entry_fee_actual = float(trade.fee_cost or 0)
-            if entry_fee_actual > 0:
-                try:
-                    await self.db.update_position_entry_fee(symbol, entry_fee_actual)
-                    log.info("Entry fee aktual disimpan: %s fee=%.8f", symbol, entry_fee_actual)
-                except Exception as e:
-                    log.warning("Gagal simpan entry fee aktual %s: %s", symbol, e)
+                entry_fee_actual = float(trade.fee_cost or 0)
+                if entry_fee_actual > 0:
+                    try:
+                        await self.db.update_position_entry_fee(symbol, entry_fee_actual)
+                        log.info("Entry fee aktual disimpan: %s fee=%.8f", symbol, entry_fee_actual)
+                    except Exception as e:
+                        log.warning("Gagal simpan entry fee aktual %s: %s", symbol, e)
 
-        except Exception as e:
-            log.error("upsert_position gagal untuk %s: %s — reset flag", symbol, e)
-            _reset_position_flag()
-            raise
+            except Exception as e:
+                log.error("upsert_position gagal untuk %s: %s — reset flag", symbol, e)
+                _reset_position_flag()
+                raise
 
         # [BUG-FIX — root cause] Hubungkan SignalScore yang memicu entry ini
         # ke Trade yang baru dibuat. Sebelumnya related_trade_id TIDAK PERNAH
@@ -3103,106 +3104,107 @@ class TradingBot:
     async def _refresh_portfolio(self) -> None:
         import time as _t
         self._last_refresh_time = _t.monotonic()
-        try:
-            balance = await self.exchange.fetch_balance()
-            quote   = self.config["quote_currency"]
+        async with self._equity_lock:
+            try:
+                balance = await self.exchange.fetch_balance()
+                quote   = self.config["quote_currency"]
 
-            free_bal, locked_bal, total_bal = self.exchange.parse_balance(balance, quote)
-            positions  = await self.db.get_open_positions()
+                free_bal, locked_bal, total_bal = self.exchange.parse_balance(balance, quote)
+                positions  = await self.db.get_open_positions()
 
-            position_value_in_quote = 0.0
-            open_pnl = 0.0
-            for p in positions:
-                current_price = float(p.current_price or p.entry_price or 0.0)
-                if current_price > 0 and p.amount:
-                    position_value_in_quote += float(p.amount) * current_price
-                open_pnl += p.unrealized_pnl or 0.0
+                position_value_in_quote = 0.0
+                open_pnl = 0.0
+                for p in positions:
+                    current_price = float(p.current_price or p.entry_price or 0.0)
+                    if current_price > 0 and p.amount:
+                        position_value_in_quote += float(p.amount) * current_price
+                    open_pnl += p.unrealized_pnl or 0.0
 
-            total_eq = free_bal + position_value_in_quote
+                total_eq = free_bal + position_value_in_quote
 
-            log.debug(
-                "Equity calc: USDT_total=%.4f pos_value=%.4f → total_eq=%.4f "
-                "(free=%.4f locked=%.4f open_pnl=%.4f)",
-                total_bal, position_value_in_quote, total_eq,
-                free_bal, locked_bal, open_pnl,
-            )
+                log.debug(
+                    "Equity calc: USDT_total=%.4f pos_value=%.4f → total_eq=%.4f "
+                    "(free=%.4f locked=%.4f open_pnl=%.4f)",
+                    total_bal, position_value_in_quote, total_eq,
+                    free_bal, locked_bal, open_pnl,
+                )
 
-            prev_eq = self.portfolio_state.get("total_equity", 0.0)
-            if prev_eq > 0:
-                change_pct = abs(total_eq - prev_eq) / prev_eq * 100
-                if change_pct > 20:
-                    log.warning(
-                        "Equity jump mencurigakan: %.4f → %.4f (%.1f%%) — "
-                        "periksa kalkulasi balance",
-                        prev_eq, total_eq, change_pct,
+                prev_eq = self.portfolio_state.get("total_equity", 0.0)
+                if prev_eq > 0:
+                    change_pct = abs(total_eq - prev_eq) / prev_eq * 100
+                    if change_pct > 20:
+                        log.warning(
+                            "Equity jump mencurigakan: %.4f → %.4f (%.1f%%) — "
+                            "periksa kalkulasi balance",
+                            prev_eq, total_eq, change_pct,
+                        )
+
+                eq_day_start = self.risk_manager.equity_at_day_start
+                if eq_day_start > 0:
+                    daily_pnl     = total_eq - eq_day_start
+                    daily_pnl_pct = daily_pnl / eq_day_start * 100
+                else:
+                    daily_pnl     = 0.0
+                    daily_pnl_pct = 0.0
+
+                self.portfolio_state = {
+                    "total_equity":   round(total_eq,      4),
+                    "free_balance":   round(free_bal,      4),
+                    "locked_balance": round(locked_bal,    4),
+                    "open_pnl":       round(open_pnl,      4),
+                    "daily_pnl":      round(daily_pnl,     4),
+                    "daily_pnl_pct":  round(daily_pnl_pct, 4),
+                }
+
+                self.config["portfolio_value"] = total_eq
+                prev_halted = self.risk_manager.is_halted
+                avg_atr_pct = 0.0
+                if positions:
+                    atr_vals = [
+                        (p.atr_at_entry / p.entry_price * 100)
+                        for p in positions
+                        if p.atr_at_entry and p.entry_price and p.entry_price > 0
+                    ]
+                    avg_atr_pct = sum(atr_vals) / len(atr_vals) if atr_vals else 0.0
+
+                self.risk_manager.update_portfolio_state(
+                    equity=total_eq,
+                    initial_equity=self.config["initial_capital"],
+                    free_balance=free_bal,
+                    open_positions_count=len(positions),
+                    atr_pct=avg_atr_pct,
+                )
+
+                if not prev_halted and self.risk_manager.is_halted:
+                    await self.notifier.notify_bot_halted(
+                        reason=self.risk_manager._halt_reason.value,
+                        detail=self.risk_manager._halt_detail,
                     )
 
-            eq_day_start = self.risk_manager.equity_at_day_start
-            if eq_day_start > 0:
-                daily_pnl     = total_eq - eq_day_start
-                daily_pnl_pct = daily_pnl / eq_day_start * 100
-            else:
-                daily_pnl     = 0.0
-                daily_pnl_pct = 0.0
+                await self.db.save_snapshot({
+                    "timestamp":      datetime.now(timezone.utc).replace(tzinfo=None),
+                    "total_equity":   round(total_eq,      4),
+                    "free_balance":   round(free_bal,      4),
+                    "locked_balance": round(locked_bal,    4),
+                    "open_pnl":       round(open_pnl,      4),
+                    "daily_pnl":      round(daily_pnl,     4),
+                    "daily_pnl_pct":  round(daily_pnl_pct, 4),
+                    "drawdown_pct":   round(self.risk_manager.current_drawdown_pct, 4),
+                })
 
-            self.portfolio_state = {
-                "total_equity":   round(total_eq,      4),
-                "free_balance":   round(free_bal,      4),
-                "locked_balance": round(locked_bal,    4),
-                "open_pnl":       round(open_pnl,      4),
-                "daily_pnl":      round(daily_pnl,     4),
-                "daily_pnl_pct":  round(daily_pnl_pct, 4),
-            }
+                # Rolling balance check
+                _min_abs = float(os.getenv("MIN_BALANCE_USDT", "10.0"))
+                _required = max(self.config["initial_capital"] * 0.1, _min_abs)
+                if free_bal < _required:
+                    _warn = (
+                        f"[PortfolioRefresh] WARNING: Free balance ${free_bal:.2f} "
+                        f"< minimum ${_required:.2f} — bot mungkin tidak bisa entry order baru."
+                    )
+                    log.warning(_warn)
+                    await self.notifier.notify_error("portfolio_refresh", _warn)
 
-            self.config["portfolio_value"] = total_eq
-            prev_halted = self.risk_manager.is_halted
-            avg_atr_pct = 0.0
-            if positions:
-                atr_vals = [
-                    (p.atr_at_entry / p.entry_price * 100)
-                    for p in positions
-                    if p.atr_at_entry and p.entry_price and p.entry_price > 0
-                ]
-                avg_atr_pct = sum(atr_vals) / len(atr_vals) if atr_vals else 0.0
-
-            self.risk_manager.update_portfolio_state(
-                equity=total_eq,
-                initial_equity=self.config["initial_capital"],
-                free_balance=free_bal,
-                open_positions_count=len(positions),
-                atr_pct=avg_atr_pct,
-            )
-
-            if not prev_halted and self.risk_manager.is_halted:
-                await self.notifier.notify_bot_halted(
-                    reason=self.risk_manager._halt_reason.value,
-                    detail=self.risk_manager._halt_detail,
-                )
-
-            await self.db.save_snapshot({
-                "timestamp":      datetime.now(timezone.utc).replace(tzinfo=None),
-                "total_equity":   round(total_eq,      4),
-                "free_balance":   round(free_bal,      4),
-                "locked_balance": round(locked_bal,    4),
-                "open_pnl":       round(open_pnl,      4),
-                "daily_pnl":      round(daily_pnl,     4),
-                "daily_pnl_pct":  round(daily_pnl_pct, 4),
-                "drawdown_pct":   round(self.risk_manager.current_drawdown_pct, 4),
-            })
-
-            # Rolling balance check
-            _min_abs = float(os.getenv("MIN_BALANCE_USDT", "10.0"))
-            _required = max(self.config["initial_capital"] * 0.1, _min_abs)
-            if free_bal < _required:
-                _warn = (
-                    f"[PortfolioRefresh] WARNING: Free balance ${free_bal:.2f} "
-                    f"< minimum ${_required:.2f} — bot mungkin tidak bisa entry order baru."
-                )
-                log.warning(_warn)
-                await self.notifier.notify_error("portfolio_refresh", _warn)
-
-        except Exception as e:
-            log.error("Portfolio refresh error: %s", e, exc_info=True)
+            except Exception as e:
+                log.error("Portfolio refresh error: %s", e, exc_info=True)
 
     async def _on_trade_executed(self, trade) -> None:
         import time as _t

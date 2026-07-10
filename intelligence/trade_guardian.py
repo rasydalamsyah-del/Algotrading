@@ -135,8 +135,13 @@ def get_profit_zone_sl(
         return None
     peak_pct = (highest_price - entry_price) / entry_price * 100.0
 
-    if   peak_pct <  1.0: zone_sl = None
-    elif peak_pct <  3.0: zone_sl = round(entry_price * 1.0010, 8)
+    # [TUNING] Dilonggarkan dari 1.0/1.0010 — sebelumnya SL terlalu ketat
+    # (gap cuma +0.1% dari entry begitu peak nyentuh 1%), gampang kena
+    # micro-dip/noise wajar sebelum harga lanjut naik jauh lebih tinggi
+    # (kasus nyata: AIGENSYN peak 1.15% -> SL naik ke +0.1%, kena stop,
+    # padahal harga lanjut naik sampai +4.7% tak lama setelahnya).
+    if   peak_pct <  1.5: zone_sl = None
+    elif peak_pct <  3.0: zone_sl = round(entry_price * 1.0060, 8)
     elif peak_pct <  5.0: zone_sl = round(entry_price * (1 + peak_pct * 0.50 / 100), 8)
     elif peak_pct <  8.0: zone_sl = round(entry_price * (1 + peak_pct * 0.60 / 100), 8)
     else:                 zone_sl = round(entry_price * (1 + peak_pct * 0.70 / 100), 8)

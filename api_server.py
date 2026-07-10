@@ -953,9 +953,11 @@ def create_app(bot_getter) -> FastAPI:
                 )
 
                 observation = None
-                if hasattr(b, "observer") and b.observer:
+                strat = getattr(b, "strategy", None)
+                obs = getattr(strat, "_observer", None) if strat else None
+                if obs:
                     try:
-                        observation = await b.observer.get_cached_observation(symbol, tf)
+                        observation = await obs.get_cached_observation(symbol, tf)
                     except Exception:
                         pass
 
@@ -1886,8 +1888,10 @@ def create_app(bot_getter) -> FastAPI:
                 indicators = {}
                 conf_tf_data = {}
                 try:
-                    if hasattr(b, "observer") and b.observer:
-                        observation = await b.observer.get_cached_observation(symbol, tf_primary)
+                    strat = getattr(b, "strategy", None)
+                    obs = getattr(strat, "_observer", None) if strat else None
+                    if obs:
+                        observation = await obs.get_cached_observation(symbol, tf_primary)
                         if observation and observation.primary_tf_indicators:
                             ind = observation.primary_tf_indicators
                             if ind.trend:
