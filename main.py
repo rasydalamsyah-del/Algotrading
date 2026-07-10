@@ -182,6 +182,17 @@ class TradingBot:
             "api_secret":            os.getenv("API_SECRET", ""),
             "api_passphrase":        os.getenv("API_PASSPHRASE", ""),
             "testnet":               os.getenv("TESTNET", "true").lower() == "true",
+            # [FITUR BARU -- PAPER TRADING MODE, 2026-07-10] Beda dari TESTNET
+            # (yg konek ke server sandbox Binance dgn dana virtual DAN data
+            # BUKAN dari pasar asli). Mode ini konek ke exchange ASLI (data
+            # pasar 100% riil) tapi order TIDAK PERNAH benar-benar dikirim --
+            # disimulasikan pakai harga pasar riil saat itu. Default False
+            # (backward compatible, tidak mengubah perilaku existing).
+            # WAJIB pakai API key dgn izin TRADING DIMATIKAN di exchange utk
+            # lapis keamanan kedua (defense-in-depth) -- kalau ada bug di kode
+            # simulasi ini, exchange sendiri yang menolak order, bukan cuma
+            # mengandalkan kode ini benar.
+            "paper_trading_mode":    os.getenv("PAPER_TRADING_MODE", "false").lower() == "true",
             "quote_currency":        os.getenv("QUOTE_CURRENCY", "USDT"),
             "initial_capital":       float(os.getenv("INITIAL_CAPITAL", "1000")),
             "max_open_positions":    int(os.getenv("MAX_OPEN_POSITIONS", "3")),
@@ -296,7 +307,17 @@ class TradingBot:
             api_passphrase=self.config.get("api_passphrase", ""),
             testnet=self.config["testnet"],
             db=self.db,
+            paper_trading=self.config.get("paper_trading_mode", False),
         )
+        if self.config.get("paper_trading_mode", False):
+            log.warning(
+                "=" * 70 + "\n"
+                "📝 PAPER TRADING MODE — data pasar ASLI, order TIDAK dikirim "
+                "ke exchange.\nSemua trade tercatat ke database seperti biasa "
+                "(order_id berawalan 'PAPER-').\nPASTIKAN API key yang dipakai "
+                "TIDAK punya izin trading aktif di exchange\nsebagai lapis "
+                "keamanan kedua.\n" + "=" * 70
+            )
         connected = await self.exchange.connect()
         if not connected:
             log.critical("Exchange connection FAILED.")
@@ -3241,7 +3262,7 @@ class TradingBot:
                                 "[ConfigWatcher] Executor max_slippage_pct diperbarui: %.4f%%",
                                 self.config["max_slippage_pct"],
                             )
-                        if any(k in applied for k in ["api_key","api_secret","exchange_id","testnet"]):
+                        if any(k in applied for k in ["api_key","api_secret","exchange_id","testnet","paper_trading_mode"]):
                             try:
                                 log.info("[ConfigWatcher] Validasi credential baru sebelum reinit...")
                                 _test_exchange = ExchangeConnector(
@@ -3251,6 +3272,7 @@ class TradingBot:
                                     api_passphrase=self.config.get("api_passphrase", ""),
                                     testnet=self.config["testnet"],
                                     db=self.db,
+                                    paper_trading=self.config.get("paper_trading_mode", False),
                                 )
                                 _test_ok = await _test_exchange.connect()
                                 if not _test_ok:
@@ -3268,6 +3290,7 @@ class TradingBot:
                                     api_passphrase=self.config.get("api_passphrase", ""),
                                     testnet=self.config["testnet"],
                                     db=self.db,
+                                    paper_trading=self.config.get("paper_trading_mode", False),
                                 )
                                 connected = await self.exchange.connect()
                                 if connected:

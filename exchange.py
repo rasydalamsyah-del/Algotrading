@@ -9,6 +9,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
+import uuid
 from datetime import datetime, timezone
 from typing import Optional, Callable, Dict, Any, List, Tuple
 
@@ -30,10 +31,25 @@ class ExchangeConnector:
         testnet:             bool  = True,
         requests_per_second: float = 5.0,
         db=None,
+        paper_trading:       bool  = False,
     ):
-        self.exchange_id = exchange_id
-        self.testnet     = testnet
-        self.db          = db
+        self.exchange_id   = exchange_id
+        self.testnet       = testnet
+        self.db            = db
+        # [FITUR BARU -- PAPER TRADING MODE, 2026-07-10] Kalau True: data pasar
+        # (ticker/orderbook/candle/fee) TETAP 100% ASLI dari exchange (dibaca
+        # normal, tidak disentuh sama sekali) -- TAPI create_order()/cancel_order()
+        # TIDAK PERNAH benar-benar dikirim ke exchange. Order disimulasikan pakai
+        # harga pasar RIIL saat itu (dari fetch_ticker asli), diberi ID unik
+        # berawalan "PAPER-" supaya jelas terlihat di log/DB, dan disimpan
+        # in-memory (self._paper_orders) supaya fetch_order() bisa
+        # mengembalikan status yang konsisten. TIDAK ADA jalur di sini yang bisa
+        # membuat create_order/cancel_order asli terpanggil ketika paper_trading
+        # True -- lihat create_order()/cancel_order() di bawah, keduanya
+        # return LEBIH AWAL (early return) sebelum baris manapun yang menyentuh
+        # self._ex.create_order/self._ex.cancel_order.
+        self.paper_trading = paper_trading
+        self._paper_orders: Dict[str, Dict] = {}
         self._throttler  = Throttler(
             rate_limit=int(requests_per_second), period=1.0
         )
@@ -62,6 +78,15 @@ class ExchangeConnector:
                 log.warning(
                     "Exchange %s has no sandbox mode.", exchange_id
                 )
+
+        if self.paper_trading:
+            log.warning(
+                "📝 PAPER TRADING MODE AKTIF — data pasar 100%% ASLI (harga/"
+                "orderbook/fee dari exchange sungguhan), TAPI order TIDAK "
+                "PERNAH benar-benar dikirim ke exchange. Semua order "
+                "disimulasikan pakai harga pasar riil saat itu. "
+                "Order ID disimulasi selalu berawalan 'PAPER-'."
+            )
 
         self.is_connected: bool       = False
         self._markets: Dict[str, Any] = {}
@@ -222,6 +247,17 @@ class ExchangeConnector:
         if price is not None:
             price = self.price_to_precision(symbol, price)
 
+        # [PAPER TRADING] Early return SEBELUM baris manapun yang menyentuh
+        # self._ex.create_order -- order TIDAK PERNAH mencapai exchange asli
+        # kalau paper_trading=True. Ini SATU-SATUNYA percabangan yang
+        # mengontrol perilaku ini di seluruh fungsi (mudah diverifikasi/
+        # diaudit -- tidak ada logika lanjutan setelah blok if ini yang bisa
+        # "lolos" ke exchange asli).
+        if self.paper_trading:
+            return await self._simulate_order_fill(
+                symbol, order_type, side, amount, price,
+            )
+
         t0 = time.monotonic()
         async with self._throttler:
             log.info(
@@ -236,7 +272,75 @@ class ExchangeConnector:
         await self._log_lat("create_order", t0)
         return result or {}
 
+    async def _simulate_order_fill(
+        self,
+        symbol:     str,
+        order_type: str,
+        side:       str,
+        amount:     float,
+        price:      Optional[float],
+    ) -> Dict:
+        """[PAPER TRADING] Simulasikan fill order pakai harga pasar RIIL
+        (fetch_ticker asli, read-only, tidak pernah menyentuh endpoint order).
+
+        Untuk order "market": fill di best ask (buy) / best bid (sell) harga
+        SAAT INI dari exchange sungguhan.
+        Untuk order "limit" (dipakai execution.py sbg marketable-limit
+        fallback, harga sengaja sedikit di atas/bawah pasar spy pasti fill):
+        fill di harga yang LEBIH BAIK utk trader antara harga pasar riil dan
+        limit price -- persis meniru perilaku marketable-limit order asli.
+        """
+        ticker = await self.fetch_ticker(symbol)  # data ASLI, read-only
+        bid = float(ticker.get("bid") or ticker.get("last") or price or 0.0)
+        ask = float(ticker.get("ask") or ticker.get("last") or price or 0.0)
+
+        if order_type == "market" or price is None:
+            fill_price = ask if side == "buy" else bid
+        else:
+            # marketable-limit: fill di harga terbaik yg masih memenuhi limit
+            fill_price = min(ask, price) if side == "buy" else max(bid, price)
+
+        fill_price = self.price_to_precision(symbol, fill_price) or fill_price
+        order_id = f"PAPER-{uuid.uuid4().hex[:16]}"
+        now_iso = datetime.now(timezone.utc).isoformat()
+
+        order = {
+            "id":        order_id,
+            "symbol":    symbol,
+            "type":      order_type,
+            "side":      side,
+            "status":    "closed",       # paper order selalu langsung "terisi"
+            "amount":    amount,
+            "filled":    amount,
+            "remaining": 0.0,
+            "average":   fill_price,
+            "price":     fill_price,
+            "cost":      amount * fill_price,
+            "fee":       None,           # fee dihitung terpisah via get_taker_fee (data asli)
+            "timestamp": int(time.time() * 1000),
+            "datetime":  now_iso,
+            "info":      {"paper_trading": True, "note": "Simulated fill, no real order sent."},
+        }
+        self._paper_orders[order_id] = order
+
+        log.warning(
+            "📝 [PAPER ORDER] %s %s %s | amount=%.8f @ %.8f (harga pasar RIIL "
+            "saat simulasi) | id=%s — TIDAK dikirim ke exchange asli.",
+            symbol, side.upper(), order_type, amount, fill_price, order_id,
+        )
+        return dict(order)
+
     async def cancel_order(self, order_id: str, symbol: str) -> Dict:
+        if self.paper_trading or str(order_id).startswith("PAPER-"):
+            existing = self._paper_orders.get(order_id)
+            if existing is not None:
+                existing = dict(existing)
+                existing["status"] = "canceled"
+                self._paper_orders[order_id] = existing
+                log.warning("📝 [PAPER ORDER] cancel disimulasikan: %s", order_id)
+                return existing
+            return {"id": order_id, "status": "canceled", "info": {"paper_trading": True}}
+
         t0 = time.monotonic()
         async with self._throttler:
             result = await self._retry(
@@ -246,6 +350,24 @@ class ExchangeConnector:
         return result or {}
 
     async def fetch_order(self, order_id: str, symbol: str) -> Dict:
+        # [PAPER TRADING] Order simulasi tidak pernah ada di exchange asli --
+        # kalau order_id ini hasil simulasi kita (awalan "PAPER-" atau memang
+        # tercatat di self._paper_orders), jawab dari catatan in-memory kita
+        # sendiri, JANGAN pernah query exchange asli utk order_id yang jelas
+        # tidak akan pernah ditemukan di sana.
+        if str(order_id).startswith("PAPER-") or order_id in self._paper_orders:
+            existing = self._paper_orders.get(order_id)
+            if existing is not None:
+                return dict(existing)
+            # Order simulasi yang entah kenapa tidak tercatat (seharusnya
+            # tidak pernah terjadi) -- jangan pernah lanjut ke exchange asli.
+            log.error(
+                "📝 [PAPER ORDER] fetch_order utk id=%s tidak ditemukan di "
+                "catatan simulasi -- mengembalikan status unknown, BUKAN "
+                "query ke exchange asli.", order_id,
+            )
+            return {"id": order_id, "status": "unknown", "info": {"paper_trading": True}}
+
         t0 = time.monotonic()
         async with self._throttler:
             result = await self._retry(

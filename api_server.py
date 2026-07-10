@@ -1828,6 +1828,7 @@ def create_app(bot_getter) -> FastAPI:
                 "api_key","api_secret","api_passphrase","testnet","initial_capital",
                 "min_order_value_usdt","max_slippage_pct",
                 "rsi_min","rsi_max","lookback_candles",
+                "paper_trading_mode",
             ]
             updates = {k: v for k, v in payload.items() if k in allowed}
             if not updates:

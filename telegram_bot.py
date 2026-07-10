@@ -1770,7 +1770,7 @@ async def cmd_setconfig() -> None:
     value = parts[2].strip()
     allowed_int   = ["max_open_positions","lookback_candles","rsi_min","rsi_max"]
     allowed_float = ["max_drawdown_pct","risk_per_trade_pct","daily_loss_limit_pct","stop_loss_pct","take_profit_pct","trailing_atr_mult","atr_multiplier_sl","atr_multiplier_tp","initial_capital","max_position_size_pct","max_slippage_pct","min_order_value_usdt"]
-    allowed_bool  = ["testnet","use_trailing_stop","telegram_enabled"]
+    allowed_bool  = ["testnet","use_trailing_stop","telegram_enabled","paper_trading_mode"]
     allowed_list  = ["universe_watchlist"]
     allowed_str   = ["exchange_id","api_key","api_secret","api_passphrase","telegram_bot_token","telegram_chat_id"]
     all_allowed   = allowed_int + allowed_float + allowed_bool + allowed_list + allowed_str
