@@ -1083,20 +1083,24 @@
           "fokus_cross_check": "Fokus HANYA ke titik-titik integrasi dengan file yang baru saja di-cross-check ulang di tier 1-6 — apakah ada bug baru yang muncul akibat fix di file lain (mis. signature berubah, field baru yang belum dibaca main.py).",
           "putaran": {
             "putaran_2_cross_check_dua_arah": {
-              "status": "PENDING",
-              "catatan": null
+              "status": "CROSS_CHECKED_CLEAN",
+              "catatan": "Semua signature pemanggilan cross-file diverifikasi manual terhadap implementasi asli: commander.decide(), get_coin_profile(override_profile=), WhaleDetector.analyze(), upsert_universe_override() di ShadowTrade (dikonfirmasi BENAR, kontras dgn bug yg ditemukan di api_server.py). Semua 10 background task loop (scanner, gate3_worker, portfolio, sl_tp, daily_summary, analytics, coin_swap, config_watcher, strategy_loop, position_sync) diverifikasi terdaftar & konsisten di run()."
             },
             "putaran_3_validasi_matematika": {
-              "status": "PENDING",
-              "catatan": null
+              "status": "CROSS_CHECKED_CLEAN",
+              "catatan": "PnL calc (gross_pnl, entry_fee, exit_fee, realized_pnl) pakai actual execution values (trade.filled/executed_price) dgn fallback benar. Equity calc (free+position_value) konsisten. Kelly ceiling sizing (cuma bisa mengurangi, tidak menaikkan approved_size) diverifikasi via baca kode logic."
             },
             "putaran_4_kondisi_khusus": {
-              "status": "PENDING",
-              "catatan": null
+              "status": "CROSS_CHECKED_CLEAN",
+              "catatan": "Window reset _daily_summary_sent (minute==0 vs polling 60s) diselidiki via simulasi 1000 hari dgn drift realistis -- robust, bukan risiko praktis. Semua lock (_closing_lock, _equity_lock, strategy._lock RLock) dipakai konsisten & benar di semua titik akses state bersama. Tidak ada state global module-level."
             },
             "putaran_5_regresi_akhir": {
-              "status": "PENDING",
-              "catatan": null
+              "status": "DONE",
+              "catatan": "107 PASSED 0 FAILED. SELURUH TIER 1-7 SEKARANG TUNTAS."
+            },
+            "putaran_1_baca_ulang_full": {
+              "status": "DONE",
+              "catatan": "3431 baris dibaca tuntas dari awal sampai akhir (file terakhir seluruh audit)."
             }
           }
         }
