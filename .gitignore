@@ -12,3 +12,4 @@ data/*.db
 *.bak
 venv/
 .venv/
+data/
