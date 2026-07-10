@@ -6,6 +6,7 @@ AlgoTrader Pro v7.0 — "The Intelligence Pipeline"
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 from datetime import datetime, timezone
@@ -73,6 +74,25 @@ class Trade(Base):
 class Position(Base):
     __tablename__ = "positions"
 
+    # [CATATAN -- ditemukan lewat investigasi race condition mendalam,
+    # 2026-07-10] Tidak ada UNIQUE constraint formal di level DB utk
+    # (symbol, is_open) -- artinya secara TEORI dua row "open" utk symbol
+    # yang sama bisa ada sekaligus kalau upsert_position() dipanggil BENAR2
+    # bersamaan utk symbol baru yang sama. Saat ini ini TIDAK exploitable di
+    # produksi krn 2 lapis perlindungan: (1) SQLite (mode default proyek ini)
+    # secara inheren single-writer -- transaksi tulis diserialisasi otomatis
+    # (dibuktikan via eksperimen: 5 upsert_position() bersamaan utk symbol
+    # baru tetap hasilkan cuma 1 row); (2) dedup level aplikasi
+    # (_pipeline_active/_queued_symbols di main.py run_gate3_worker, sudah
+    # diverifikasi terpisah) mencegah symbol yang sama diproses 2 worker
+    # sekaligus. TAPI kalau proyek ini suatu saat pindah ke PostgreSQL (sudah
+    # didukung sbg opsi via _pg flag) yang mengizinkan writer konkuren
+    # sungguhan, jaminan (1) di atas TIDAK berlaku lagi -- cuma tersisa
+    # jaminan (2) di level aplikasi. Rekomendasi: pertimbangkan partial
+    # unique index (mis. `UNIQUE(symbol) WHERE is_open=true`) sbg jaminan
+    # keras di level DB, tidak cuma bergantung pada disiplin kode aplikasi.
+    # Belum diimplementasikan di sini krn perubahan skema perlu keputusan &
+    # migrasi data yang disengaja, bukan cuma bug-fix murni.
     id                  = Column(Integer, primary_key=True, autoincrement=True)
     symbol              = Column(String(32), nullable=False, index=True)
     entry_time          = Column(DateTime,   nullable=False)
@@ -430,20 +450,79 @@ class DatabaseManager:
             log.error("clear_bot_state(%s) error: %s", key, e)
 
     async def save_trade(self, trade_data: dict) -> Trade:
-        async with self._session() as s:
-            try:
-                trade = Trade(**trade_data)
-                s.add(trade)
-                await s.commit()
-                await s.refresh(trade)
-                return trade
-            except IntegrityError:
-                await s.rollback()
-                log.warning("save_trade: duplikat order_id=%s — skip insert, ambil existing.", trade_data.get("order_id"))
-                result = await s.execute(
-                    select(Trade).where(Trade.order_id == trade_data["order_id"])
-                )
-                return result.scalar_one()
+        # [BUG-FIX -- KRITIS, ditemukan lewat uji concurrency NYATA (asyncio.gather,
+        # bukan sekuensial), 2026-07-10] Sebelumnya: coba INSERT, kalau IntegrityError
+        # (order_id duplikat) langsung SELECT utk ambil row existing via .scalar_one()
+        # (yang RAISE NoResultFound kalau tidak ketemu). Di bawah concurrency SUNGGUHAN
+        # (bukan cuma pemanggilan sekuensial berturut yg SEBELUMNYA sudah diverifikasi
+        # aman), ini TERBUKTI RACE: saat >1 transaksi bentrok bersamaan pada order_id
+        # yang sama, transaksi yang "menang" (berhasil INSERT) belum tentu LANGSUNG
+        # terlihat oleh SELECT dari transaksi lain yang barusan rollback -- akibatnya
+        # SEMUA transaksi bisa gagal (NoResultFound / "Could not refresh instance"),
+        # dan trade TIDAK TERSIMPAN SAMA SEKALI (0 baris di DB, dibuktikan via
+        # eksperimen 5 coroutine bersamaan dgn order_id identik). Ini kelas bug yang
+        # sangat serius krn database adalah sumber catatan utama sistem. Fix:
+        # bungkus dgn retry+backoff singkat -- kalau IntegrityError lalu row belum
+        # kelihatan (race visibility), TUNGGU SEBENTAR lalu coba lagi dari awal
+        # (bukan cuma re-query, insert ulang lagi supaya kalau memang belum ada row
+        # apapun, transaksi baru ini yang berhasil menang). Skenario pemicu asli
+        # (>1 order_id identik benar2 disimpan BERSAMAAN) sangat jarang di jalur
+        # produksi normal (satu order_id = satu eksekusi order riil), tapi
+        # kegagalan totalnya (trade hilang) terlalu serius utk dibiarkan tanpa
+        # pengaman, mengingat prinsip "database harus benar-benar serius" ini.
+        last_exc: Optional[Exception] = None
+        for attempt in range(4):
+            async with self._session() as s:
+                try:
+                    trade = Trade(**trade_data)
+                    s.add(trade)
+                    await s.commit()
+                    await s.refresh(trade)
+                    return trade
+                except IntegrityError:
+                    await s.rollback()
+                    try:
+                        result = await s.execute(
+                            select(Trade).where(Trade.order_id == trade_data["order_id"])
+                        )
+                        existing = result.scalar_one_or_none()
+                        if existing is not None:
+                            log.warning(
+                                "save_trade: duplikat order_id=%s — skip insert, ambil existing.",
+                                trade_data.get("order_id"),
+                            )
+                            return existing
+                        # existing None -- race visibility, row "menang" blm
+                        # kelihatan di transaksi ini. Retry dari awal.
+                        last_exc = RuntimeError(
+                            f"IntegrityError tapi row order_id={trade_data.get('order_id')} "
+                            "belum terlihat (race visibility) -- retry"
+                        )
+                    except Exception as inner_exc:
+                        last_exc = inner_exc
+                except Exception as exc:
+                    # mis. "Could not refresh instance" -- transient, retry.
+                    await s.rollback()
+                    last_exc = exc
+            if attempt < 3:
+                await asyncio.sleep(0.02 * (attempt + 1))
+
+        # Last resort setelah semua retry habis: satu kali lagi coba baca murni
+        # (session baru bersih) sebelum benar-benar menyerah.
+        existing = await self.get_trade_by_order_id(trade_data.get("order_id", ""))
+        if existing is not None:
+            log.warning(
+                "save_trade: order_id=%s ditemukan di percobaan terakhir setelah retry habis.",
+                trade_data.get("order_id"),
+            )
+            return existing
+        log.error(
+            "save_trade: GAGAL simpan/temukan trade order_id=%s setelah %d percobaan — %s",
+            trade_data.get("order_id"), 4, last_exc,
+        )
+        raise RuntimeError(
+            f"save_trade gagal permanen utk order_id={trade_data.get('order_id')}: {last_exc}"
+        )
 
     async def get_trade_by_order_id(self, order_id: str) -> Optional[Trade]:
         async with self._session() as s:
