@@ -308,6 +308,8 @@ class TradingBot:
             testnet=self.config["testnet"],
             db=self.db,
             paper_trading=self.config.get("paper_trading_mode", False),
+            initial_capital=self.config["initial_capital"],
+            quote_currency=self.config["quote_currency"],
         )
         if self.config.get("paper_trading_mode", False):
             log.warning(
@@ -327,8 +329,21 @@ class TradingBot:
             )
             raise BotStartupError("Exchange connection FAILED.")
 
-        if not self.config["testnet"]:
+        # [PAPER TRADING] _live_preflight() mengecek saldo REAL di exchange
+        # (fetch_balance minimal >= 10% initial_capital). Di paper mode,
+        # saldo sudah sepenuhnya virtual (lihat ExchangeConnector) jadi cek
+        # saldo real tidak relevan -- di-skip supaya bot tidak gagal start
+        # gara-gara saldo asli akun kosong/kurang, padahal itu memang
+        # skenario yang wajar untuk akun yang API key-nya sengaja dibuat
+        # tanpa izin trading (lapis keamanan kedua).
+        if not self.config["testnet"] and not self.config.get("paper_trading_mode", False):
             await self._live_preflight()
+        elif self.config.get("paper_trading_mode", False):
+            log.info(
+                "[startup] Paper trading aktif — live preflight (cek saldo "
+                "real) di-skip, saldo virtual %.2f %s dipakai sepenuhnya.",
+                self.config["initial_capital"], self.config["quote_currency"],
+            )
 
         # ── Auto-scan universe dari Binance ──
         from exchange import auto_scan_and_populate
@@ -3273,6 +3288,8 @@ class TradingBot:
                                     testnet=self.config["testnet"],
                                     db=self.db,
                                     paper_trading=self.config.get("paper_trading_mode", False),
+                                    initial_capital=self.config["initial_capital"],
+                                    quote_currency=self.config["quote_currency"],
                                 )
                                 _test_ok = await _test_exchange.connect()
                                 if not _test_ok:
@@ -3291,6 +3308,8 @@ class TradingBot:
                                     testnet=self.config["testnet"],
                                     db=self.db,
                                     paper_trading=self.config.get("paper_trading_mode", False),
+                                    initial_capital=self.config["initial_capital"],
+                                    quote_currency=self.config["quote_currency"],
                                 )
                                 connected = await self.exchange.connect()
                                 if connected:

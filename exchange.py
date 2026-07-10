@@ -32,6 +32,8 @@ class ExchangeConnector:
         requests_per_second: float = 5.0,
         db=None,
         paper_trading:       bool  = False,
+        initial_capital:     float = 1000.0,
+        quote_currency:      str   = "USDT",
     ):
         self.exchange_id   = exchange_id
         self.testnet       = testnet
@@ -48,8 +50,14 @@ class ExchangeConnector:
         # True -- lihat create_order()/cancel_order() di bawah, keduanya
         # return LEBIH AWAL (early return) sebelum baris manapun yang menyentuh
         # self._ex.create_order/self._ex.cancel_order.
-        self.paper_trading = paper_trading
+        self.paper_trading    = paper_trading
         self._paper_orders: Dict[str, Dict] = {}
+        # [PAPER TRADING] Saldo virtual TERISOLASI dari saldo real exchange.
+        # Diinisialisasi HANYA dari INITIAL_CAPITAL, bukan pernah dibaca dari
+        # akun asli. fetch_balance() akan mengembalikan dict ini (bukan
+        # query ke exchange) selama paper_trading=True -- lihat fetch_balance().
+        self._paper_quote_ccy = quote_currency
+        self._paper_balance: Dict[str, float] = {quote_currency: float(initial_capital)}
         self._throttler  = Throttler(
             rate_limit=int(requests_per_second), period=1.0
         )
@@ -86,6 +94,12 @@ class ExchangeConnector:
                 "PERNAH benar-benar dikirim ke exchange. Semua order "
                 "disimulasikan pakai harga pasar riil saat itu. "
                 "Order ID disimulasi selalu berawalan 'PAPER-'."
+            )
+            log.warning(
+                "📝 [PAPER BALANCE] Modal virtual: %.2f %s — TERISOLASI dari "
+                "saldo real akun exchange. fetch_balance() tidak akan pernah "
+                "membaca saldo asli selama mode ini aktif.",
+                self._paper_balance[quote_currency], quote_currency,
             )
 
         self.is_connected: bool       = False
@@ -212,6 +226,17 @@ class ExchangeConnector:
         return result or {}
 
     async def fetch_balance(self) -> Dict:
+        # [PAPER TRADING] JANGAN PERNAH query exchange asli untuk saldo --
+        # kembalikan saldo virtual (dari INITIAL_CAPITAL + hasil simulasi
+        # fill) dalam format yang identik dengan respons ccxt asli, supaya
+        # parse_balance() dan seluruh kode caller (main.py) berjalan tanpa
+        # perubahan apapun di sisi mereka.
+        if self.paper_trading:
+            free  = dict(self._paper_balance)
+            used  = {k: 0.0 for k in self._paper_balance}
+            total = dict(self._paper_balance)
+            return {"free": free, "used": used, "total": total}
+
         if not (getattr(self._ex, "apiKey", None) and getattr(self._ex, "secret", None)):
             return {}
         t0 = time.monotonic()
@@ -304,6 +329,34 @@ class ExchangeConnector:
         order_id = f"PAPER-{uuid.uuid4().hex[:16]}"
         now_iso = datetime.now(timezone.utc).isoformat()
 
+        # [PAPER TRADING] Update saldo virtual -- fee dihitung pakai
+        # taker_fee ASLI dari market info (data publik, bukan simulasi),
+        # dipotong dalam quote currency, meniru perilaku fill real.
+        base, _, quote = symbol.partition("/")
+        fee_rate = self.get_taker_fee(symbol)
+        fee_amt  = amount * fill_price * fee_rate
+        if side == "buy":
+            cost = amount * fill_price
+            self._paper_balance[quote] = self._paper_balance.get(quote, 0.0) - cost - fee_amt
+            self._paper_balance[base]  = self._paper_balance.get(base, 0.0) + amount
+        else:
+            proceeds = amount * fill_price
+            self._paper_balance[base]  = self._paper_balance.get(base, 0.0) - amount
+            self._paper_balance[quote] = self._paper_balance.get(quote, 0.0) + proceeds - fee_amt
+
+        # Clamp -- jaga-jaga floating point drift bikin saldo jadi negatif
+        # tipis (mis. -0.0000001) akibat pembulatan; risk.py seharusnya
+        # sudah mencegah oversell, ini hanya pengaman kosmetik terakhir.
+        for ccy in (base, quote):
+            if -1e-6 < self._paper_balance.get(ccy, 0.0) < 0:
+                self._paper_balance[ccy] = 0.0
+
+        log.info(
+            "📝 [PAPER BALANCE] setelah fill %s %s: %s=%.4f %s=%.8f",
+            side.upper(), symbol, quote, self._paper_balance.get(quote, 0.0),
+            base, self._paper_balance.get(base, 0.0),
+        )
+
         order = {
             "id":        order_id,
             "symbol":    symbol,
@@ -316,7 +369,7 @@ class ExchangeConnector:
             "average":   fill_price,
             "price":     fill_price,
             "cost":      amount * fill_price,
-            "fee":       None,           # fee dihitung terpisah via get_taker_fee (data asli)
+            "fee":       {"cost": fee_amt, "currency": quote},
             "timestamp": int(time.time() * 1000),
             "datetime":  now_iso,
             "info":      {"paper_trading": True, "note": "Simulated fill, no real order sent."},
