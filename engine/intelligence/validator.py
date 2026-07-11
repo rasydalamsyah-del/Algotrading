@@ -394,59 +394,79 @@ def _check_squeeze_context(
 def _check_bb_context(
     iset: IndicatorSet,
     result: ValidationResult,
+    side: str = "long",
 ) -> None:
     """[UPGRADE] Memanfaatkan bb_middle, bb_position, bb_trending yang sebelumnya idle.
 
     bb_middle  → support dinamis: close di atas middle = bullish bias
     bb_position → posisi relatif dalam band [0,1]: < 0.35 = buy zone
     bb_trending  → arah lebar band: contracting = setup squeeze pre-breakout
+
+    [FUTURES-READY] side="long" default IDENTIK PERSIS dgn sebelumnya. Short:
+    seluruh 3 sub-check di-mirror -- lower/upper zone tertukar, dan bb_middle
+    dibaca dari sisi berlawanan.
     """
     vol = iset.volatility
     if vol.bb_middle is None or vol.bb_position is None:
         return
+    is_long = side != "short"
 
-    # -- bb_middle sebagai dynamic support --
+    # -- bb_middle sebagai dynamic support/resistance --
     price = iset.current_price
     if price and vol.bb_middle > 0:
         pct_above = (price - vol.bb_middle) / vol.bb_middle * 100
-        if pct_above < -1.0:
+        pct_check = pct_above if is_long else -pct_above
+        if pct_check < -1.0:
+            arah = "bullish" if is_long else "bearish"
+            posisi = "bawah" if is_long else "atas"
             result.add_warning(
-                f"Harga {pct_above:.1f}% di bawah BB middle ({vol.bb_middle:.4f}) — "
-                f"dynamic support tertembus, bullish bias melemah",
+                f"Harga {pct_above:.1f}% di {posisi} BB middle ({vol.bb_middle:.4f}) — "
+                f"dynamic support/resistance tertembus, {arah} bias melemah",
                 confidence_penalty=0.04,
             )
-        elif 0 <= pct_above <= 2.0:
+        elif 0 <= pct_check <= 2.0:
+            posisi = "atas" if is_long else "bawah"
             result.add_note(
-                f"✅ Harga tepat di atas BB middle (+{pct_above:.1f}%) — "
-                f"dynamic support terjaga, entry zone valid"
+                f"✅ Harga tepat di {posisi} BB middle ({pct_above:+.1f}%) — "
+                f"dynamic support/resistance terjaga, entry zone valid"
             )
 
     # -- bb_position: posisi dalam band --
     pos = vol.bb_position
-    if pos <= 0.25:
+    favorable_pos   = pos <= 0.25 if is_long else pos >= 0.85
+    unfavorable_pos = pos >= 0.85 if is_long else pos <= 0.25
+
+    if favorable_pos:
+        zone = "lower" if is_long else "upper"
         result.add_note(
-            f"✅ BB position {pos:.2f} (lower zone) — "
-            f"harga di area oversold band, risk/reward optimal"
+            f"✅ BB position {pos:.2f} ({zone} zone) — "
+            f"harga di area optimal utk entry {'long' if is_long else 'short'}, risk/reward optimal"
         )
         result.confidence_adjustment += 0.03
-    elif pos >= 0.85:
+    elif unfavorable_pos:
+        zone = "upper" if is_long else "lower"
         result.add_warning(
-            f"BB position {pos:.2f} (upper extreme) — "
-            f"harga mendekati upper band, potensi resistance dan mean-reversion",
+            f"BB position {pos:.2f} ({zone} extreme) — "
+            f"harga mendekati band berlawanan, potensi resistance/support dan mean-reversion",
             confidence_penalty=0.05,
         )
 
     # -- bb_trending: arah lebar band --
     trend = vol.bb_trending or "flat"
-    if trend == "contracting" and pos <= 0.5:
+    setup_half = pos <= 0.5 if is_long else pos >= 0.5
+    blowoff_half = pos >= 0.75 if is_long else pos <= 0.25
+
+    if trend == "contracting" and setup_half:
+        half_label = "lower" if is_long else "upper"
         result.add_note(
-            f"🔥 BB contracting + posisi lower half ({pos:.2f}) — "
+            f"🔥 BB contracting + posisi {half_label} half ({pos:.2f}) — "
             f"energy terakumulasi, setup pre-breakout ideal"
         )
         result.confidence_adjustment += 0.04
-    elif trend == "expanding" and pos >= 0.75:
+    elif trend == "expanding" and blowoff_half:
+        zone_label = "upper" if is_long else "lower"
         result.add_warning(
-            f"BB expanding saat harga di upper zone ({pos:.2f}) — "
+            f"BB expanding saat harga di {zone_label} zone ({pos:.2f}) — "
             f"potensi blow-off, waspada exhaustion",
             confidence_penalty=0.04,
         )
@@ -455,6 +475,7 @@ def _check_bb_context(
 def _check_kc_context(
     iset: IndicatorSet,
     result: ValidationResult,
+    side: str = "long",
 ) -> None:
     """[UPGRADE] Memanfaatkan kc_upper, kc_lower, kc_middle, kc_score yang sebelumnya idle.
 
@@ -464,6 +485,10 @@ def _check_kc_context(
     kc_score  → skor posisi KC: < 40 = overbought KC, > 60 = near lower KC (bullish)
     kc_middle → EMA trend: harga vs KC middle = trend bias
     kc_upper/lower → range channel untuk context entry
+
+    [FUTURES-READY] side="long" default IDENTIK PERSIS dgn sebelumnya. Short:
+    seluruh sub-check di-mirror -- lower/upper KC zone tertukar, kc_middle
+    dibaca dari sisi berlawanan, kc_score threshold di-mirror di sekitar 50.
     """
     vol = iset.volatility
     if vol.kc_upper is None or vol.kc_lower is None or vol.kc_middle is None:
@@ -477,38 +502,48 @@ def _check_kc_context(
     if kc_range <= 0:
         return
 
+    is_long = side != "short"
     kc_pos = (price - vol.kc_lower) / kc_range  # 0=lower, 0.5=middle, 1=upper
 
     # Posisi KC
-    if kc_pos < 0.30:
+    favorable = kc_pos < 0.30 if is_long else kc_pos > 0.70
+    unfavorable = kc_pos > 0.80 if is_long else kc_pos < 0.20
+    if favorable:
+        zone = "lower" if is_long else "upper"
         result.add_note(
-            f"✅ Harga di lower KC zone ({kc_pos:.2f}) — "
-            f"dekat EMA-ATR support, entry favorable"
+            f"✅ Harga di {zone} KC zone ({kc_pos:.2f}) — "
+            f"dekat EMA-ATR support/resistance, entry favorable"
         )
         result.confidence_adjustment += 0.03
-    elif kc_pos > 0.80:
+    elif unfavorable:
+        zone = "upper" if is_long else "lower"
         result.add_warning(
-            f"Harga di upper KC zone ({kc_pos:.2f}) — "
-            f"dekat EMA-ATR resistance, room terbatas",
+            f"Harga di {zone} KC zone ({kc_pos:.2f}) — "
+            f"dekat EMA-ATR resistance/support, room terbatas",
             confidence_penalty=0.04,
         )
 
-    # Harga vs KC middle (EMA): jika di bawah middle, trend lemah
-    if price < vol.kc_middle:
-        pct = (vol.kc_middle - price) / vol.kc_middle * 100
+    # Harga vs KC middle (EMA): trend lemah kalau di sisi berlawanan arah posisi
+    weak_trend = (price < vol.kc_middle) if is_long else (price > vol.kc_middle)
+    if weak_trend:
+        pct = abs(vol.kc_middle - price) / vol.kc_middle * 100
+        posisi = "bawah" if is_long else "atas"
+        arah = "bullish" if is_long else "bearish"
         result.add_warning(
-            f"Harga {pct:.1f}% di bawah KC middle (EMA={vol.kc_middle:.4f}) — "
-            f"trend jangka menengah belum bullish",
+            f"Harga {pct:.1f}% di {posisi} KC middle (EMA={vol.kc_middle:.4f}) — "
+            f"trend jangka menengah belum {arah}",
             confidence_penalty=0.03,
         )
 
-    # kc_score informatif: rendah = KC overbought
-    if vol.kc_score is not None and vol.kc_score < 40:
-        result.add_warning(
-            f"KC score rendah ({vol.kc_score:.0f}) — "
-            f"posisi dalam channel terlalu tinggi untuk entry optimal",
-            confidence_penalty=0.03,
-        )
+    # kc_score informatif: mirror threshold di sekitar titik tengah
+    if vol.kc_score is not None:
+        score_warn = vol.kc_score < 40 if is_long else vol.kc_score > 60
+        if score_warn:
+            result.add_warning(
+                f"KC score {'rendah' if is_long else 'tinggi'} ({vol.kc_score:.0f}) — "
+                f"posisi dalam channel kurang optimal untuk entry {'long' if is_long else 'short'}",
+                confidence_penalty=0.03,
+            )
 
 
 def _check_macd_context(
