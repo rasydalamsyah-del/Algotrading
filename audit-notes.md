@@ -427,25 +427,28 @@ Skor rendah (0-45, menandakan bearish kuat) **dibuang** sebagai "gagal trigger" 
 | `MOMENTUM_REVERSAL` | 🔴 Bias long | Logikanya "beli saat oversold" (mean-revert long) — perlu cabang mirror "short saat overbought" |
 | `COMPOSITE` (default) | ✅ Netral | Sama seperti BREAKOUT_VOLUME, cuma cek band RSI + volume |
 
-**Revisi pola bug "long-only" — total sekarang 6 lokasi** (bertambah 1 dari catatan sebelumnya, dengan nuansa lebih presisi di scorer.py: 2 dari 4 trigger type kena, 2 lainnya sudah netral).
+**Revisi pola bug "long-only" — total 7 lokasi, UPDATE: 4 dari 7 sudah diperbaiki & diverifikasi (bukan cuma didokumentasikan)** — dikerjakan pada sesi restrukturisasi + perbaikan bias lanjutan.
 
 ---
 
 Ini pola bug/gap yang paling sering muncul sepanjang audit — dicatat lengkap supaya tidak ada yang terlewat saat nanti mengerjakan dukungan short:
 
-| # | File | Fungsi | Sifat masalah |
+| # | File | Fungsi | Status |
 |---|---|---|---|
-| 1 | `intelligence/trade_guardian.py` | `check_atg()` / `get_profit_zone_sl()` | `profit_pct` hardcoded formula long |
-| 2 | `strategy.py` | `check_trailing_exit()` | `profit_pct` hardcoded formula long, **plus** `PositionTracker` tidak punya field `side` sama sekali (akar masalah lebih dalam) |
-| 3 | `intelligence/commander.py` | `_gate_supertrend()` | Menolak sinyal kalau bearish kuat — harusnya jadi sinyal short yang bagus |
-| 4 | `execution.py` | `execute_signal()` | `side` ditentukan biner BUY vs else="sell", tidak ada konsep open-short |
-| 5 | `intelligence/validator.py` | `_check_rsi_divergence()` dan kemungkinan besar sebagian dari 25 fungsi `_check_*` lainnya | Bearish selalu diperlakukan sebagai warning, padahal untuk short seharusnya jadi konfirmasi |
-| 6 | `intelligence/scorer.py` | `_check_primary_trigger()` — tipe `TREND_CONFIRMATION` & `MOMENTUM_REVERSAL` | Cuma terima skor tinggi/oversold (2 dari 4 tipe trigger bias; `BREAKOUT_VOLUME` & `COMPOSITE` sudah netral) |
-| 7 | `intelligence/position_sync.py` | **Seluruh file** (`fetch_binance_spot_positions`, dst) | Bukan sekadar bias — konsepnya sendiri (baca saldo koin via `fetch_balance()`) tidak berlaku untuk futures sama sekali. Butuh file baru total, bukan modifikasi |
+| 1 | `engine/intelligence/trade_guardian.py` | `check_atg()` / `get_profit_zone_sl()` | ✅ **FIXED** — side-aware, diverifikasi matematis identik utk long |
+| 2 | `spot/strategy_spot.py` | `check_trailing_exit()` + `PositionTracker.side` | ✅ **FIXED** — field `side` ditambah (default "long"), logic side-aware |
+| 3 | `engine/intelligence/commander.py` | `_gate_supertrend()` | ✅ **FIXED** — diverifikasi 6 skenario long identik + 3 skenario short logic benar |
+| — | `engine/intelligence/scorer.py` | `score_signal()` hard-block `TRENDING_BEAR` (**temuan baru**, ditemukan saat baca full body fungsi, di luar 7 daftar awal) | ✅ **FIXED** — side-aware (long block di TRENDING_BEAR, short mirror block di TRENDING_BULL) |
+| 4 | `spot/execution_spot.py` | `execute_signal()` + `_process_fill()` side mapping | ✅ **FIXED** — sekaligus perbaiki bug laten: `CLOSE_SHORT` sebelumnya salah dipetakan jadi "sell", seharusnya "buy" (buy-to-cover) |
+| 5 | `engine/intelligence/validator.py` | ~26 fungsi `_check_*` | ⬜ **BELUM** — scope besar (baru dikonfirmasi `_check_rsi_divergence` bias, 25 fungsi lain belum diaudit satu-satu), perlu sesi terpisah |
+| 6 | `engine/intelligence/scorer.py` | `_check_primary_trigger()` (`TREND_CONFIRMATION` & `MOMENTUM_REVERSAL`) | ✅ **FIXED** — diverifikasi 7 skenario long identik. **Catatan jujur**: mirror short untuk TREND_CONFIRMATION pakai APROKSIMASI (`100 - rsi_gc_min`) karena profile schema belum punya field `rsi_gc_max` simetris — ditandai jelas sebagai placeholder di kode |
+| 7 | `spot/position_sync_spot.py` | **Seluruh file** (`fetch_binance_spot_positions`, dst) | ⬜ **BELUM** — bukan sekadar bias, perlu file baru total (`position_sync_futures.py`) karena konsepnya (`fetch_balance()`) tidak berlaku di futures. Masuk scope pembangunan `future/`, bukan "perbaikan" |
 
-**Yang SUDAH benar (referensi buat pola yang benar):** `risk.py` → `check_trailing_sl()`, `check_breakeven_sl()` — keduanya punya cabang eksplisit `if side=="long" / elif side=="short"`.
+**Yang SUDAH benar sejak awal (referensi pola benar):** `risk.py` → `check_trailing_sl()`, `check_breakeven_sl()` — keduanya punya cabang eksplisit `if side=="long" / elif side=="short"`.
 
-**Catatan penting soal akar masalah:** dari 7 temuan ini, yang paling fundamental adalah **#2** — `PositionTracker` (strategy.py) tidak punya field `side` sama sekali. Ini bukan cuma "kurang 1 cabang if/else", tapi objek inti yang dipakai real-time monitoring memang belum dirancang untuk tahu arah posisi. Perbaikan di sini adalah prasyarat sebelum efektif memperbaiki #1 dan sebagian #5 (yang keduanya bergantung pada tahu posisi ini long atau short saat kalkulasi).
+**Metodologi verifikasi yang dipakai di semua fix di atas:** setiap perubahan diuji dengan skenario numerik konkret (bukan cuma dibaca ulang) untuk memastikan `side="long"` (default) menghasilkan output byte-identik dengan versi sebelum perubahan — prinsip "aditif murni, jangan ubah behavior existing" dipegang ketat sepanjang proses.
+
+**Sisa pekerjaan bias yang jujur belum tersentuh:** `validator.py` (25 dari 26 fungsi belum diaudit detail satu-satu) dan `position_sync_spot.py` (butuh file baru, bukan fix). Keduanya scope besar, direkomendasikan jadi sesi kerja terpisah.
 
 ---
 
