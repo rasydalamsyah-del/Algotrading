@@ -20,6 +20,6 @@ function kill_process() {
 }
 
 echo "🛑 Stopping AlgoTrader Pro Components..."
-kill_process "$SCRIPT_DIR/.bot_pid" "python.*/root/algotrader/main.py" "Core Bot"
-kill_process "$SCRIPT_DIR/.tg_pid" "python.*/root/algotrader/telegram_bot.py" "Telegram Bot"
+kill_process "$SCRIPT_DIR/.bot_pid" "python.*/root/algotrader/spot/main_spot.py" "Core Bot"
+kill_process "$SCRIPT_DIR/.tg_pid" "python.*/root/algotrader/shared_service/telegram_bot.py" "Telegram Bot"
 echo "Done."

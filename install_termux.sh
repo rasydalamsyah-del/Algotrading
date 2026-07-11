@@ -128,7 +128,7 @@ echo -e "      ${DIM}cd ~/algotrader && chmod +x install_termux.sh && bash insta
 echo ""
 
 MISSING_FILES=()
-for f in main.py; do
+for f in spot/main_spot.py; do
     [ ! -f "$SCRIPT_DIR/$f" ] && MISSING_FILES+=("$f")
 done
 
@@ -997,11 +997,11 @@ fi
 
 mkdir -p "$SCRIPT_DIR/logs"
 
-python "$SCRIPT_DIR/main.py" >> "$SCRIPT_DIR/logs/trading_bot.log" 2>&1 &
+python "$SCRIPT_DIR/spot/main_spot.py" >> "$SCRIPT_DIR/logs/trading_bot.log" 2>&1 &
 BOT_PID=$!
 echo $BOT_PID > "$SCRIPT_DIR/.bot_pid"
 echo ""
-python "$SCRIPT_DIR/telegram_bot.py" >> "$SCRIPT_DIR/logs/telegram_bot.log" 2>&1 &
+python "$SCRIPT_DIR/shared_service/telegram_bot.py" >> "$SCRIPT_DIR/logs/telegram_bot.log" 2>&1 &
 TG_PID=$!
 echo $TG_PID > "$SCRIPT_DIR/.tg_pid"
 echo "✅ Telegram Bot started! PID: $TG_PID"
@@ -1034,8 +1034,8 @@ function kill_process() {
 }
 
 echo "🛑 Stopping AlgoTrader Pro Components..."
-kill_process "$SCRIPT_DIR/.bot_pid" "python.*main.py" "Core Bot"
-kill_process "$SCRIPT_DIR/.tg_pid" "python.*telegram_bot.py" "Telegram Bot"
+kill_process "$SCRIPT_DIR/.bot_pid" "python.*spot/main_spot.py" "Core Bot"
+kill_process "$SCRIPT_DIR/.tg_pid" "python.*shared_service/telegram_bot.py" "Telegram Bot"
 echo "Done."
 STOPSCRIPT
 
@@ -1046,8 +1046,8 @@ cd "$SCRIPT_DIR" || exit 1
 
 [ -f "$SCRIPT_DIR/venv/bin/activate" ] && source "$SCRIPT_DIR/venv/bin/activate"
 
-BOT_PID=$(pgrep -f "python.*main.py" | head -1)
-TG_PID=$(pgrep -f "python.*telegram_bot.py" | head -1)
+BOT_PID=$(pgrep -f "python.*spot/main_spot.py" | head -1)
+TG_PID=$(pgrep -f "python.*shared_service/telegram_bot.py" | head -1)
 
 echo "=== System Process ==="
 [ -n "$BOT_PID" ] && echo "✅ Core Bot : RUNNING (PID: $BOT_PID)" || echo "❌ Core Bot : OFFLINE"

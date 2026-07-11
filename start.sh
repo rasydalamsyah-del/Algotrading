@@ -25,12 +25,12 @@ fi
 mkdir -p "$SCRIPT_DIR/logs"
 
 # Jalankan Core Bot dengan nohup biar nggak mati pas session ditutup
-nohup python "$SCRIPT_DIR/main.py" >> "$SCRIPT_DIR/logs/trading_bot.log" 2>&1 &
+nohup python "$SCRIPT_DIR/spot/main_spot.py" >> "$SCRIPT_DIR/logs/trading_bot.log" 2>&1 &
 BOT_PID=$!
 echo $BOT_PID > "$SCRIPT_DIR/.bot_pid"
 
 # Jalankan Telegram Bot dengan nohup
-nohup python "$SCRIPT_DIR/telegram_bot.py" >> "$SCRIPT_DIR/logs/telegram_bot.log" 2>&1 &
+nohup python "$SCRIPT_DIR/shared_service/telegram_bot.py" >> "$SCRIPT_DIR/logs/telegram_bot.log" 2>&1 &
 TG_PID=$!
 echo $TG_PID > "$SCRIPT_DIR/.tg_pid"
 

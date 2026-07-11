@@ -22,7 +22,12 @@ _bot_src = os.path.dirname(os.path.abspath(__file__))
 if _bot_src not in sys.path:
     sys.path.insert(0, _bot_src)
 
-_env_path = os.path.join(_bot_src, ".env")
+# [FUTURES-READY] File ini akan pindah ke shared_service/telegram_bot.py.
+# _repo_root menghitung 1 level ke atas dari _bot_src supaya .env tetap
+# ditemukan di repo root, ke manapun file ini berpindah nanti (repo root
+# atau shared_service/ sama-sama 1 level dari lokasi file).
+_repo_root = os.path.dirname(_bot_src)
+_env_path  = os.path.join(_repo_root, ".env")
 load_dotenv(_env_path)
 
 try:

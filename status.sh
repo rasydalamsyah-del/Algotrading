@@ -4,8 +4,8 @@ cd "$SCRIPT_DIR" || exit 1
 
 [ -f "$SCRIPT_DIR/venv/bin/activate" ] && source "$SCRIPT_DIR/venv/bin/activate"
 
-BOT_PID=$(pgrep -f "python.*main.py" | head -1)
-TG_PID=$(pgrep -f "python.*telegram_bot.py" | head -1)
+BOT_PID=$(pgrep -f "python.*spot/main_spot.py" | head -1)
+TG_PID=$(pgrep -f "python.*shared_service/telegram_bot.py" | head -1)
 
 echo "=== System Process ==="
 [ -n "$BOT_PID" ] && echo "✅ Core Bot : RUNNING (PID: $BOT_PID)" || echo "❌ Core Bot : OFFLINE"

@@ -50,7 +50,7 @@ from engine.core.models import SignalType, SignalEvent, ExitMode
 from spot.risk_spot import RiskManager, RiskAssessment, RiskDecision, HaltReason
 from spot.execution_spot import OrderExecutionManager
 from spot.api_server_spot import create_app
-from notifications import NotificationManager
+from shared_service.notifications import NotificationManager
 from engine.indicators.orderbook import WhaleDetector  # [v2] dipindah dari main.py ke indicators/orderbook.py
 
 load_dotenv()
