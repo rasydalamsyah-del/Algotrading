@@ -549,35 +549,48 @@ def _check_kc_context(
 def _check_macd_context(
     iset: IndicatorSet,
     result: ValidationResult,
+    side: str = "long",
 ) -> None:
     """[UPGRADE] Memanfaatkan macd_line, macd_signal, macd_hist_prev, macd_zero_cross.
 
     macd_line vs macd_signal → konfirmasi trend jangka menengah
     macd_hist_prev → arah momentum: apakah histogram sedang membaik?
     macd_zero_cross → event kritis: MACD baru saja cross above zero = strong bull signal
+
+    [FUTURES-READY] side="long" default IDENTIK PERSIS dgn sebelumnya. Short:
+    mayoritas sub-check di-mirror. PENGECUALIAN: macd_zero_cross adalah
+    Optional[bool] TANPA info arah di data model (core/models.py) -- tidak
+    bisa di-mirror dgn benar tanpa update upstream indicator utk membedakan
+    "cross above zero" vs "cross below zero". Untuk short, bonus ini
+    di-SKIP (bukan di-mirror jadi penalty) supaya tidak salah arah.
     """
     mom = iset.momentum
     if mom.macd_line is None or mom.macd_signal is None:
         return
+    is_long = side != "short"
 
     # MACD line vs signal: basic trend bias
-    macd_above_signal = mom.macd_line > mom.macd_signal
+    macd_confirms = (mom.macd_line > mom.macd_signal) if is_long else (mom.macd_line < mom.macd_signal)
     gap = mom.macd_line - mom.macd_signal
 
-    if not macd_above_signal:
+    if not macd_confirms:
+        arah = "bullish" if is_long else "bearish"
+        posisi = "bawah" if is_long else "atas"
         result.add_warning(
-            f"MACD line ({mom.macd_line:.5f}) di bawah signal ({mom.macd_signal:.5f}) — "
-            f"momentum jangka menengah belum bullish",
+            f"MACD line ({mom.macd_line:.5f}) di {posisi} signal ({mom.macd_signal:.5f}) — "
+            f"momentum jangka menengah belum {arah}",
             confidence_penalty=0.04,
         )
     elif abs(gap) > 0:
+        arah = "bullish" if is_long else "bearish"
+        posisi = "atas" if is_long else "bawah"
         result.add_note(
-            f"✅ MACD line di atas signal (gap={gap:+.5f}) — "
-            f"momentum jangka menengah bullish"
+            f"✅ MACD line di {posisi} signal (gap={gap:+.5f}) — "
+            f"momentum jangka menengah {arah}"
         )
 
-    # macd_zero_cross: MACD baru saja naik melewati zero = sinyal kuat
-    if mom.macd_zero_cross:
+    # macd_zero_cross: HANYA berlaku utk long (lihat catatan keterbatasan data di docstring)
+    if is_long and mom.macd_zero_cross:
         result.add_note(
             "🚀 MACD zero cross bullish — MACD baru melewati zero dari bawah, "
             "momentum shift signifikan"
@@ -585,39 +598,47 @@ def _check_macd_context(
         result.confidence_adjustment += 0.06
 
     # -- vwma_vs_sma: konfirmasi volume mendukung momentum --
-    # [UPGRADE] field vwma dan vwma_vs_sma dari ta_compat.vwma()
     if mom.vwma is not None and mom.vwma_vs_sma is not None:
         diff = mom.vwma_vs_sma
-        if diff > 1.5:
+        diff_check = diff if is_long else -diff
+        if diff_check > 1.5:
+            arah = "bullish" if is_long else "bearish"
             result.add_note(
-                f"✅ VWMA > SMA (+{diff:.2f}%) — volume lebih berat di bar bullish: "
+                f"✅ VWMA vs SMA ({diff:+.2f}%) — volume lebih berat di bar {arah}: "
                 f"momentum dikonfirmasi oleh volume"
             )
             result.confidence_adjustment += 0.04
-        elif diff > 0.5:
+        elif diff_check > 0.5:
             result.add_note(
-                f"✅ VWMA sedikit di atas SMA (+{diff:.2f}%) — "
+                f"✅ VWMA sedikit condong searah ({diff:+.2f}%) — "
                 f"volume support moderat"
             )
             result.confidence_adjustment += 0.02
-        elif diff < -1.5:
+        elif diff_check < -1.5:
+            arah = "bearish" if is_long else "bullish"
             result.add_warning(
-                f"VWMA < SMA ({diff:.2f}%) — volume lebih berat di bar bearish: "
+                f"VWMA vs SMA ({diff:+.2f}%) — volume lebih berat di bar {arah}: "
                 f"momentum kurang dikonfirmasi volume, potensi fake breakout",
                 confidence_penalty=0.05,
             )
     if mom.macd_histogram is not None and mom.macd_hist_prev is not None:
-        improving = mom.macd_histogram > mom.macd_hist_prev
-        if mom.macd_histogram < 0 and not improving:
+        if is_long:
+            improving = mom.macd_histogram > mom.macd_hist_prev
+            weakening_side = mom.macd_histogram < 0
+        else:
+            improving = mom.macd_histogram < mom.macd_hist_prev
+            weakening_side = mom.macd_histogram > 0
+        if weakening_side and not improving:
+            label = "selling" if is_long else "buying"
             result.add_warning(
-                f"MACD histogram negatif dan memburuk "
+                f"MACD histogram {'negatif' if is_long else 'positif'} dan memburuk "
                 f"({mom.macd_hist_prev:.5f} → {mom.macd_histogram:.5f}) — "
-                f"selling pressure masih meningkat",
+                f"{label} pressure masih meningkat",
                 confidence_penalty=0.05,
             )
-        elif mom.macd_histogram < 0 and improving:
+        elif weakening_side and improving:
             result.add_note(
-                f"⚡ MACD histogram negatif tapi membaik "
+                f"⚡ MACD histogram {'negatif' if is_long else 'positif'} tapi membaik "
                 f"({mom.macd_hist_prev:.5f} → {mom.macd_histogram:.5f}) — "
                 f"early sign of momentum reversal"
             )
@@ -627,6 +648,7 @@ def _check_macd_context(
 def _check_stoch_context(
     iset: IndicatorSet,
     result: ValidationResult,
+    side: str = "long",
 ) -> None:
     """[UPGRADE] Memanfaatkan stoch_k, stoch_d, stoch_kd_cross, stoch_zone yang idle.
 
@@ -634,55 +656,64 @@ def _check_stoch_context(
     stoch_k, stoch_d → level saat ini
     stoch_kd_cross   → crossover K-D: sinyal entry/exit yang presisi
     stoch_zone       → oversold/overbought/neutral context
+
+    [FUTURES-READY] side="long" default IDENTIK PERSIS dgn sebelumnya. Short:
+    overbought/oversold zone tertukar makna, kd_cross bullish/bearish tertukar.
     """
     mom = iset.momentum
     if mom.stoch_k is None or mom.stoch_d is None:
         return
 
     k, d = mom.stoch_k, mom.stoch_d
+    is_long = side != "short"
+    favorable_zone   = "oversold" if is_long else "overbought"
+    unfavorable_zone = "overbought" if is_long else "oversold"
+    confirming_cross = "bullish" if is_long else "bearish"
+    opposing_cross   = "bearish" if is_long else "bullish"
 
-    # Overbought zone = risk tinggi untuk entry baru
-    if mom.stoch_zone == "overbought":
+    # Zona berlawanan arah = risk tinggi untuk entry baru
+    if mom.stoch_zone == unfavorable_zone:
         result.add_warning(
-            f"StochRSI overbought (K={k:.1f} D={d:.1f}) — "
+            f"StochRSI {unfavorable_zone} (K={k:.1f} D={d:.1f}) — "
             f"momentum sudah stretched, entry baru berisiko tinggi",
             confidence_penalty=0.06,
         )
 
-    # Oversold + bullish KD cross = sinyal kuat
-    elif mom.stoch_zone == "oversold":
-        if mom.stoch_kd_cross == "bullish":
+    # Zona favorable + KD cross searah = sinyal kuat
+    elif mom.stoch_zone == favorable_zone:
+        if mom.stoch_kd_cross == confirming_cross:
             result.add_note(
-                f"🔥 StochRSI oversold + KD cross bullish (K={k:.1f} D={d:.1f}) — "
-                f"konfirmasi kuat: momentum berbalik dari bottom"
+                f"🔥 StochRSI {favorable_zone} + KD cross {confirming_cross} (K={k:.1f} D={d:.1f}) — "
+                f"konfirmasi kuat: momentum berbalik dari extreme"
             )
             result.confidence_adjustment += 0.07
         else:
             result.add_note(
-                f"✅ StochRSI oversold (K={k:.1f} D={d:.1f}) — "
+                f"✅ StochRSI {favorable_zone} (K={k:.1f} D={d:.1f}) — "
                 f"potensi reversal, tunggu KD cross untuk konfirmasi"
             )
             result.confidence_adjustment += 0.03
 
     # Neutral zone: cek KD cross untuk directional bias
-    elif mom.stoch_kd_cross == "bullish" and k > d:
+    elif mom.stoch_kd_cross == confirming_cross and ((k > d) if is_long else (k < d)):
         result.add_note(
-            f"✅ StochRSI KD cross bullish di neutral zone (K={k:.1f} D={d:.1f}) — "
+            f"✅ StochRSI KD cross {confirming_cross} di neutral zone (K={k:.1f} D={d:.1f}) — "
             f"momentum mulai membaik"
         )
         result.confidence_adjustment += 0.03
-    elif mom.stoch_kd_cross == "bearish":
+    elif mom.stoch_kd_cross == opposing_cross:
         result.add_warning(
-            f"StochRSI KD cross bearish (K={k:.1f} D={d:.1f}) — "
-            f"momentum momentum melemah",
+            f"StochRSI KD cross {opposing_cross} (K={k:.1f} D={d:.1f}) — "
+            f"momentum melemah",
             confidence_penalty=0.04,
         )
 
-    # K masih di bawah D tanpa cross = momentum belum confirmed
-    if k < d and mom.stoch_zone != "oversold":
+    # K belum searah D tanpa cross = momentum belum confirmed
+    k_not_confirmed = (k < d) if is_long else (k > d)
+    if k_not_confirmed and mom.stoch_zone != favorable_zone:
         result.add_note(
-            f"⚠️ StochRSI K ({k:.1f}) < D ({d:.1f}) — "
-            f"momentum belum terkonfirmasi bullish"
+            f"⚠️ StochRSI K ({k:.1f}) {'<' if is_long else '>'} D ({d:.1f}) — "
+            f"momentum belum terkonfirmasi {'bullish' if is_long else 'bearish'}"
         )
 
 def _check_oscillator_context(iset: IndicatorSet, result: ValidationResult) -> None:
