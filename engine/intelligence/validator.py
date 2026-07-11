@@ -1754,6 +1754,7 @@ def _check_market_structure_context(
 def _check_fib_detail_context(
     iset: IndicatorSet,
     result: ValidationResult,
+    side: str = "long",
 ) -> None:
     """[UPGRADE] Aktifkan fib_236/382/500/786, fib_trend, fib_ext_1272/1618.
 
@@ -1768,21 +1769,28 @@ def _check_fib_detail_context(
     if not price:
         return
 
-    # -- fib_trend: konfirmasi arah --
-    if st.fib_trend == "down":
+    is_long = side != "short"
+    # -- fib_trend: konfirmasi arah (long favorable="up", short favorable="down") --
+    favorable_trend = "up" if is_long else "down"
+    opposing_trend  = "down" if is_long else "up"
+    if st.fib_trend == opposing_trend:
+        swing_desc = "tertinggi ke terendah" if is_long else "terendah ke tertinggi"
         result.add_warning(
-            "Fibonacci trend: downswing — fib level dihitung dari swing tertinggi "
-            "ke terendah, harga dalam koreksi",
+            f"Fibonacci trend: {'downswing' if is_long else 'upswing'} — fib level dihitung dari swing {swing_desc}, "
+            f"harga dalam koreksi",
             confidence_penalty=0.04,
         )
-    elif st.fib_trend == "up":
+    elif st.fib_trend == favorable_trend:
+        swing_desc = "rendah ke tinggi" if is_long else "tinggi ke rendah"
+        arah = "bullish" if is_long else "bearish"
         result.add_note(
-            "✅ Fibonacci trend: upswing — fib dihitung dari swing rendah ke tinggi, "
-            "mengonfirmasi struktur bullish"
+            f"✅ Fibonacci trend: {'upswing' if is_long else 'downswing'} — fib dihitung dari swing {swing_desc}, "
+            f"mengonfirmasi struktur {arah}"
         )
         result.confidence_adjustment += 0.02
 
     # -- Cek apakah harga di level Fibonacci kunci (toleransi 0.5%) --
+    # Netral thd arah -- fib level berfungsi sbg S/R di kedua arah posisi.
     fib_levels = {
         "23.6%": st.fib_236,
         "38.2%": st.fib_382,
@@ -1802,18 +1810,23 @@ def _check_fib_detail_context(
         )
         result.confidence_adjustment += 0.04 * len(hit_levels)
 
-    # -- fib_ext sebagai profit target reference --
+    # -- fib_ext sebagai profit target reference. Field ini otomatis proyeksi
+    # naik (swing_high+diff) kalau fib_trend="up", atau turun (swing_low-diff)
+    # kalau fib_trend="down" (lihat indicators/structure.py calculate_fibonacci).
+    # Long peduli target DI ATAS harga, short peduli target DI BAWAH harga.
     if st.fib_ext_1272 and st.fib_ext_1618 and price:
         to_1272 = (st.fib_ext_1272 - price) / price * 100
         to_1618 = (st.fib_ext_1618 - price) / price * 100
-        if to_1272 > 2.0:
+        to_1272_check = to_1272 if is_long else -to_1272
+        to_1618_check = to_1618 if is_long else -to_1618
+        if to_1272_check > 2.0:
             result.add_note(
-                f"✅ Fib extension 1.272 target: ${st.fib_ext_1272:.6f} (+{to_1272:.2f}%) — "
+                f"✅ Fib extension 1.272 target: ${st.fib_ext_1272:.6f} ({to_1272:+.2f}%) — "
                 f"profit target konservatif tersedia"
             )
-        if to_1618 > 3.0:
+        if to_1618_check > 3.0:
             result.add_note(
-                f"✅ Fib extension 1.618 target: ${st.fib_ext_1618:.6f} (+{to_1618:.2f}%) — "
+                f"✅ Fib extension 1.618 target: ${st.fib_ext_1618:.6f} ({to_1618:+.2f}%) — "
                 f"profit target agresif tersedia"
             )
 
@@ -1821,6 +1834,7 @@ def _check_fib_detail_context(
 def _check_donchian_context(
     iset: IndicatorSet,
     result: ValidationResult,
+    side: str = "long",
 ) -> None:
     """[UPGRADE] Aktifkan donchian_upper/lower/middle, donchian_pct_b,
     donchian_width_pct, donchian_score.
@@ -1829,6 +1843,11 @@ def _check_donchian_context(
     donchian_pct_b [0-1]: posisi harga dalam channel
     donchian_width_pct: lebar channel relatif = volatility context
     donchian_score: composite Donchian score
+
+    [FUTURES-READY] side="long" default IDENTIK PERSIS dgn sebelumnya. Short:
+    posisi channel & donchian_score di-mirror. Width (narrow/wide) TIDAK
+    diubah -- volatilitas/breakout-setup itu sendiri direction-agnostic,
+    berlaku sama utk kedua arah.
     """
     st = iset.structure
     if not st or not st.is_valid():
@@ -1836,6 +1855,7 @@ def _check_donchian_context(
     price = iset.current_price
     if not price:
         return
+    is_long = side != "short"
 
     pct_b = st.donchian_pct_b
     width = st.donchian_width_pct
@@ -1846,17 +1866,23 @@ def _check_donchian_context(
     if pct_b is None or upper is None or lower is None:
         return
 
-    # -- Posisi dalam channel --
-    if pct_b >= 0.85:
+    # -- Posisi dalam channel (mirror utk short) --
+    unfavorable_zone = pct_b >= 0.85 if is_long else pct_b <= 0.15
+    favorable_zone   = pct_b <= 0.20 if is_long else pct_b >= 0.80
+    if unfavorable_zone:
+        level = upper if is_long else lower
+        label = "upper" if is_long else "lower"
         result.add_warning(
-            f"Donchian pct_b={pct_b:.2f} — harga di upper channel "
-            f"(${upper:.6f}): potensi resistance di recent high",
+            f"Donchian pct_b={pct_b:.2f} — harga di {label} channel "
+            f"(${level:.6f}): potensi resistance/support di recent extreme",
             confidence_penalty=0.05,
         )
-    elif pct_b <= 0.20:
+    elif favorable_zone:
+        level = lower if is_long else upper
+        label = "lower" if is_long else "upper"
         result.add_note(
-            f"✅ Donchian pct_b={pct_b:.2f} — harga di lower channel "
-            f"(${lower:.6f}): dekat recent low, potential reversal zone"
+            f"✅ Donchian pct_b={pct_b:.2f} — harga di {label} channel "
+            f"(${level:.6f}): dekat recent extreme, potential reversal zone"
         )
         result.confidence_adjustment += 0.04
     elif 0.40 <= pct_b <= 0.65 and mid:
@@ -1865,7 +1891,7 @@ def _check_donchian_context(
             f"mid=${mid:.6f}) — zona netral"
         )
 
-    # -- Width: narrow = breakout setup, wide = trending/extended --
+    # -- Width: narrow = breakout setup, wide = trending/extended (netral thd arah) --
     if width is not None:
         if width < 3.0:
             result.add_note(
@@ -1880,12 +1906,14 @@ def _check_donchian_context(
                 confidence_penalty=0.03,
             )
 
-    # -- donchian_score --
+    # -- donchian_score: mirror threshold di sekitar titik tengah (default 50) --
     ds = st.donchian_score
-    if ds is not None and ds >= 65:
+    score_favorable = ds >= 65 if is_long else ds <= 35
+    if ds is not None and score_favorable:
+        arah = "bullish" if is_long else "bearish"
         result.add_note(
             f"✅ Donchian score {ds:.0f} — "
-            f"posisi dalam channel mendukung entry bullish"
+            f"posisi dalam channel mendukung entry {arah}"
         )
         result.confidence_adjustment += 0.02
 
@@ -2056,24 +2084,24 @@ def validate_signal(
     _check_squeeze_context(iset, result)
 
     # [UPGRADE] Checks baru yang mengaktifkan field sebelumnya idle
-    _check_bb_context(iset, result)
-    _check_kc_context(iset, result)
-    _check_macd_context(iset, result)
-    _check_stoch_context(iset, result)
+    _check_bb_context(iset, result, side=side)
+    _check_kc_context(iset, result, side=side)
+    _check_macd_context(iset, result, side=side)
+    _check_stoch_context(iset, result, side=side)
     _check_strength_context(iset, result)
 
-    _check_oscillator_context(iset, result)
+    _check_oscillator_context(iset, result, side=side)
 
-    _check_structure_context(iset, result)
+    _check_structure_context(iset, result, side=side)
 
     # [UPGRADE] Checks trend & structure yang mengaktifkan field sebelumnya idle
-    _check_trend_cross_context(iset, result)
-    _check_vwap_band_context(iset, result)
-    _check_ichimoku_detail_context(iset, result)
-    _check_pivot_ladder_context(iset, result)
-    _check_market_structure_context(iset, result)
-    _check_fib_detail_context(iset, result)
-    _check_donchian_context(iset, result)
+    _check_trend_cross_context(iset, result, side=side)
+    _check_vwap_band_context(iset, result, side=side)
+    _check_ichimoku_detail_context(iset, result, side=side)
+    _check_pivot_ladder_context(iset, result, side=side)
+    _check_market_structure_context(iset, result, side=side)
+    _check_fib_detail_context(iset, result, side=side)
+    _check_donchian_context(iset, result, side=side)
 
     _check_orderbook_context(iset, result)
 
