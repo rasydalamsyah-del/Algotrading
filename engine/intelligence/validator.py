@@ -1583,12 +1583,18 @@ def _check_pivot_ladder_context(
 def _check_market_structure_context(
     iset: IndicatorSet,
     result: ValidationResult,
+    side: str = "long",
 ) -> None:
     """[UPGRADE] Aktifkan trend_structure, structure_event, last_swing_high/low,
     market_structure_score, sr_zones, nearest_structure_support/resistance.
 
     Market structure (HH/HL = uptrend, LH/LL = downtrend) dan BOS/CHoCH
     adalah konfirmasi paling fundamental apakah harga bergerak searah signal.
+
+    [FUTURES-READY] side="long" default IDENTIK PERSIS dgn sebelumnya. Short:
+    seluruh 5 sub-check di-mirror -- HH/HL<->LH/LL, BOS/CHoCH bullish<->bearish,
+    market_structure_score threshold tinggi/rendah tertukar, S/R clustered
+    support<->resistance, posisi swing range atas/bawah tertukar.
     """
     st = iset.structure
     if not st or not st.is_valid():
@@ -1596,98 +1602,130 @@ def _check_market_structure_context(
     price = iset.current_price
     if not price:
         return
+    is_long = side != "short"
 
     # -- trend_structure: HH/HL vs LH/LL --
     ts = st.trend_structure
-    if ts in ("HH_HL", "strong_uptrend"):
+    strong_favorable = ("HH_HL", "strong_uptrend") if is_long else ("LH_LL", "strong_downtrend")
+    weak_favorable   = ("HL_only", "weak_uptrend") if is_long else ("LH_only", "weak_downtrend")
+    strong_opposing  = ("LH_LL", "strong_downtrend") if is_long else ("HH_HL", "strong_uptrend")
+    weak_opposing    = ("LH_only", "weak_downtrend") if is_long else ("HL_only", "weak_uptrend")
+    arah = "BULLISH" if is_long else "BEARISH"
+    arah_opp = "BEARISH" if is_long else "BULLISH"
+
+    if ts in strong_favorable:
+        label = "Higher Highs + Higher Lows" if is_long else "Lower Highs + Lower Lows"
         result.add_note(
-            f"✅ Market structure BULLISH ({ts}) — "
-            f"Higher Highs + Higher Lows terkonfirmasi"
+            f"✅ Market structure {arah} ({ts}) — "
+            f"{label} terkonfirmasi"
         )
         result.confidence_adjustment += 0.06
-    elif ts in ("HL_only", "weak_uptrend"):
+    elif ts in weak_favorable:
         result.add_note(
-            f"✅ Market structure lemah bullish ({ts}) — "
-            f"HL terbentuk, tapi HH belum terkonfirmasi"
+            f"✅ Market structure lemah {arah.lower()} ({ts}) — "
+            f"struktur mulai terbentuk, belum full konfirmasi"
         )
         result.confidence_adjustment += 0.02
-    elif ts in ("LH_LL", "strong_downtrend"):
+    elif ts in strong_opposing:
+        label = "Lower Highs + Lower Lows" if is_long else "Higher Highs + Higher Lows"
+        arah_entry = "long" if is_long else "short"
         result.add_warning(
-            f"Market structure BEARISH ({ts}) — "
-            f"Lower Highs + Lower Lows: entry long melawan struktur",
+            f"Market structure {arah_opp} ({ts}) — "
+            f"{label}: entry {arah_entry} melawan struktur",
             confidence_penalty=0.08,
         )
-    elif ts in ("LH_only", "weak_downtrend"):
+    elif ts in weak_opposing:
         result.add_warning(
-            f"Market structure condong bearish ({ts}) — "
-            f"LH terbentuk, struktur belum bullish",
+            f"Market structure condong {arah_opp.lower()} ({ts}) — "
+            f"struktur belum {arah.lower()}",
             confidence_penalty=0.04,
         )
 
     # -- structure_event: BOS / CHoCH --
     ev = st.structure_event
-    if ev == "BOS_bullish":
+    bos_favorable   = "BOS_bullish" if is_long else "BOS_bearish"
+    choch_favorable = "CHoCH_bullish" if is_long else "CHoCH_bearish"
+    bos_opposing    = "BOS_bearish" if is_long else "BOS_bullish"
+    choch_opposing  = "CHoCH_bearish" if is_long else "CHoCH_bullish"
+
+    if ev == bos_favorable:
+        arah_label = "BULLISH" if is_long else "BEARISH"
+        swing_label = "swing high" if is_long else "swing low"
         result.add_note(
-            "🚀 Break of Structure BULLISH (BOS) — "
-            "harga tembus swing high sebelumnya: konfirmasi trend continuation"
+            f"🚀 Break of Structure {arah_label} (BOS) — "
+            f"harga tembus {swing_label} sebelumnya: konfirmasi trend continuation"
         )
         result.confidence_adjustment += 0.07
-    elif ev == "CHoCH_bullish":
+    elif ev == choch_favorable:
+        arah_label = "BULLISH" if is_long else "BEARISH"
+        prior_trend = "downtrend" if is_long else "uptrend"
         result.add_note(
-            "🔥 Change of Character BULLISH (CHoCH) — "
-            "struktur berbalik bullish setelah downtrend: high-probability reversal"
+            f"🔥 Change of Character {arah_label} (CHoCH) — "
+            f"struktur berbalik {arah_label.lower()} setelah {prior_trend}: high-probability reversal"
         )
         result.confidence_adjustment += 0.08
-    elif ev == "BOS_bearish":
+    elif ev == bos_opposing:
+        swing_label = "swing low" if is_long else "swing high"
+        arah_entry = "long" if is_long else "short"
+        arah_label = "BEARISH" if is_long else "BULLISH"
         result.add_warning(
-            "Break of Structure BEARISH — harga tembus swing low: "
-            "trend bearish terkonfirmasi, hindari long",
+            f"Break of Structure {arah_label} — harga tembus {swing_label}: "
+            f"trend {arah_label.lower()} terkonfirmasi, hindari {arah_entry}",
             confidence_penalty=0.09,
         )
-    elif ev == "CHoCH_bearish":
+    elif ev == choch_opposing:
+        arah_label = "BEARISH" if is_long else "BULLISH"
         result.add_warning(
-            "Change of Character BEARISH (CHoCH) — "
-            "struktur berbalik bearish: high-probability reversal bearish",
+            f"Change of Character {arah_label} (CHoCH) — "
+            f"struktur berbalik {arah_label.lower()}: high-probability reversal {arah_label.lower()}",
             confidence_penalty=0.10,
         )
 
-    # -- market_structure_score --
+    # -- market_structure_score: mirror threshold di sekitar titik tengah --
     mss = st.market_structure_score
     if mss is not None:
-        if mss >= 70:
+        favorable_score   = mss >= 70 if is_long else mss <= 30
+        unfavorable_score = mss <= 30 if is_long else mss >= 70
+        if favorable_score:
+            arah_label = "bullish" if is_long else "bearish"
             result.add_note(
-                f"✅ Market structure score tinggi ({mss:.0f}) — "
-                f"kualitas struktur bullish sangat baik"
+                f"✅ Market structure score {'tinggi' if is_long else 'rendah'} ({mss:.0f}) — "
+                f"kualitas struktur {arah_label} sangat baik"
             )
             result.confidence_adjustment += 0.03
-        elif mss <= 30:
+        elif unfavorable_score:
+            arah_label = "lemah/bearish" if is_long else "lemah/bullish"
             result.add_warning(
-                f"Market structure score rendah ({mss:.0f}) — "
-                f"struktur market lemah/bearish",
+                f"Market structure score {'rendah' if is_long else 'tinggi'} ({mss:.0f}) — "
+                f"struktur market {arah_label}",
                 confidence_penalty=0.04,
             )
 
-    # -- nearest_structure_support/resistance dari S/R zone clustering --
-    nss = st.nearest_structure_support
-    nsr = st.nearest_structure_resistance
+    # -- nearest_structure_support/resistance: long pakai support(favorable)/
+    # resistance(unfavorable), short mirror pakai resistance/support --
+    favorable_level   = st.nearest_structure_support if is_long else st.nearest_structure_resistance
+    unfavorable_level = st.nearest_structure_resistance if is_long else st.nearest_structure_support
+    favorable_label   = "support" if is_long else "resistance"
+    unfavorable_label = "resistance" if is_long else "support"
 
-    if nss and price:
-        dist_sup = (price - nss) / price * 100
-        if dist_sup < 1.0:
+    if favorable_level and price:
+        dist_fav = abs(price - favorable_level) / price * 100
+        if dist_fav < 1.0:
             result.add_note(
-                f"✅ Clustered S/R support sangat dekat "
-                f"(${nss:.6f}, {dist_sup:.2f}%) — "
-                f"zona support multi-confluence di bawah entry"
+                f"✅ Clustered S/R {favorable_label} sangat dekat "
+                f"(${favorable_level:.6f}, {dist_fav:.2f}%) — "
+                f"zona {favorable_label} multi-confluence di sisi entry"
             )
             result.confidence_adjustment += 0.04
 
-    if nsr and price:
-        dist_res = (nsr - price) / price * 100
-        if 0 < dist_res < 1.5:
+    if unfavorable_level and price:
+        dist_unfav = abs(unfavorable_level - price) / price * 100
+        if 0 < dist_unfav < 1.5:
+            ruang_label = "upside" if is_long else "downside"
             result.add_warning(
-                f"Clustered S/R resistance dekat "
-                f"(${nsr:.6f}, +{dist_res:.2f}%) — "
-                f"zona resistance multi-confluence membatasi upside",
+                f"Clustered S/R {unfavorable_label} dekat "
+                f"(${unfavorable_level:.6f}, {dist_unfav:.2f}%) — "
+                f"zona {unfavorable_label} multi-confluence membatasi {ruang_label}",
                 confidence_penalty=0.05,
             )
 
@@ -1695,16 +1733,20 @@ def _check_market_structure_context(
     if st.last_swing_high and st.last_swing_low and price:
         swing_range = st.last_swing_high - st.last_swing_low
         pos_in_swing = (price - st.last_swing_low) / swing_range if swing_range > 0 else 0.5
-        if pos_in_swing <= 0.35:
+        favorable_zone_swing   = pos_in_swing <= 0.35 if is_long else pos_in_swing >= 0.65
+        unfavorable_zone_swing = pos_in_swing >= 0.75 if is_long else pos_in_swing <= 0.25
+        if favorable_zone_swing:
+            ref_label = "swing low" if is_long else "swing high"
+            ref_val = st.last_swing_low if is_long else st.last_swing_high
             result.add_note(
-                f"✅ Harga di bagian bawah swing range ({pos_in_swing:.0%}) — "
-                f"swing low (${st.last_swing_low:.6f}) dekat, entry low-risk"
+                f"✅ Harga di bagian {'bawah' if is_long else 'atas'} swing range ({pos_in_swing:.0%}) — "
+                f"{ref_label} (${ref_val:.6f}) dekat, entry low-risk"
             )
             result.confidence_adjustment += 0.03
-        elif pos_in_swing >= 0.75:
+        elif unfavorable_zone_swing:
             result.add_warning(
-                f"Harga di bagian atas swing range ({pos_in_swing:.0%}) — "
-                f"entry di upper swing, R/R tidak ideal",
+                f"Harga di bagian {'atas' if is_long else 'bawah'} swing range ({pos_in_swing:.0%}) — "
+                f"entry di sisi kurang ideal, R/R tidak optimal",
                 confidence_penalty=0.04,
             )
 
