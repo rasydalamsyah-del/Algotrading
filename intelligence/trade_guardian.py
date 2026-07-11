@@ -121,35 +121,63 @@ def get_profit_zone_sl(
     entry_price:   float,
     highest_price: float,
     current_sl:    Optional[float] = None,
+    side:          str = "long",
 ) -> Optional[float]:
     """
     SL baru berdasarkan profit zone. Return None jika tidak ada improvement.
 
-    Zone 0  peak < +1%  : tidak ada trailing
-    Zone 1  peak +1–3%  : lindungi breakeven (+0.1%)
-    Zone 2  peak +3–5%  : kunci 50% dari peak profit
-    Zone 3  peak +5–8%  : kunci 60% dari peak profit
-    Zone 4  peak > +8%  : kunci 70% dari peak profit
+    Zone 0  peak < +1.5%  : tidak ada trailing
+    Zone 1  peak +1.5–3%  : lindungi breakeven (+0.6%)
+    Zone 2  peak +3–5%    : kunci 50% dari peak profit
+    Zone 3  peak +5–8%    : kunci 60% dari peak profit
+    Zone 4  peak > +8%    : kunci 70% dari peak profit
+
+    [FUTURES-READY] side="long" (default) menghasilkan perilaku IDENTIK PERSIS
+    dengan versi sebelum perubahan ini -- tidak ada positions yang side-nya
+    "short" sampai saat ini, jadi cabang short belum pernah tereksekusi di
+    produksi. Untuk short: "highest_price" parameter merepresentasikan harga
+    TERENDAH yang pernah dicapai (favorable extreme untuk short), zone_sl
+    dihitung DI BAWAH entry (bukan di atas), dan "improvement" berarti zone_sl
+    lebih RENDAH dari current_sl (bukan lebih tinggi).
     """
-    if entry_price <= 0 or highest_price <= entry_price:
+    is_long = side != "short"
+
+    if entry_price <= 0:
         return None
-    peak_pct = (highest_price - entry_price) / entry_price * 100.0
+    if is_long and highest_price <= entry_price:
+        return None
+    if not is_long and highest_price >= entry_price:
+        return None
+
+    if is_long:
+        peak_pct = (highest_price - entry_price) / entry_price * 100.0
+    else:
+        peak_pct = (entry_price - highest_price) / entry_price * 100.0
 
     # [TUNING] Dilonggarkan dari 1.0/1.0010 — sebelumnya SL terlalu ketat
     # (gap cuma +0.1% dari entry begitu peak nyentuh 1%), gampang kena
     # micro-dip/noise wajar sebelum harga lanjut naik jauh lebih tinggi
     # (kasus nyata: AIGENSYN peak 1.15% -> SL naik ke +0.1%, kena stop,
     # padahal harga lanjut naik sampai +4.7% tak lama setelahnya).
-    if   peak_pct <  1.5: zone_sl = None
-    elif peak_pct <  3.0: zone_sl = round(entry_price * 1.0060, 8)
-    elif peak_pct <  5.0: zone_sl = round(entry_price * (1 + peak_pct * 0.50 / 100), 8)
-    elif peak_pct <  8.0: zone_sl = round(entry_price * (1 + peak_pct * 0.60 / 100), 8)
-    else:                 zone_sl = round(entry_price * (1 + peak_pct * 0.70 / 100), 8)
+    if   peak_pct <  1.5: zone_pct = None
+    elif peak_pct <  3.0: zone_pct = 0.60
+    elif peak_pct <  5.0: zone_pct = peak_pct * 0.50
+    elif peak_pct <  8.0: zone_pct = peak_pct * 0.60
+    else:                 zone_pct = peak_pct * 0.70
 
-    if zone_sl is None:
+    if zone_pct is None:
         return None
-    if current_sl is not None and zone_sl <= current_sl:
-        return None
+
+    if is_long:
+        zone_sl = round(entry_price * (1 + zone_pct / 100), 8)
+    else:
+        zone_sl = round(entry_price * (1 - zone_pct / 100), 8)
+
+    if current_sl is not None:
+        if is_long and zone_sl <= current_sl:
+            return None
+        if not is_long and zone_sl >= current_sl:
+            return None
     return zone_sl
 
 
@@ -211,23 +239,37 @@ def check_atg(
     df,                               # pd.DataFrame | None — min 15 baris
     symbol:        str = "",
     regime:        str = "trending_bull",
+    side:          str = "long",
 ) -> ATGResult:
     """
     Adaptive Trade Guardian — panggil setiap siklus monitoring.
     df: OHLCV DataFrame (open/high/low/close/volume), rekomendasi 50 candle 1h.
+
+    [FUTURES-READY] side="long" (default) berperilaku IDENTIK PERSIS dengan
+    versi sebelum perubahan ini. Belum ada posisi short di produksi sampai
+    saat ini, jadi cabang short belum pernah tereksekusi nyata.
     """
     result = ATGResult()
     if entry_price <= 0 or current_price <= 0:
         return result
 
-    profit_pct   = (current_price - entry_price) / entry_price * 100.0
-    effective_hi = max(highest_price, current_price)
+    is_long = side != "short"
+
+    if is_long:
+        profit_pct   = (current_price - entry_price) / entry_price * 100.0
+        effective_hi = max(highest_price, current_price)
+    else:
+        profit_pct   = (entry_price - current_price) / entry_price * 100.0
+        effective_hi = min(highest_price, current_price)
 
     # ── Layer 2: Profit Zone Trailing ─────────────────────────────────────
-    zone_sl = get_profit_zone_sl(entry_price, effective_hi, current_sl)
+    zone_sl = get_profit_zone_sl(entry_price, effective_hi, current_sl, side=side)
     if zone_sl is not None:
         result.new_sl = zone_sl
-        peak_pct = (effective_hi - entry_price) / entry_price * 100.0
+        if is_long:
+            peak_pct = (effective_hi - entry_price) / entry_price * 100.0
+        else:
+            peak_pct = (entry_price - effective_hi) / entry_price * 100.0
         log.debug(
             "ATG ProfitZone [%s] profit=%.2f%% peak=%.2f%% zone_sl=%.8f",
             symbol, profit_pct, peak_pct, zone_sl,

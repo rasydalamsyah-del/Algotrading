@@ -110,6 +110,11 @@ class PositionTracker:
     entry_time:       datetime
     exit_mode:        ExitMode
     highest_price:    float
+    # [FUTURES-READY] Field baru: arah posisi ("long"/"short"). Default "long"
+    # supaya seluruh perilaku bot spot yang sudah berjalan (100% long) TIDAK
+    # berubah sama sekali -- ini murni scaffolding untuk dukungan short/futures
+    # nanti, tanpa mengubah behavior spot saat ini.
+    side:             str   = "long"
     trailing_active:  bool  = False
     quick_tp_pct:     float = 1.75
     quick_sl_pct:     float = 1.20
@@ -755,15 +760,38 @@ class VolumetricBreakoutStrategy(BaseStrategy):
             )
             return None
 
+        # [FUTURES-READY] Side-aware. Untuk side="long" (default & SATU-SATUNYA
+        # kondisi yang pernah berjalan di produksi sampai saat ini), seluruh
+        # formula di bawah IDENTIK PERSIS dengan versi sebelumnya -- tidak ada
+        # perubahan behavior. Cabang "short" disiapkan untuk futures nanti,
+        # tapi belum pernah dieksekusi karena tidak ada tracker yang side-nya
+        # "short" sampai saat ini (register_position() selalu default "long").
+        is_long = tracker.side != "short"
+
         with self._lock:
-            if current_price > tracker.highest_price:
-                tracker.highest_price = current_price
+            if is_long:
+                if current_price > tracker.highest_price:
+                    tracker.highest_price = current_price
+            else:
+                # Untuk short, "highest_price" field yang sama dipakai untuk
+                # menyimpan harga TERENDAH yang pernah tercapai (favorable
+                # extreme untuk posisi short) -- nama field dipertahankan
+                # agar skema tracker tidak berubah, maknanya kontekstual
+                # sesuai side.
+                if current_price < tracker.highest_price:
+                    tracker.highest_price = current_price
 
             if not tracker.trailing_active:
-                profit_pct = (
-                    (current_price - tracker.entry_price)
-                    / tracker.entry_price * 100
-                )
+                if is_long:
+                    profit_pct = (
+                        (current_price - tracker.entry_price)
+                        / tracker.entry_price * 100
+                    )
+                else:
+                    profit_pct = (
+                        (tracker.entry_price - current_price)
+                        / tracker.entry_price * 100
+                    )
                 if profit_pct >= tracker.activation_pct:
                     tracker.trailing_active = True
                     log.info(
@@ -774,12 +802,23 @@ class VolumetricBreakoutStrategy(BaseStrategy):
             if not tracker.trailing_active:
                 return None
 
-            trail_sl = tracker.highest_price * (1 - tracker.trailing_gap_pct / 100)
+            if is_long:
+                trail_sl = tracker.highest_price * (1 - tracker.trailing_gap_pct / 100)
+            else:
+                trail_sl = tracker.highest_price * (1 + tracker.trailing_gap_pct / 100)
 
-        if current_price <= trail_sl:
-            profit_pct = (
-                (current_price - tracker.entry_price) / tracker.entry_price * 100
-            )
+        hit_trail = (
+            (current_price <= trail_sl) if is_long else (current_price >= trail_sl)
+        )
+        if hit_trail:
+            if is_long:
+                profit_pct = (
+                    (current_price - tracker.entry_price) / tracker.entry_price * 100
+                )
+            else:
+                profit_pct = (
+                    (tracker.entry_price - current_price) / tracker.entry_price * 100
+                )
             reason = (
                 f"TrailingExit("
                 f"high={tracker.highest_price:.6f},"
@@ -894,6 +933,7 @@ class VolumetricBreakoutStrategy(BaseStrategy):
         p:           Dict,
         entry_score: float = 0.0,
         entry_regime: str  = "undefined",
+        side:        str   = "long",
     ) -> None:
         profile      = self._profiles.get(symbol)
         profile_name = profile.profile.value if profile else "universal"
@@ -904,6 +944,7 @@ class VolumetricBreakoutStrategy(BaseStrategy):
             entry_time=_utcnow(),
             exit_mode=exit_mode,
             highest_price=entry_price,
+            side=side,
             trailing_active=False,
             quick_tp_pct=p["quick_tp_pct"],
             quick_sl_pct=p["quick_sl_pct"],

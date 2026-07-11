@@ -2015,6 +2015,7 @@ class TradingBot:
                             log.debug("ATG fetch candles gagal [%s]: %s", pos.symbol, _atg_fe)
 
                         _atg_regime = pos.entry_regime or "trending_bull"
+                        _atg_side   = pos.side or "long"
                         _atg_result = check_atg(
                             entry_price=pos.entry_price or 0.0,
                             current_price=price,
@@ -2023,12 +2024,22 @@ class TradingBot:
                             df=_atg_df,
                             symbol=pos.symbol,
                             regime=_atg_regime,
+                            side=_atg_side,
                         )
 
-                        # Update SL ke profit zone kalau lebih baik
+                        # Update SL ke profit zone kalau lebih baik.
+                        # [FUTURES-READY] Untuk long, "lebih baik" = SL baru lebih
+                        # TINGGI (identik dengan perilaku sebelumnya). Untuk short,
+                        # "lebih baik" = SL baru lebih RENDAH (belum pernah
+                        # tereksekusi di produksi karena belum ada posisi short).
                         if _atg_result.new_sl is not None:
-                            if (pos.stop_loss_price is None
-                                    or _atg_result.new_sl > pos.stop_loss_price):
+                            _atg_is_long = _atg_side != "short"
+                            _sl_improved = (
+                                pos.stop_loss_price is None
+                                or (_atg_is_long and _atg_result.new_sl > pos.stop_loss_price)
+                                or (not _atg_is_long and _atg_result.new_sl < pos.stop_loss_price)
+                            )
+                            if _sl_improved:
                                 log.info(
                                     "ATG ProfitZone SL | %s | %.6f → %.6f",
                                     pos.symbol, pos.stop_loss_price or 0, _atg_result.new_sl,
@@ -2786,11 +2797,18 @@ class TradingBot:
                     symbol, float(entry_price),
                 )
             else:
+                # [FUTURES-READY] side="long" eksplisit -- jalur ini HANYA
+                # dipanggil dari alur SignalType.BUY (lihat _handle_buy),
+                # yang sampai saat ini satu-satunya jalur entry yang ada.
+                # Kalau nanti future/ menambah entry short, itu perlu jalur
+                # register_position(side="short") TERPISAH dari sini, bukan
+                # modifikasi baris ini.
                 self.strategy.register_position(
                     symbol=symbol,
                     entry_price=float(entry_price),
                     exit_mode=exit_mode,
                     p=p,
+                    side="long",
                 )
         else:
             log.critical(
