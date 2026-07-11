@@ -1,10 +1,50 @@
 # Audit Arsitektur AlgoTrader — Catatan Kerja
 
-**Status: ✅ SELESAI** | Cakupan: seluruh file backend inti (main.py, exchange.py, risk.py, strategy.py, execution.py, seluruh intelligence/, indicators/, database.py, profiles/, learning/, api_server.py, telegram_bot.py, ta_compat.py). `dashboard/*.html` sengaja tidak diaudit (dikonfirmasi tidak diperlukan untuk keputusan struktur saat ini).
+**Status: ✅ AUDIT SELESAI, ✅ RESTRUKTURISASI FISIK SELESAI DIEKSEKUSI**
 
 ---
 
-## Ringkasan Eksekutif (baca ini dulu)
+## 🎉 UPDATE — Restrukturisasi Sudah Dieksekusi (bukan cuma rencana lagi)
+
+Struktur folder final di bawah **sudah benar-benar diimplementasikan**, bukan sekadar dokumen rencana. Semua fase sudah dikerjakan dan diverifikasi:
+
+```
+algotrader/
+├── engine/              ✅ SELESAI — mesin bersama (indicators, core, intelligence
+│                            netral, profiles, database, learning netral)
+├── spot/                ✅ SELESAI — bot spot production (main_spot.py, dst)
+├── shared_service/      ✅ SELESAI — telegram_bot.py, notifications.py
+├── future/              ⬜ BELUM DIMULAI — folder belum dibuat sama sekali
+└── dashboard/           tidak diubah (sesuai kesepakatan)
+```
+
+**Verifikasi akhir:** `spot.main_spot` (entry point utama bot) berhasil di-import 100% bersih, seluruh 24 modul kunci lolos, seluruh file lolos `py_compile`.
+
+**3 temuan/perbaikan arsitektur penting yang ditemukan SAAT eksekusi (bukan cuma saat audit baca-baca):**
+
+1. **`SignalType`/`SignalEvent`/`ExitMode` pindah dari `strategy.py` ke `engine/core/models.py`.** Ini konsep generik (SignalType sudah punya `CLOSE_SHORT` dari awal), tapi awalnya didefinisikan di `strategy.py` — bikin `engine/intelligence/commander.py` diam-diam bergantung ke `spot/` lewat *local import di dalam method* (bukan di top-level file), yang **tidak terdeteksi** oleh audit awal (yang cuma scan import level-modul). Ini pelajaran penting: audit statis (grep/baca) tidak selalu menangkap semua dependency, terutama local import di dalam fungsi.
+
+2. **Tiga bug path `__file__`-relative** ditemukan dan diperbaiki, semua terverifikasi dengan tes resolusi path langsung (bukan asumsi):
+   - `engine/learning/meta_learner.py` — `sys.path.insert()` butuh 1 level parent tambahan
+   - `spot/api_server_spot.py` — 4 titik lookup `dashboard/` & `universe.json` butuh 1 level parent tambahan
+   - `shared_service/telegram_bot.py` — lookup `.env` butuh 1 level parent tambahan
+
+3. **Konfirmasi path CWD-relative masih aman**, TAPI dengan syarat operasional: bot **wajib** dijalankan lewat `start.sh` (yang `cd` ke repo root dulu). Kalau dijalankan manual `python spot/main_spot.py` dari dalam folder `spot/`, path DB/log/universe.json defaultnya akan salah.
+
+**Yang juga dibereskan saat proses ini (bukan restrukturisasi murni, tapi ditemukan & diperbaiki di jalan):**
+- Dihapus: `learning/coin_swap.py`, `learning/cross_learn.py` (deprecated permanen, dikonfirmasi user)
+- Dihapus: fungsi `_try_shadow_trade()` & `_cleanup_shadow_trade()` di `main_spot.py` (256 baris, sumber langsung error berulang "ShadowTrade cleanup... No such file or directory" di log produksi)
+- Semua shell script (`start.sh`, `stop.sh`, `status.sh`, `install_termux.sh`) diupdate ke path baru
+
+**Belum dikerjakan / item minor tersisa:**
+- `tools/build_jalur.py` masih list path lama di internal `FILES` list-nya (dev-tool generator dokumentasi, tidak dibaca ulang saat runtime bot, jadi tidak kritis)
+- `simulate_test.py` punya hardcoded path `/root/algotrader` (pre-existing, bukan akibat restrukturisasi hari ini)
+- **Belum push ke VPS** — sesuai instruksi user, perubahan ini baru di GitHub, VPS production tetap jalan dengan kode versi lama sampai ada instruksi deploy eksplisit
+- **`future/` belum dimulai sama sekali** — ini pekerjaan besar berikutnya
+
+---
+
+## Ringkasan Eksekutif Audit (baca ini dulu untuk konteks awal)
 
 **Tujuan audit:** memetakan setiap file untuk menentukan struktur folder baru (`engine/` / `spot/` / `future/`) sebelum menambahkan dukungan Binance Futures (long + short + leverage), tanpa mematikan sistem spot yang sudah berjalan.
 
