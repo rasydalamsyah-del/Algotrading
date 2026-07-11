@@ -1156,6 +1156,7 @@ def _check_orderbook_context(iset: IndicatorSet, result: ValidationResult) -> No
 def _check_trend_cross_context(
     iset: IndicatorSet,
     result: ValidationResult,
+    side: str = "long",
 ) -> None:
     """[UPGRADE] Aktifkan golden_cross_bars_ago, dead_cross_bars_ago, supertrend_value.
 
@@ -1164,71 +1165,92 @@ def _check_trend_cross_context(
     dead_cross_bars_ago   → bearish event baru-baru ini = waspada entry long
     supertrend_value      → level harga ST line = dynamic support/resistance
                              yang bisa dipakai untuk contextual SL reference
+
+    [FUTURES-READY] side="long" default IDENTIK PERSIS dgn sebelumnya. Short:
+    golden_cross jadi opposing signal, dead_cross jadi confirming signal
+    (mirror total), SuperTrend direction check di-swap.
     """
     tr = iset.trend
     if tr is None:
         return
 
     price = iset.current_price
+    is_long = side != "short"
 
-    # -- Golden cross freshness --
-    gc = tr.golden_cross_bars_ago
-    if gc is not None:
-        if gc <= 5:
+    # -- Cross freshness: confirming cross utk long=golden, utk short=dead --
+    confirming_bars = tr.golden_cross_bars_ago if is_long else tr.dead_cross_bars_ago
+    opposing_bars   = tr.dead_cross_bars_ago if is_long else tr.golden_cross_bars_ago
+    confirming_label = "Golden cross" if is_long else "Dead cross"
+    opposing_label    = "Dead cross" if is_long else "Golden cross"
+    arah_momentum     = "bullish" if is_long else "bearish"
+    arah_momentum_opp = "bearish" if is_long else "bullish"
+
+    if confirming_bars is not None:
+        if confirming_bars <= 5:
             result.add_note(
-                f"🚀 Golden cross SEGAR ({gc} bar lalu) — "
-                f"momentum bullish dalam puncak kekuatan"
+                f"🚀 {confirming_label} SEGAR ({confirming_bars} bar lalu) — "
+                f"momentum {arah_momentum} dalam puncak kekuatan"
             )
             result.confidence_adjustment += 0.07
-        elif gc <= 15:
+        elif confirming_bars <= 15:
             result.add_note(
-                f"✅ Golden cross masih fresh ({gc} bar lalu) — "
-                f"momentum bullish terkonfirmasi"
+                f"✅ {confirming_label} masih fresh ({confirming_bars} bar lalu) — "
+                f"momentum {arah_momentum} terkonfirmasi"
             )
             result.confidence_adjustment += 0.04
-        elif gc <= 50:
+        elif confirming_bars <= 50:
             result.add_note(
-                f"📊 Golden cross {gc} bar lalu — "
-                f"trend bullish established, momentum mulai melambat"
+                f"📊 {confirming_label} {confirming_bars} bar lalu — "
+                f"trend {arah_momentum} established, momentum mulai melambat"
             )
 
-    # -- Dead cross: sinyal bearish baru-baru ini = penalti entry long --
-    dc = tr.dead_cross_bars_ago
-    if dc is not None:
-        if dc <= 5:
+    # -- Opposing cross: sinyal berlawanan baru-baru ini = penalti entry --
+    if opposing_bars is not None:
+        entry_label = "long" if is_long else "short"
+        if opposing_bars <= 5:
             result.add_warning(
-                f"⚠️ Dead cross SEGAR ({dc} bar lalu) — "
-                f"momentum bearish baru dimulai, hindari long",
+                f"⚠️ {opposing_label} SEGAR ({opposing_bars} bar lalu) — "
+                f"momentum {arah_momentum_opp} baru dimulai, hindari {entry_label}",
                 confidence_penalty=0.09,
             )
-        elif dc <= 20:
+        elif opposing_bars <= 20:
             result.add_warning(
-                f"Dead cross {dc} bar lalu — "
-                f"trend bearish masih aktif, entry long berisiko",
+                f"{opposing_label} {opposing_bars} bar lalu — "
+                f"trend {arah_momentum_opp} masih aktif, entry {entry_label} berisiko",
                 confidence_penalty=0.05,
             )
 
     # -- Supertrend value sebagai dynamic S/R reference --
     if tr.supertrend_value and price:
         dist_pct = (price - tr.supertrend_value) / tr.supertrend_value * 100
-        if tr.supertrend_direction == 1:  # bullish ST
-            if 0 < dist_pct < 1.5:
+        aligned_st_dir = 1 if is_long else -1
+        opposing_st_dir = -1 if is_long else 1
+        if tr.supertrend_direction == aligned_st_dir:
+            dist_check = dist_pct if is_long else -dist_pct
+            label = "support" if is_long else "resistance"
+            if 0 < dist_check < 1.5:
                 result.add_note(
-                    f"✅ Harga sangat dekat SuperTrend support "
-                    f"(${tr.supertrend_value:.6f}, +{dist_pct:.2f}%) — "
-                    f"entry di atas ST support, SL reference jelas"
+                    f"✅ Harga sangat dekat SuperTrend {label} "
+                    f"(${tr.supertrend_value:.6f}, {dist_pct:+.2f}%) — "
+                    f"entry searah ST {label}, SL reference jelas"
                 )
                 result.confidence_adjustment += 0.03
-            elif dist_pct <= 0:
+            elif dist_check <= 0:
+                posisi = "bawah" if is_long else "atas"
+                arah = "bearish" if is_long else "bullish"
                 result.add_warning(
-                    f"Harga di bawah SuperTrend ({dist_pct:.2f}%) — "
-                    f"ST belum flip bearish tapi harga sudah tembus, waspada",
+                    f"Harga di {posisi} SuperTrend ({dist_pct:+.2f}%) — "
+                    f"ST belum flip {arah} tapi harga sudah tembus, waspada",
                     confidence_penalty=0.04,
                 )
-        elif tr.supertrend_direction == -1:  # bearish ST
+        elif tr.supertrend_direction == opposing_st_dir:
+            arah = "bearish" if is_long else "bullish"
+            label = "resistance" if is_long else "support"
+            posisi = "atas" if is_long else "bawah"
+            trend_label = "down" if is_long else "up"
             result.add_warning(
-                f"SuperTrend bearish (line=${tr.supertrend_value:.6f}) — "
-                f"dynamic resistance di atas harga, trend down",
+                f"SuperTrend {arah} (line=${tr.supertrend_value:.6f}) — "
+                f"dynamic {label} di {posisi} harga, trend {trend_label}",
                 confidence_penalty=0.05,
             )
 
@@ -1236,11 +1258,16 @@ def _check_trend_cross_context(
 def _check_vwap_band_context(
     iset: IndicatorSet,
     result: ValidationResult,
+    side: str = "long",
 ) -> None:
     """[UPGRADE] Aktifkan vwap_upper_1/2, vwap_lower_1/2.
 
     Bands VWAP ±1σ ±2σ memberi konteks presisi posisi harga dalam distribusi
     volume harian. Lebih informatif dari sekadar 'above/below VWAP'.
+
+    [FUTURES-READY] side="long" default IDENTIK PERSIS dgn sebelumnya. Short:
+    seluruh 6 zona di-mirror -- upper jadi unfavorable utk long/favorable
+    utk short, dan sebaliknya.
     """
     tr = iset.trend
     if tr is None:
@@ -1259,44 +1286,87 @@ def _check_vwap_band_context(
     if None in (u1, u2, l1, l2):
         return
 
-    # Posisi presisi dalam band VWAP
-    if price >= u2:
-        result.add_warning(
-            f"Harga di atas VWAP +2σ (${u2:.6f}) — "
-            f"extreme overbought vs distribusi volume, mean-reversion risk tinggi",
-            confidence_penalty=0.07,
-        )
-    elif price >= u1:
-        result.add_warning(
-            f"Harga di zona VWAP +1σ–+2σ (${u1:.6f}–${u2:.6f}) — "
-            f"stretched di atas VWAP, R/R kurang ideal untuk entry baru",
-            confidence_penalty=0.03,
-        )
-    elif price >= vwap:
-        dist_to_u1 = (u1 - price) / price * 100
-        result.add_note(
-            f"✅ Harga di atas VWAP (${vwap:.6f}), ruang ke +1σ={dist_to_u1:.2f}% — "
-            f"bullish VWAP zone dengan room yang cukup"
-        )
-        result.confidence_adjustment += 0.03
-    elif price >= l1:
-        dist_to_vwap = (vwap - price) / price * 100
-        result.add_note(
-            f"Harga di bawah VWAP ({dist_to_vwap:.2f}%) tapi di atas -1σ — "
-            f"sedikit bearish tapi masih dalam distribusi normal"
-        )
-    elif price >= l2:
-        result.add_note(
-            f"✅ Harga di zona VWAP -1σ–-2σ (${l1:.6f}–${l2:.6f}) — "
-            f"value zone: banyak volume transacted di atas level ini, oversold VWAP"
-        )
-        result.confidence_adjustment += 0.04
+    is_long = side != "short"
+    # Untuk short, band atas/bawah scan-nya dibalik (cek dari extreme yg
+    # favorable dulu: short favorable = upper band, long favorable = lower band)
+
+    if is_long:
+        if price >= u2:
+            result.add_warning(
+                f"Harga di atas VWAP +2σ (${u2:.6f}) — "
+                f"extreme overbought vs distribusi volume, mean-reversion risk tinggi",
+                confidence_penalty=0.07,
+            )
+        elif price >= u1:
+            result.add_warning(
+                f"Harga di zona VWAP +1σ–+2σ (${u1:.6f}–${u2:.6f}) — "
+                f"stretched di atas VWAP, R/R kurang ideal untuk entry baru",
+                confidence_penalty=0.03,
+            )
+        elif price >= vwap:
+            dist_to_u1 = (u1 - price) / price * 100
+            result.add_note(
+                f"✅ Harga di atas VWAP (${vwap:.6f}), ruang ke +1σ={dist_to_u1:.2f}% — "
+                f"bullish VWAP zone dengan room yang cukup"
+            )
+            result.confidence_adjustment += 0.03
+        elif price >= l1:
+            dist_to_vwap = (vwap - price) / price * 100
+            result.add_note(
+                f"Harga di bawah VWAP ({dist_to_vwap:.2f}%) tapi di atas -1σ — "
+                f"sedikit bearish tapi masih dalam distribusi normal"
+            )
+        elif price >= l2:
+            result.add_note(
+                f"✅ Harga di zona VWAP -1σ–-2σ (${l1:.6f}–${l2:.6f}) — "
+                f"value zone: banyak volume transacted di atas level ini, oversold VWAP"
+            )
+            result.confidence_adjustment += 0.04
+        else:
+            result.add_note(
+                f"✅ Harga di bawah VWAP -2σ (${l2:.6f}) — "
+                f"extreme oversold vs distribusi volume, strong mean-reversion kandidat"
+            )
+            result.confidence_adjustment += 0.05
     else:
-        result.add_note(
-            f"✅ Harga di bawah VWAP -2σ (${l2:.6f}) — "
-            f"extreme oversold vs distribusi volume, strong mean-reversion kandidat"
-        )
-        result.confidence_adjustment += 0.05
+        # Mirror penuh: short favorable di UPPER band, unfavorable di LOWER band
+        if price <= l2:
+            result.add_warning(
+                f"Harga di bawah VWAP -2σ (${l2:.6f}) — "
+                f"extreme oversold vs distribusi volume, mean-reversion risk tinggi",
+                confidence_penalty=0.07,
+            )
+        elif price <= l1:
+            result.add_warning(
+                f"Harga di zona VWAP -1σ–-2σ (${l2:.6f}–${l1:.6f}) — "
+                f"stretched di bawah VWAP, R/R kurang ideal untuk entry baru",
+                confidence_penalty=0.03,
+            )
+        elif price <= vwap:
+            dist_to_l1 = (price - l1) / price * 100
+            result.add_note(
+                f"✅ Harga di bawah VWAP (${vwap:.6f}), ruang ke -1σ={dist_to_l1:.2f}% — "
+                f"bearish VWAP zone dengan room yang cukup"
+            )
+            result.confidence_adjustment += 0.03
+        elif price <= u1:
+            dist_to_vwap = (price - vwap) / price * 100
+            result.add_note(
+                f"Harga di atas VWAP ({dist_to_vwap:.2f}%) tapi di bawah +1σ — "
+                f"sedikit bullish tapi masih dalam distribusi normal"
+            )
+        elif price <= u2:
+            result.add_note(
+                f"✅ Harga di zona VWAP +1σ–+2σ (${u1:.6f}–${u2:.6f}) — "
+                f"value zone: banyak volume transacted di bawah level ini, overbought VWAP"
+            )
+            result.confidence_adjustment += 0.04
+        else:
+            result.add_note(
+                f"✅ Harga di atas VWAP +2σ (${u2:.6f}) — "
+                f"extreme overbought vs distribusi volume, strong mean-reversion kandidat"
+            )
+            result.confidence_adjustment += 0.05
 
 
 def _check_ichimoku_detail_context(
