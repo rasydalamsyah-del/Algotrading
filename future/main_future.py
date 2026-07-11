@@ -20,15 +20,19 @@ Perbedaan MENDASAR yang ditemukan & diperbaiki saat membangun file ini
    (bukan SignalType.SELL hardcoded), evaluate_order dgn existing_position_side.
 
 ⚠️ BELUM DIKERJAKAN (di luar scope sesi ini, terdokumentasi jelas):
-- run_position_sync_loop(): position_sync_futures.py BELUM DIBANGUN (item
-  terpisah di roadmap) -- loop ini DIHILANGKAN dari task list run(), bukan
-  di-stub diam-diam. Rekonsiliasi posisi orphan di Binance Futures TIDAK
-  akan berjalan sampai file itu dibangun.
 - run_coin_swap_loop(): TIDAK diikutsertakan sama sekali -- sistem ini
   sudah dikonfirmasi deprecated permanen di spot, tidak relevan di futures.
 - Funding rate settlement (future/funding.py) belum disambungkan ke loop
   manapun di sini -- perhitungan tersedia tapi belum ada loop periodik yang
   memanggilnya untuk update realized_funding di Trade/Position.
+- api_server_future.py belum dibangun (item terakhir roadmap) -- main()
+  di file ini sudah siap memakainya (via ImportError fallback graceful),
+  tinggal dibangun.
+
+✅ SUDAH DIKERJAKAN & DIVERIFIKASI (update dari draft sebelumnya):
+- run_position_sync_loop(): position_sync_futures.py sudah dibangun &
+  diverifikasi end-to-end (deteksi posisi orphan via fetch_positions(),
+  adopt dengan side/leverage/margin_mode/liquidation_price yang benar).
 """
 
 from __future__ import annotations
@@ -1442,6 +1446,27 @@ class TradingBot:
             except Exception as e:
                 log.debug("Config watcher error: %s", e)
 
+    async def run_position_sync_loop(self) -> None:
+        """
+        [SEKARANG TERSEDIA] position_sync_futures.py sudah dibangun (langkah
+        8/9) -- loop ini bisa diaktifkan, beda dari versi sebelumnya yang
+        sengaja dihilangkan dari run().
+        """
+        from future.position_sync_futures import run_position_sync
+        log.info("Position Sync loop (futures) dimulai — interval 5 menit")
+        await asyncio.sleep(30)
+        while self.is_running:
+            try:
+                result = await run_position_sync(self.exchange, self.db)
+                if result["adopted"] > 0:
+                    log.info(
+                        "PositionSync (futures): %d diadopsi | %d ditolak | %d error",
+                        result["adopted"], result["rejected"], result["errors"],
+                    )
+            except Exception as e:
+                log.error("run_position_sync_loop (futures) error: %s", e)
+            await asyncio.sleep(300)
+
     async def run(self) -> None:
         await self.start()
 
@@ -1451,18 +1476,19 @@ class TradingBot:
         except Exception as _pe:
             log.warning("Portfolio startup refresh gagal: %s", _pe)
 
-        # [CATATAN] run_position_sync_loop() SENGAJA TIDAK diikutsertakan --
-        # position_sync_futures.py belum dibangun (item terpisah di roadmap).
-        # run_coin_swap_loop() TIDAK diikutsertakan -- sistem itu deprecated
-        # permanen, tidak relevan sama sekali di futures.
+        # [UPDATE] run_position_sync_loop() SEKARANG DIIKUTSERTAKAN --
+        # position_sync_futures.py sudah dibangun & diverifikasi end-to-end.
+        # run_coin_swap_loop() TETAP TIDAK diikutsertakan -- sistem itu
+        # deprecated permanen, tidak relevan sama sekali di futures.
         self._tasks = [
-            asyncio.create_task(self.run_scanner_loop(),      name="task_scanner_futures"),
-            asyncio.create_task(self.run_gate3_worker(),      name="task_gate3_worker_futures"),
-            asyncio.create_task(self.run_portfolio_monitor(), name="task_portfolio_futures"),
-            asyncio.create_task(self.run_sl_tp_monitor(),     name="task_sl_tp_futures"),
-            asyncio.create_task(self.run_daily_summary(),     name="task_daily_summary_futures"),
-            asyncio.create_task(self.run_analytics_loop(),    name="task_analytics_futures"),
-            asyncio.create_task(self.run_config_watcher(),    name="task_config_watcher_futures"),
+            asyncio.create_task(self.run_scanner_loop(),       name="task_scanner_futures"),
+            asyncio.create_task(self.run_gate3_worker(),       name="task_gate3_worker_futures"),
+            asyncio.create_task(self.run_portfolio_monitor(),  name="task_portfolio_futures"),
+            asyncio.create_task(self.run_sl_tp_monitor(),      name="task_sl_tp_futures"),
+            asyncio.create_task(self.run_daily_summary(),      name="task_daily_summary_futures"),
+            asyncio.create_task(self.run_analytics_loop(),     name="task_analytics_futures"),
+            asyncio.create_task(self.run_config_watcher(),     name="task_config_watcher_futures"),
+            asyncio.create_task(self.run_position_sync_loop(), name="task_position_sync_futures"),
         ]
 
         if self.notifier is not None and self.config.get('telegram_enabled', False):
