@@ -60,7 +60,8 @@ from spot.exchange_spot import WebSocketFeed  # [CATATAN] WebSocketFeed belum
     # diekstrak ke engine/ (lihat engine/execution_base.py) -- market-agnostic
     # secara konsep (streaming ticker/orderbook), reuse langsung dari spot/
     # untuk saat ini, bukan duplikasi baru.
-from spot.strategy_spot import get_strategy, PositionTracker
+from future.strategy_future import get_strategy
+from engine.strategy_base import PositionTracker
 from engine.core.models import SignalType, SignalEvent, ExitMode
 from future.risk_future import RiskManager
 from engine.risk_base import RiskAssessment, RiskDecision, HaltReason
@@ -305,7 +306,12 @@ class TradingBot:
         await self.ws_feed.start()
         log.info("WebSocketFeed subscribe ke %d koin universe futures", len(self.config["universe_watchlist"]))
 
-        await self._initialize_intelligence_pipeline()
+        # [BUG-FIX] Urutan sebelumnya SALAH: _initialize_intelligence_pipeline()
+        # dipanggil SEBELUM risk_manager dibuat, padahal pipeline butuh
+        # inject_dependencies(risk_manager=...) ke commander -- risk_manager
+        # masih None saat itu terjadi. Urutan benar (sama seperti spot):
+        # risk_manager -> executor -> intelligence pipeline.
+        self.risk_manager = RiskManager(config=self.config, db=self.db)
 
         self.executor = OrderExecutionManager(
             exchange=self.exchange, db=self.db,
@@ -314,7 +320,7 @@ class TradingBot:
             ws_feed=self.ws_feed,
         )
 
-        self.risk_manager = RiskManager(config=self.config, db=self.db)
+        await self._initialize_intelligence_pipeline()
 
         self.is_running = True
         self.start_time = _utcnow_dt()
@@ -322,20 +328,64 @@ class TradingBot:
                   self.config["default_leverage"], self.config["margin_mode"])
 
     async def _initialize_intelligence_pipeline(self) -> None:
+        """
+        [BUG-FIX] Sebelumnya memanggil get_strategy(name=, config=, db=,
+        ws_feed=, notifier=) -- signature yang SAMA SEKALI TIDAK ADA di
+        get_strategy() manapun (spot maupun future). get_strategy() yang
+        benar cuma terima (name, symbols, timeframe, params) -- db/ws_feed/
+        notifier di-INJECT sebagai atribut SETELAH konstruksi (pola yang
+        sama dgn spot/main_spot.py). Bug ini akan langsung TypeError kalau
+        bot betulan dijalankan -- ditemukan & diperbaiki saat verifikasi
+        independensi future/ dari spot/ (baca future/strategy_future.py
+        untuk konteks lengkap kenapa ekstraksi ini dilakukan).
+        """
         if not self.config.get("intelligence_enabled", True):
             return
         try:
             self.strategy = get_strategy(
                 name=self.config["strategy"],
-                config=self.config,
-                db=self.db,
-                ws_feed=self.ws_feed,
-                notifier=self.notifier,
+                symbols=self.config["universe_watchlist"],
+                timeframe=self.config["timeframe"],
+                params={
+                    "atr_sl_mult":             self.config["atr_multiplier_sl"],
+                    "atr_tp_mult":             self.config["atr_multiplier_tp"],
+                    "sentiment_enabled":       self.config["sentiment_enabled"],
+                    "volume_multiplier":       self.config.get("volume_multiplier", 1.3),
+                    "volume_spike_threshold":  self.config.get("volume_spike_threshold", 3.0),
+                    "rsi_min":                 self.config.get("rsi_min", 45),
+                    "rsi_max":                 self.config.get("rsi_max", 77),
+                    "rsi_golden_cross_min":    self.config.get("rsi_golden_cross_min", 45),
+                    "atr_pct_threshold":       self.config.get("atr_pct_threshold", 0.8),
+                },
             )
+            # Inject dependency SETELAH konstruksi -- pola yang sama persis
+            # dengan spot/main_spot.py.
+            if hasattr(self.strategy, "_notifier"):
+                self.strategy._notifier = self.notifier
+            if hasattr(self.strategy, "_db"):
+                self.strategy._db = self.db
+            if hasattr(self.strategy, "_scorer") and self.strategy._scorer is not None:
+                self.strategy._scorer._db = self.db
+            if hasattr(self.strategy, "_ws_feed"):
+                self.strategy._ws_feed = self.ws_feed
+            if hasattr(self.strategy, "_validator") and self.strategy._validator is not None:
+                self.strategy._validator._db = self.db
+
             if hasattr(self.strategy, "refresh_profiles"):
                 self.strategy.refresh_profiles()
+            # [BUG-FIX] Sebelumnya IntelligenceCommander(config=self.config)
+            # -- db parameter (WAJIB, positional/keyword pertama) TIDAK
+            # diteruskan sama sekali, DAN inject_dependencies() (yang
+            # menyuntikkan exchange_connector & risk_manager, dipakai di
+            # dalam decide() utk cek spread/korelasi) tidak pernah dipanggil.
+            # Bug ini akan TypeError langsung kalau bot dijalankan --
+            # ditemukan & diperbaiki saat verifikasi independensi future/.
             from engine.intelligence.commander import IntelligenceCommander
-            self._commander = IntelligenceCommander(config=self.config)
+            self._commander = IntelligenceCommander(db=self.db, config=self.config)
+            self._commander.inject_dependencies(
+                exchange_connector=self.ws_feed,
+                risk_manager=self.risk_manager,
+            )
             log.info("Intelligence pipeline (futures) siap.")
         except Exception as e:
             log.error("Intelligence pipeline init gagal: %s", e, exc_info=True)
