@@ -536,7 +536,7 @@ asyncio.run(simulate_gates())
 section("10. SL / TP / TRAILING STOP SCENARIOS")
 
 try:
-    from risk import RiskManager
+    from spot.risk_spot import RiskManager
     config = {
         "initial_capital":       33.0,
         "max_open_positions":    3,

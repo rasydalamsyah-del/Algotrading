@@ -20,7 +20,7 @@ CHANGELOG v2 (final sweep — sambungkan Kelly sizing ke eksekusi nyata):
 """
 
 from __future__ import annotations
-from intelligence.position_sync import run_position_sync
+from spot.position_sync_spot import run_position_sync
 
 import asyncio
 import logging
@@ -44,11 +44,12 @@ except ImportError:
 
 from engine.profiles.registry import get_profile_summary, set_profile_override, get_coin_profile
 from engine.database import DatabaseManager
-from exchange import ExchangeConnector, WebSocketFeed
-from strategy import get_strategy, SignalType, SignalEvent, ExitMode, PositionTracker
-from risk import RiskManager, RiskAssessment, RiskDecision, HaltReason
-from execution import OrderExecutionManager
-from api_server import create_app
+from spot.exchange_spot import ExchangeConnector, WebSocketFeed
+from spot.strategy_spot import get_strategy, PositionTracker
+from engine.core.models import SignalType, SignalEvent, ExitMode
+from spot.risk_spot import RiskManager, RiskAssessment, RiskDecision, HaltReason
+from spot.execution_spot import OrderExecutionManager
+from spot.api_server_spot import create_app
 from notifications import NotificationManager
 from engine.indicators.orderbook import WhaleDetector  # [v2] dipindah dari main.py ke indicators/orderbook.py
 
@@ -346,7 +347,7 @@ class TradingBot:
             )
 
         # ── Auto-scan universe dari Binance ──
-        from exchange import auto_scan_and_populate
+        from spot.exchange_spot import auto_scan_and_populate
         scanned = await auto_scan_and_populate(self.db)
         if scanned:
             self.config["universe_watchlist"] = scanned
@@ -797,7 +798,7 @@ class TradingBot:
                                         pos.symbol, entry_price, atr_val, 1.0, 55.0
                                     )
 
-                                    from strategy import ExitMode
+                                    from engine.core.models import ExitMode
                                     prof    = get_coin_profile(pos.symbol)
                                     atr_pct = (atr_val / entry_price * 100) if entry_price > 0 else 0.0
                                     exit_mode = (
@@ -1514,7 +1515,7 @@ class TradingBot:
                     return
 
                 # Buat SignalEvent dari scored signal
-                from strategy import SignalEvent, SignalType
+                from engine.core.models import SignalEvent, SignalType
                 import time as _t
 
                 # Pakai live ticker price untuk kurangi slippage

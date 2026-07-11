@@ -16,9 +16,9 @@ from typing import Callable, Dict, List, Optional, Tuple
 
 from engine.constants import APP_VERSION
 from engine.database import DatabaseManager, Trade
-from exchange import ExchangeConnector, WebSocketFeed
-from risk import RiskAssessment, RiskDecision
-from strategy import SignalEvent, SignalType
+from spot.exchange_spot import ExchangeConnector, WebSocketFeed
+from spot.risk_spot import RiskAssessment, RiskDecision
+from engine.core.models import SignalEvent, SignalType
 
 log = logging.getLogger("execution")
 

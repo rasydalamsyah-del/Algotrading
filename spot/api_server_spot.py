@@ -111,7 +111,7 @@ from engine.profiles.registry      import get_coin_profile, select_profile_from_
 from engine.profiles.base_profile  import PROFILE_EMOJI
 from engine.profiles.thresholds    import get_dynamic_threshold, DYNAMIC_THRESHOLD_MATRIX, ENTRY_THRESHOLDS
 from engine.profiles.weights       import LEVEL1_WEIGHTS
-from risk                   import HaltReason
+from spot.risk_spot                   import HaltReason
 
 if TYPE_CHECKING:
     from main import TradingBot
@@ -407,7 +407,9 @@ def create_app(bot_getter) -> FastAPI:
             raise HTTPException(status_code=503, detail="Bot not initialised")
         return b
 
-    dashboard_dir = os.path.join(os.path.dirname(__file__), "dashboard")
+    # [FIX PASCA-PINDAH] file ini kini di spot/, perlu +1 level ke atas
+    # untuk mencapai repo root, tempat dashboard/ tetap berada.
+    dashboard_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), "dashboard")
     try:
         from fastapi.staticfiles import StaticFiles
         if os.path.isdir(dashboard_dir):
@@ -527,7 +529,8 @@ def create_app(bot_getter) -> FastAPI:
 
         # [BUG-FIX v8] watchlist: open() tanpa with → diganti with open()
         watchlist: List[str] = b.config.get("universe_watchlist", [])
-        universe_path = os.path.join(os.path.dirname(__file__), "universe.json")
+        # [FIX PASCA-PINDAH] +1 level ke atas -- universe.json tetap di repo root
+        universe_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "universe.json")
         if os.path.exists(universe_path):
             try:
                 with open(universe_path, "r", encoding="utf-8") as f:
@@ -2036,7 +2039,8 @@ def create_app(bot_getter) -> FastAPI:
     async def get_universe_detail(_: str = Depends(verify_api_key)):
         b = bot()
         try:
-            universe_path = os.path.join(os.path.dirname(__file__), "universe.json")
+            # [FIX PASCA-PINDAH] +1 level ke atas -- universe.json tetap di repo root
+            universe_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "universe.json")
             try:
                 with open(universe_path, "r", encoding="utf-8") as f:
                     udata = json.load(f)
@@ -2089,7 +2093,8 @@ def create_app(bot_getter) -> FastAPI:
                 k: v for k, v in b.config.items()
                 if k not in ("api_key", "api_secret", "telegram_bot_token", "smtp_password")
             }
-            universe_path = os.path.join(os.path.dirname(__file__), "universe.json")
+            # [FIX PASCA-PINDAH] +1 level ke atas -- universe.json tetap di repo root
+            universe_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "universe.json")
             try:
                 with open(universe_path, "r", encoding="utf-8") as f:
                     udata = json.load(f)

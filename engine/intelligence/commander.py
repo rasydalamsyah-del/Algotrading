@@ -863,7 +863,7 @@ class IntelligenceCommander:
         confirmation_df=None,
         confirmation_timeframe: Optional[str] = None,
     ):
-        from strategy import SignalEvent, SignalType, ExitMode
+        from engine.core.models import SignalEvent, SignalType, ExitMode
         from datetime import datetime, timezone
 
         def _utcnow():

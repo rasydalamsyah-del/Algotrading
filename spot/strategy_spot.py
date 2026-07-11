@@ -20,6 +20,12 @@ import aiohttp
 from engine.constants import APP_VERSION, COL_EMA9, COL_EMA21, COL_EMA50, COL_RSI, COL_ATR, REQUIRED_INDICATOR_COLS
 from engine.profiles.base_profile import CoinProfile, AdaptiveParams, StrategyProfile
 from engine.profiles.registry import get_coin_profile
+# [FUTURES-READY] SignalType, SignalEvent, ExitMode dipindahkan ke
+# engine/core/models.py -- ini konsep generik market-agnostic, dipakai juga
+# oleh engine/intelligence/commander.py. Diimpor ulang di sini supaya semua
+# kode existing yang menulis "from spot.strategy_spot import SignalType" dst
+# tetap berfungsi tanpa perlu diubah satu per satu.
+from engine.core.models import SignalType, SignalEvent, ExitMode
 
 if TYPE_CHECKING:
     from engine.core.models import ScoredSignal, ObservationReport
@@ -64,44 +70,6 @@ _UNIVERSAL_DEFAULTS: Dict = {
     "_atr_ratio":              1.0,
 }
 
-class SignalType(Enum):
-    BUY         = "buy"
-    SELL        = "sell"
-    HOLD        = "hold"
-    CLOSE_LONG  = "close_long"
-    CLOSE_SHORT = "close_short"
-
-@dataclass
-class SignalEvent:
-    symbol:      str
-    signal_type: SignalType
-    price:       float
-    timestamp:   datetime
-    strategy:    str
-    confidence:  float = 1.0
-    stop_loss:   Optional[float] = None
-    take_profit: Optional[float] = None
-    size_pct:    float = 1.0
-    metadata:    Dict = field(default_factory=dict)
-    total_score:    Optional[float] = None
-    regime:         Optional[str]   = None
-    score_breakdown: Optional[Dict] = None
-    scoring_narrative: str = ""
-    strategy_profile: str = ""
-
-    def __str__(self) -> str:
-        sl = f"SL={self.stop_loss:.6f}" if self.stop_loss else "SL=None"
-        tp = f"TP={self.take_profit:.6f}" if self.take_profit else "TP=None"
-        score_str = f" score={self.total_score:.1f}" if self.total_score is not None else ""
-        return (
-            f"[{self.timestamp:%H:%M:%S}] "
-            f"{self.signal_type.value.upper()} {self.symbol} "
-            f"@ {self.price:.6f} {sl} {tp} conf={self.confidence:.3f}{score_str}"
-        )
-
-class ExitMode(Enum):
-    QUICK_PROFIT  = "quick_profit"
-    RIDE_THE_WAVE = "ride_the_wave"
 
 @dataclass
 class PositionTracker:

@@ -785,7 +785,7 @@ async def _diagnosa_direct() -> None:
 async def cmd_strategy() -> None:
     try:
         # Baca universe dari universe.json, fallback ke .env
-        from exchange import load_universe_json
+        from spot.exchange_spot import load_universe_json
         universe = load_universe_json()
         if not universe:
             universe = [s.strip() for s in os.getenv("UNIVERSE_WATCHLIST", "BTC/USDT,ETH/USDT").split(",")]

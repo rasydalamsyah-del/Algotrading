@@ -74,7 +74,52 @@ class DecisionAction(str, Enum):
     EXECUTE = "execute"
     WAIT    = "wait"
     REJECT  = "reject"
-    
+
+# [FUTURES-READY] Dipindahkan dari strategy.py (kini spot/strategy_spot.py)
+# saat restrukturisasi engine/spot/future. Ini konsep GENERIK yang dipakai
+# baik oleh lapisan engine (commander.py) maupun spot/future -- bukan logika
+# bisnis spesifik satu market, jadi tempatnya di sini, bukan di strategy_spot.py.
+# SignalType.CLOSE_SHORT sudah didefinisikan sejak awal (antisipasi futures),
+# meski belum ada kode manapun yang pernah menghasilkannya sampai saat ini.
+class SignalType(Enum):
+    BUY         = "buy"
+    SELL        = "sell"
+    HOLD        = "hold"
+    CLOSE_LONG  = "close_long"
+    CLOSE_SHORT = "close_short"
+
+@dataclass
+class SignalEvent:
+    symbol:      str
+    signal_type: SignalType
+    price:       float
+    timestamp:   datetime
+    strategy:    str
+    confidence:  float = 1.0
+    stop_loss:   Optional[float] = None
+    take_profit: Optional[float] = None
+    size_pct:    float = 1.0
+    metadata:    Dict = field(default_factory=dict)
+    total_score:    Optional[float] = None
+    regime:         Optional[str]   = None
+    score_breakdown: Optional[Dict] = None
+    scoring_narrative: str = ""
+    strategy_profile: str = ""
+
+    def __str__(self) -> str:
+        sl = f"SL={self.stop_loss:.6f}" if self.stop_loss else "SL=None"
+        tp = f"TP={self.take_profit:.6f}" if self.take_profit else "TP=None"
+        score_str = f" score={self.total_score:.1f}" if self.total_score is not None else ""
+        return (
+            f"[{self.timestamp:%H:%M:%S}] "
+            f"{self.signal_type.value.upper()} {self.symbol} "
+            f"@ {self.price:.6f} {sl} {tp} conf={self.confidence:.3f}{score_str}"
+        )
+
+class ExitMode(Enum):
+    QUICK_PROFIT  = "quick_profit"
+    RIDE_THE_WAVE = "ride_the_wave"
+
 class SignalQuality(str, Enum):
 
     EXCELLENT = "excellent"
