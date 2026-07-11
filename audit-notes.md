@@ -440,7 +440,7 @@ Ini pola bug/gap yang paling sering muncul sepanjang audit — dicatat lengkap s
 | 3 | `engine/intelligence/commander.py` | `_gate_supertrend()` | ✅ **FIXED** — diverifikasi 6 skenario long identik + 3 skenario short logic benar |
 | — | `engine/intelligence/scorer.py` | `score_signal()` hard-block `TRENDING_BEAR` (**temuan baru**, ditemukan saat baca full body fungsi, di luar 7 daftar awal) | ✅ **FIXED** — side-aware (long block di TRENDING_BEAR, short mirror block di TRENDING_BULL) |
 | 4 | `spot/execution_spot.py` | `execute_signal()` + `_process_fill()` side mapping | ✅ **FIXED** — sekaligus perbaiki bug laten: `CLOSE_SHORT` sebelumnya salah dipetakan jadi "sell", seharusnya "buy" (buy-to-cover) |
-| 5 | `engine/intelligence/validator.py` | ~26 fungsi `_check_*` | ⬜ **BELUM** — scope besar (baru dikonfirmasi `_check_rsi_divergence` bias, 25 fungsi lain belum diaudit satu-satu), perlu sesi terpisah |
+| 5 | `engine/intelligence/validator.py` | ~26 fungsi `_check_*` | ✅ **FIXED SEPENUHNYA** — 26/26 fungsi diaudit baris-per-baris (bukan cuma grep). 20 fungsi bias di-mirror side-aware, 6 dikonfirmasi netral. Setiap fix diverifikasi numerik. 2 keterbatasan data terdokumentasi jelas: `macd_zero_cross` (Optional[bool] tanpa info arah, di-skip utk short) & mirror `rsi_gc_max` di scorer.py (pakai aproksimasi). |
 | 6 | `engine/intelligence/scorer.py` | `_check_primary_trigger()` (`TREND_CONFIRMATION` & `MOMENTUM_REVERSAL`) | ✅ **FIXED** — diverifikasi 7 skenario long identik. **Catatan jujur**: mirror short untuk TREND_CONFIRMATION pakai APROKSIMASI (`100 - rsi_gc_min`) karena profile schema belum punya field `rsi_gc_max` simetris — ditandai jelas sebagai placeholder di kode |
 | 7 | `spot/position_sync_spot.py` | **Seluruh file** (`fetch_binance_spot_positions`, dst) | ⬜ **BELUM** — bukan sekadar bias, perlu file baru total (`position_sync_futures.py`) karena konsepnya (`fetch_balance()`) tidak berlaku di futures. Masuk scope pembangunan `future/`, bukan "perbaikan" |
 
@@ -465,7 +465,7 @@ engine/                          # Market-agnostic, TERKONFIRMASI lewat audit
 │   ├── scorer.py                 # ⚠️ netral dependency, TAPI 2 dari 4 primary trigger type bias long (temuan #6)
 │   ├── trade_guardian.py        # ⚠️ netral dependency, TAPI profit_pct perlu side-aware (temuan #1)
 │   ├── commander.py             # ⚠️ netral dependency, TAPI _gate_supertrend perlu mirror (temuan #3)
-│   └── validator.py             # ⚠️ netral dependency, TAPI ~26 fungsi _check_* sebagian perlu mirror (temuan #5)
+│   └── validator.py             # ✅ SELESAI -- 26/26 fungsi _check_* diaudit & side-aware (lihat detail temuan #5)
 ├── profiles/*                   # ✅ netral
 ├── learning/
 │   ├── analytics.py             # ✅ netral
