@@ -226,6 +226,9 @@ class RiskManager(BaseRiskManager):
             recommended_quantity=round(approved_size, 8),
             stop_loss=round(sl, 8) if sl is not None else None,
             take_profit=round(tp, 8) if tp is not None else None,
+            leverage=eff_leverage,
+            margin_mode=margin_mode,
+            liquidation_price=liq_result.liquidation_price,
         )
         log.info("Risk (futures): %s | %s | leverage=%dx", symbol, assessment, eff_leverage)
         return assessment

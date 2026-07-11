@@ -65,6 +65,13 @@ class RiskAssessment:
     recommended_quantity: Optional[float] = None
     stop_loss:     Optional[float] = None
     take_profit:   Optional[float] = None
+    # [FUTURES-READY] Optional, default None -- tidak dipakai/tidak diisi
+    # sama sekali oleh spot RiskManager (behavior tidak berubah). Diisi oleh
+    # future/risk_future.py supaya execution_future.py bisa menyisipkan
+    # leverage/margin_mode ke trade_data tanpa harus menebak/getattr fallback.
+    leverage:      Optional[int] = None
+    margin_mode:   Optional[str] = None
+    liquidation_price: Optional[float] = None
 
     @property
     def is_approved(self) -> bool:
