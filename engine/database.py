@@ -64,6 +64,13 @@ class Trade(Base):
     strategy_name     = Column(String(64),  nullable=True, index=True)
     strategy_profile  = Column(String(64),  nullable=True, index=True) 
     signal_origin     = Column(String(500), nullable=True)
+
+    # [FUTURES-READY] Kolom baru, semua nullable -- baris spot lama otomatis
+    # NULL, tidak perlu migrasi data.
+    market_type       = Column(String(10), nullable=True, default="spot")
+    leverage          = Column(Integer,    nullable=True)
+    margin_mode       = Column(String(16), nullable=True)
+    realized_funding  = Column(Float,      nullable=True, default=0.0)
     notes             = Column(Text,        nullable=True)
 
     __table_args__ = (
@@ -117,6 +124,18 @@ class Position(Base):
     entry_score         = Column(Float,      nullable=True)  
     entry_regime        = Column(String(32), nullable=True) 
     highest_price       = Column(Float,      nullable=True)
+
+    # [FUTURES-READY] Kolom baru, semua nullable -- baris spot lama/existing
+    # otomatis NULL di kolom ini, tidak ada migrasi data yang diperlukan.
+    # market_type membedakan asal posisi meski secara arsitektur spot & future
+    # sudah punya file DB terpisah fisik -- tag eksplisit ini jaga-jaga kalau
+    # suatu saat data pernah digabung/dianalisis lintas file.
+    market_type         = Column(String(10), nullable=True, default="spot")
+    leverage            = Column(Integer,    nullable=True)
+    margin_mode         = Column(String(16), nullable=True)   # 'isolated' / 'cross'
+    liquidation_price   = Column(Float,      nullable=True)
+    mark_price_at_entry = Column(Float,      nullable=True)
+    funding_paid_total  = Column(Float,      nullable=True, default=0.0)
 
     __table_args__ = (
         Index("ix_positions_symbol_open", "symbol", "is_open"),
