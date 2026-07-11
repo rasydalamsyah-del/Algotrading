@@ -87,6 +87,11 @@ class SignalType(Enum):
     HOLD        = "hold"
     CLOSE_LONG  = "close_long"
     CLOSE_SHORT = "close_short"
+    # [FUTURES-READY] Ditambahkan saat membangun future/execution_future.py --
+    # sebelumnya cuma CLOSE_SHORT yang ada (utk menutup short), tapi TIDAK
+    # ADA cara merepresentasikan "buka posisi short baru". BUY tetap berarti
+    # "buka long" (dipakai spot & future), OPEN_SHORT khusus buka short baru.
+    OPEN_SHORT  = "open_short"
 
 @dataclass
 class SignalEvent:
