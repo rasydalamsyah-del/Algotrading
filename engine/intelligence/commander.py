@@ -423,10 +423,19 @@ def _gate_correlation(
 def _gate_supertrend(
     signal: ScoredSignal,
     decision: TradeDecision,
+    side: str = "long",
 ) -> bool:
     """
     Supertrend Confidence Filter — otomatis menyesuaikan kondisi pasar.
     Bukan hard filter kaku, tapi dinamis berdasarkan regime + ADX.
+
+    [FUTURES-READY] side="long" (default) menghasilkan perilaku IDENTIK
+    PERSIS dengan versi sebelum perubahan ini -- belum ada sinyal short yang
+    pernah dihasilkan di manapun dalam codebase sampai saat ini, jadi cabang
+    short di bawah belum pernah tereksekusi nyata. Untuk long: Supertrend
+    bullish = konfirmasi, bearish+tren kuat = tolak. Untuk short: MIRROR
+    -- Supertrend bearish = konfirmasi (arah sesuai), bullish+tren kuat = tolak
+    (arah berlawanan dengan short).
     """
     iset = signal.observation.primary_tf_indicators
     if iset is None:
@@ -436,9 +445,14 @@ def _gate_supertrend(
     st_dir = iset.trend.supertrend_direction
     adx    = iset.strength.adx
     regime = signal.regime.value if signal.regime else "undefined"
+    is_long = side != "short"
 
-    if st_dir == 1:
-        decision.add_gate_passed(f"G1_ST_BULL(dir={st_dir})")
+    # dir "searah" = bullish(1) utk long, bearish(-1) utk short
+    aligned_dir   = 1 if is_long else -1
+    opposite_dir  = -1 if is_long else 1
+
+    if st_dir == aligned_dir:
+        decision.add_gate_passed(f"G1_ST_{'BULL' if is_long else 'BEAR'}(dir={st_dir})")
         return True
 
     if st_dir is None or st_dir == 0:
@@ -449,10 +463,11 @@ def _gate_supertrend(
         decision.add_gate_passed(f"G1_ST_VOLATILE_BYPASS(regime={regime})")
         return True
 
-    if adx is not None and adx >= 25.0:
+    if st_dir == opposite_dir and adx is not None and adx >= 25.0:
+        arah_label = "bearish" if is_long else "bullish"
         decision.add_gate_failed(
-            "G1_ST_BEAR",
-            f"Supertrend bearish (dir=-1) + tren kuat (ADX={adx:.1f}) — arah berlawanan"
+            f"G1_ST_{'BEAR' if is_long else 'BULL'}",
+            f"Supertrend {arah_label} (dir={opposite_dir}) + tren kuat (ADX={adx:.1f}) — arah berlawanan"
         )
         return False
 
@@ -470,6 +485,10 @@ async def decide(
     exchange_connector=None,
     risk_manager=None,
     db_manager=None,
+    side: str = "long",
+    # [FUTURES-READY] side="long" default -- SEMUA pemanggil existing yang
+    # tidak eksplisit mengirim side akan tetap dapat "long", behavior
+    # IDENTIK PERSIS dengan sebelum parameter ini ditambahkan.
 ) -> TradeDecision:
     decision = TradeDecision(scored_signal=signal)
     open_positions = open_positions or []
@@ -497,7 +516,7 @@ async def decide(
         decision.decision_narrative = decision.rejection_reason
         return decision
 
-    if not _gate_supertrend(signal, decision):
+    if not _gate_supertrend(signal, decision, side=side):
         decision.action           = DecisionAction.REJECT
         decision.rejection_reason = decision.gates_failed[-1] if decision.gates_failed else "Supertrend bearish"
         decision.decision_narrative = _build_narrative(decision, "REJECT — supertrend bearish + tren kuat")

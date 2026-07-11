@@ -46,12 +46,16 @@ def _check_primary_trigger(
     profile_name: str,
     iset: IndicatorSet,
     profile_cfg,
+    side: str = "long",
 ) -> Tuple[bool, str]:
     from engine.profiles.base_profile import PrimaryTriggerType
 
     trigger_type = profile_cfg.primary_trigger_type
+    is_long = side != "short"
 
     if trigger_type == PrimaryTriggerType.BREAKOUT_VOLUME:
+        # [FUTURES-READY] Netral arah -- cuma cek band RSI + volume, tidak
+        # mensyaratkan arah tertentu. Tidak ada perubahan diperlukan.
         vol_ratio = iset.strength.volume_ratio
         if vol_ratio is None:
             return False, "Volume ratio tidak tersedia"
@@ -69,30 +73,58 @@ def _check_primary_trigger(
         return True, "Breakout+Volume trigger terpenuhi"
 
     elif trigger_type == PrimaryTriggerType.TREND_CONFIRMATION:
+        # [FUTURES-READY] side="long" (default) IDENTIK PERSIS dgn sebelumnya.
+        # Short: mirror ema_score (butuh <=45, bearish stack kuat, simetris
+        # dari 55 di sekitar titik netral 100). Untuk RSI: profile_cfg BELUM
+        # punya field "rsi_gc_max" simetris (cuma ada rsi_gc_min) -- dipakai
+        # pendekatan (100 - rsi_gc_min) sbg PLACEHOLDER, bukan nilai final.
+        # TODO saat future/ dikerjakan serius: tambah field rsi_gc_max resmi
+        # ke profile schema, jangan andalkan aproksimasi ini selamanya.
         ema_score = iset.trend.ema_stack_score
-        if ema_score < 55.0:
-            return False, f"EMA stack score {ema_score:.1f} < 55 (trend belum confirm)"
+        if is_long:
+            if ema_score < 55.0:
+                return False, f"EMA stack score {ema_score:.1f} < 55 (trend belum confirm)"
+        else:
+            if ema_score > 45.0:
+                return False, f"EMA stack score {ema_score:.1f} > 45 (bearish trend belum confirm)"
         rsi = iset.momentum.rsi
         if rsi is None:
             return False, "RSI tidak tersedia"
-        if rsi < profile_cfg.rsi_gc_min:
-            return False, (
-                f"RSI {rsi:.1f} < rsi_gc_min {profile_cfg.rsi_gc_min}"
-            )
-        return True, "Trend Confirmation trigger terpenuhi"
+        if is_long:
+            if rsi < profile_cfg.rsi_gc_min:
+                return False, f"RSI {rsi:.1f} < rsi_gc_min {profile_cfg.rsi_gc_min}"
+        else:
+            rsi_gc_max_approx = 100.0 - profile_cfg.rsi_gc_min
+            if rsi > rsi_gc_max_approx:
+                return False, f"RSI {rsi:.1f} > rsi_gc_max~{rsi_gc_max_approx:.1f} (aproksimasi)"
+        return True, f"Trend Confirmation trigger terpenuhi ({'long' if is_long else 'short'})"
 
     elif trigger_type == PrimaryTriggerType.MOMENTUM_REVERSAL:
+        # [FUTURES-READY] side="long" (default) IDENTIK PERSIS dgn sebelumnya.
+        # Short: mirror penuh -- overbought (rsi > rsi_max) jadi trigger
+        # instan (bukan block), macd_hist harus <=0 (bukan >0) utk konfirmasi
+        # reversal turun.
         rsi = iset.momentum.rsi
         if rsi is None:
             return False, "RSI tidak tersedia"
-        if rsi > profile_cfg.rsi_max:
-            return False, f"RSI {rsi:.1f} terlalu tinggi untuk mean revert entry"
-        if rsi < profile_cfg.rsi_min:
-            return True, f"RSI {rsi:.1f} oversold — mean revert trigger OK"
-        macd_hist = iset.momentum.macd_histogram
-        if macd_hist is not None and macd_hist > 0:
-            return False, f"MACD histogram masih positif ({macd_hist:.5f}) — belum reversal"
-        return True, "Momentum Reversal trigger terpenuhi"
+        if is_long:
+            if rsi > profile_cfg.rsi_max:
+                return False, f"RSI {rsi:.1f} terlalu tinggi untuk mean revert entry"
+            if rsi < profile_cfg.rsi_min:
+                return True, f"RSI {rsi:.1f} oversold — mean revert trigger OK"
+            macd_hist = iset.momentum.macd_histogram
+            if macd_hist is not None and macd_hist > 0:
+                return False, f"MACD histogram masih positif ({macd_hist:.5f}) — belum reversal"
+            return True, "Momentum Reversal trigger terpenuhi"
+        else:
+            if rsi < profile_cfg.rsi_min:
+                return False, f"RSI {rsi:.1f} terlalu rendah untuk mean revert short entry"
+            if rsi > profile_cfg.rsi_max:
+                return True, f"RSI {rsi:.1f} overbought — mean revert short trigger OK"
+            macd_hist = iset.momentum.macd_histogram
+            if macd_hist is not None and macd_hist < 0:
+                return False, f"MACD histogram masih negatif ({macd_hist:.5f}) — belum reversal"
+            return True, "Momentum Reversal short trigger terpenuhi"
 
     else:
         rsi = iset.momentum.rsi
@@ -280,6 +312,10 @@ def score_signal(
     db_manager=None,
     profile_override=None,
     main_loop=None,
+    side: str = "long",
+    # [FUTURES-READY] side="long" default -- SEMUA pemanggil existing yang
+    # tidak eksplisit mengirim side akan tetap dapat "long", behavior
+    # IDENTIK PERSIS dengan sebelum parameter ini ditambahkan.
 ) -> ScoredSignal:
     symbol         = observation.symbol
     profile_name   = observation.strategy_profile
@@ -312,19 +348,34 @@ def score_signal(
         _save_score_to_db(signal, action="SKIP_INVALID_DATA", db_manager=db_manager, main_loop=main_loop)
         return signal
 
-    if regime == MarketRegime.TRENDING_BEAR:
+    # [FUTURES-READY] Hard block regime -- side-aware. Untuk long (default,
+    # SATU-SATUNYA kondisi yang pernah berjalan di produksi): TRENDING_BEAR
+    # memaksa score=0/hold, IDENTIK PERSIS dengan sebelum perubahan ini.
+    # Untuk short: MIRROR -- TRENDING_BULL yang memaksa score=0/hold (karena
+    # tren naik kuat berlawanan arah dengan short), TRENDING_BEAR justru
+    # boleh lanjut (searah dengan short).
+    is_long = side != "short"
+    blocking_regime = MarketRegime.TRENDING_BEAR if is_long else MarketRegime.TRENDING_BULL
+
+    if regime == blocking_regime:
         signal.total_score   = 0.0
         signal.signal_type   = "hold"
         signal.trigger_met   = False
-        signal.scoring_narrative = (
-            f"❌ TRENDING_BEAR regime — tidak ada BUY signal. "
-            f"Semua long position harus dipertimbangkan untuk exit."
-        )
-        signal.add_validation_note("Blocked by TRENDING_BEAR regime")
-        _save_score_to_db(signal, action="REJECT_BEAR_REGIME", db_manager=db_manager, main_loop=main_loop)
+        if is_long:
+            signal.scoring_narrative = (
+                f"❌ TRENDING_BEAR regime — tidak ada BUY signal. "
+                f"Semua long position harus dipertimbangkan untuk exit."
+            )
+        else:
+            signal.scoring_narrative = (
+                f"❌ TRENDING_BULL regime — tidak ada SHORT signal. "
+                f"Semua short position harus dipertimbangkan untuk exit."
+            )
+        signal.add_validation_note(f"Blocked by {blocking_regime.value} regime")
+        _save_score_to_db(signal, action="REJECT_OPPOSING_REGIME", db_manager=db_manager, main_loop=main_loop)
         return signal
 
-    trigger_met, trigger_reason = _check_primary_trigger(profile_name, iset, profile_cfg)
+    trigger_met, trigger_reason = _check_primary_trigger(profile_name, iset, profile_cfg, side=side)
     signal.trigger_met = trigger_met
 
     if not trigger_met:
