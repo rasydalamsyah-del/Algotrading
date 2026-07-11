@@ -51,6 +51,15 @@ async def fetch_binance_futures_positions(exchange) -> List[Dict]:
 
             side = pos.get("side", "long")
             entry_price = float(pos.get("entry_price") or pos.get("entryPrice") or 0)
+            # [BUG-FIX] Sebelumnya cuma entry_price yang punya fallback camelCase.
+            # ccxt unified fetch_positions() pakai camelCase (marginMode,
+            # liquidationPrice) utk exchange ASLI -- paper trading kita sendiri
+            # pakai snake_case. Tanpa fallback ini, margin_mode & liquidation_price
+            # akan selalu None kalau dijalankan terhadap exchange Binance asli
+            # (bukan paper trading), meski amount/side/entry_price tetap benar.
+            margin_mode = pos.get("margin_mode") or pos.get("marginMode")
+            liquidation_price_raw = pos.get("liquidation_price") or pos.get("liquidationPrice")
+            leverage = pos.get("leverage")
             price = entry_price  # fallback awal, akan di-update di analyze_position via ticker fresh
             usdt_value = amount * price if price > 0 else 0.0
             if usdt_value < MIN_USDT_VALUE:
@@ -63,9 +72,9 @@ async def fetch_binance_futures_positions(exchange) -> List[Dict]:
                 "entry_price":       entry_price,
                 "price":             price,
                 "usdt_value":        usdt_value,
-                "leverage":          pos.get("leverage"),
-                "margin_mode":       pos.get("margin_mode"),
-                "liquidation_price": pos.get("liquidation_price"),
+                "leverage":          leverage,
+                "margin_mode":       margin_mode,
+                "liquidation_price": liquidation_price_raw,
             })
 
         log.info("Binance futures: %d posisi aktif ditemukan", len(results))
