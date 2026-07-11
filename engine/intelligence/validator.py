@@ -1372,11 +1372,15 @@ def _check_vwap_band_context(
 def _check_ichimoku_detail_context(
     iset: IndicatorSet,
     result: ValidationResult,
+    side: str = "long",
 ) -> None:
     """[UPGRADE] Aktifkan tenkan, kijun, senkou_a/b, chikou, cloud_top/bottom.
 
     Level-level Ichimoku memberi 5 lapisan konfirmasi yang saat ini hanya
     dipakai satu (price_vs_cloud). Tiap level = S/R dinamis tersendiri.
+
+    [FUTURES-READY] side="long" default IDENTIK PERSIS dgn sebelumnya. Short:
+    seluruh 5 sub-check (tenkan/kijun, TK gap, chikou, cloud dist, kumo) di-mirror.
     """
     st = iset.structure
     if not st or not st.is_valid():
@@ -1384,81 +1388,107 @@ def _check_ichimoku_detail_context(
     price = iset.current_price
     if not price:
         return
+    is_long = side != "short"
 
     # -- Tenkan/Kijun sebagai dynamic S/R --
     if st.tenkan and st.kijun:
-        if price > st.tenkan > st.kijun:
+        triple_aligned  = (price > st.tenkan > st.kijun) if is_long else (price < st.tenkan < st.kijun)
+        both_opposing    = (price < st.tenkan and price < st.kijun) if is_long else (price > st.tenkan and price > st.kijun)
+        if triple_aligned:
+            arah = "bullish" if is_long else "bearish"
+            cmp_op = ">" if is_long else "<"
             result.add_note(
-                f"✅ Ichimoku: price > tenkan (${st.tenkan:.6f}) > kijun (${st.kijun:.6f}) — "
-                f"triple bullish alignment"
+                f"✅ Ichimoku: price {cmp_op} tenkan (${st.tenkan:.6f}) {cmp_op} kijun (${st.kijun:.6f}) — "
+                f"triple {arah} alignment"
             )
             result.confidence_adjustment += 0.04
-        elif price < st.tenkan and price < st.kijun:
+        elif both_opposing:
+            posisi = "bawah" if is_long else "atas"
+            arah = "bearish" if is_long else "bullish"
             result.add_warning(
-                f"Ichimoku: price di bawah tenkan & kijun — "
-                f"short-term dan medium-term momentum keduanya bearish",
+                f"Ichimoku: price di {posisi} tenkan & kijun — "
+                f"short-term dan medium-term momentum keduanya {arah}",
                 confidence_penalty=0.05,
             )
-        elif price > st.kijun and price < st.tenkan:
+        elif (price > st.kijun and price < st.tenkan) if is_long else (price < st.kijun and price > st.tenkan):
             result.add_note(
                 f"📊 Harga di antara kijun (${st.kijun:.6f}) dan tenkan (${st.tenkan:.6f}) — "
-                f"momentum campuran, kijun masih jadi support"
+                f"momentum campuran, kijun masih jadi support/resistance"
             )
 
-        # Tenkan-Kijun gap: gap besar = trend kuat
+        # Tenkan-Kijun gap: gap besar searah posisi = trend kuat
         tk_gap_pct = abs(st.tenkan - st.kijun) / st.kijun * 100 if st.kijun else 0
-        if tk_gap_pct > 2.0 and st.tenkan > st.kijun:
+        gap_aligned = (st.tenkan > st.kijun) if is_long else (st.tenkan < st.kijun)
+        if tk_gap_pct > 2.0 and gap_aligned:
+            arah = "bullish" if is_long else "bearish"
             result.add_note(
-                f"✅ TK gap lebar ({tk_gap_pct:.1f}%) — trend bullish kuat"
+                f"✅ TK gap lebar ({tk_gap_pct:.1f}%) — trend {arah} kuat"
             )
             result.confidence_adjustment += 0.02
 
     # -- Chikou: konfirmasi lagging --
     if st.chikou and price:
-        if st.chikou > price:
+        confirming_chikou = (st.chikou > price) if is_long else (st.chikou < price)
+        if confirming_chikou:
+            arah = "bullish" if is_long else "bearish"
+            cmp_op = ">" if is_long else "<"
             result.add_note(
-                f"✅ Chikou (${st.chikou:.6f}) > harga sekarang — "
-                f"lagging confirmation bullish"
+                f"✅ Chikou (${st.chikou:.6f}) {cmp_op} harga sekarang — "
+                f"lagging confirmation {arah}"
             )
             result.confidence_adjustment += 0.02
         else:
+            arah = "bullish" if is_long else "bearish"
+            cmp_op = "<" if is_long else ">"
             result.add_warning(
-                f"Chikou (${st.chikou:.6f}) < harga sekarang — "
-                f"lagging span belum konfirmasi bullish",
+                f"Chikou (${st.chikou:.6f}) {cmp_op} harga sekarang — "
+                f"lagging span belum konfirmasi {arah}",
                 confidence_penalty=0.03,
             )
 
     # -- Cloud top/bottom sebagai level S/R eksplisit --
+    favorable_cloud_side   = "above" if is_long else "below"
+    unfavorable_cloud_side = "below" if is_long else "above"
     if st.cloud_top and st.cloud_bottom and price:
-        if st.price_vs_cloud == "above":
-            dist_to_cloud = (price - st.cloud_top) / price * 100
+        if st.price_vs_cloud == favorable_cloud_side:
+            cloud_edge = st.cloud_top if is_long else st.cloud_bottom
+            dist_to_cloud = abs(price - cloud_edge) / price * 100
             if dist_to_cloud < 1.5:
                 result.add_note(
-                    f"⚠️ Harga hanya {dist_to_cloud:.2f}% di atas cloud top "
-                    f"(${st.cloud_top:.6f}) — dekat edge cloud, risiko pullback ke cloud"
+                    f"⚠️ Harga hanya {dist_to_cloud:.2f}% di sisi cloud "
+                    f"(${cloud_edge:.6f}) — dekat edge cloud, risiko pullback ke cloud"
                 )
             elif dist_to_cloud > 5.0:
+                label = "support" if is_long else "resistance"
                 result.add_note(
-                    f"✅ Harga {dist_to_cloud:.2f}% di atas cloud — "
-                    f"jarak aman dari cloud support"
+                    f"✅ Harga {dist_to_cloud:.2f}% dari cloud — "
+                    f"jarak aman dari cloud {label}"
                 )
                 result.confidence_adjustment += 0.02
-        elif st.price_vs_cloud == "below":
-            dist_to_cloud = (st.cloud_bottom - price) / price * 100
+        elif st.price_vs_cloud == unfavorable_cloud_side:
+            cloud_edge = st.cloud_bottom if is_long else st.cloud_top
+            dist_to_cloud = abs(cloud_edge - price) / price * 100
+            label = "resistance" if is_long else "support"
             result.add_warning(
-                f"Harga {dist_to_cloud:.2f}% di bawah cloud bottom "
-                f"(${st.cloud_bottom:.6f}) — cloud resistance kuat di atas",
+                f"Harga {dist_to_cloud:.2f}% di sisi berlawanan cloud "
+                f"(${cloud_edge:.6f}) — cloud {label} kuat",
                 confidence_penalty=0.04,
             )
 
     # -- Senkou A vs B: kumo twist / cloud quality --
     if st.senkou_a and st.senkou_b:
-        if st.senkou_a > st.senkou_b:
-            result.add_note("✅ Kumo bullish (Senkou A > B) — cloud mendukung uptrend")
+        kumo_favorable = (st.senkou_a > st.senkou_b) if is_long else (st.senkou_a < st.senkou_b)
+        if kumo_favorable:
+            arah = "bullish" if is_long else "bearish"
+            cmp_op = ">" if is_long else "<"
+            trend_label = "uptrend" if is_long else "downtrend"
+            result.add_note(f"✅ Kumo {arah} (Senkou A {cmp_op} B) — cloud mendukung {trend_label}")
             result.confidence_adjustment += 0.02
         else:
+            arah = "bearish" if is_long else "bullish"
+            cmp_op = "<" if is_long else ">"
             result.add_warning(
-                "Kumo bearish (Senkou A < B) — cloud resistance lebih kuat",
+                f"Kumo {arah} (Senkou A {cmp_op} B) — cloud resistance/support lebih kuat",
                 confidence_penalty=0.03,
             )
 
@@ -1466,11 +1496,15 @@ def _check_ichimoku_detail_context(
 def _check_pivot_ladder_context(
     iset: IndicatorSet,
     result: ValidationResult,
+    side: str = "long",
 ) -> None:
     """[UPGRADE] Aktifkan r1/r2/r3, s1/s2/s3, price_vs_pivot.
 
     Pivot ladder lengkap memungkinkan kalkulasi R/R ke target R1/R2 dan
     SL reference ke S1/S2 — jauh lebih presisi dari sekadar nearest_resistance.
+
+    [FUTURES-READY] side="long" default IDENTIK PERSIS dgn sebelumnya. Short:
+    target profit pakai S1/S2 (bukan R1/R2), SL reference pakai R1 (bukan S1).
     """
     st = iset.structure
     if not st or not st.is_valid():
@@ -1478,56 +1512,70 @@ def _check_pivot_ladder_context(
     price = iset.current_price
     if not price:
         return
+    is_long = side != "short"
 
     # -- price_vs_pivot: intraday directional bias --
+    favorable_pivot_side = "above" if is_long else "below"
+    unfavorable_pivot_side = "below" if is_long else "above"
     if st.price_vs_pivot:
-        if st.price_vs_pivot == "above":
+        if st.price_vs_pivot == favorable_pivot_side:
+            posisi = "atas" if is_long else "bawah"
+            arah = "bullish" if is_long else "bearish"
             result.add_note(
-                f"✅ Harga di atas daily pivot (${st.pivot:.6f}) — "
-                f"intraday bias bullish"
+                f"✅ Harga di {posisi} daily pivot (${st.pivot:.6f}) — "
+                f"intraday bias {arah}"
             )
             result.confidence_adjustment += 0.02
-        elif st.price_vs_pivot == "below":
+        elif st.price_vs_pivot == unfavorable_pivot_side:
+            posisi = "bawah" if is_long else "atas"
+            arah = "bearish" if is_long else "bullish"
             result.add_warning(
-                f"Harga di bawah daily pivot (${st.pivot:.6f}) — "
-                f"intraday bias bearish",
+                f"Harga di {posisi} daily pivot (${st.pivot:.6f}) — "
+                f"intraday bias {arah}",
                 confidence_penalty=0.04,
             )
 
-    # -- R/R ke R1 dan target R2 --
-    if st.r1 and st.s1:
-        dist_r1_pct = (st.r1 - price) / price * 100
-        dist_s1_pct = (price - st.s1) / price * 100
+    # -- R/R ke target profit dan SL reference (long: R1=target,S1=SL; short: S1=target,R1=SL) --
+    target_level = st.r1 if is_long else st.s1
+    sl_ref_level = st.s1 if is_long else st.r1
+    target_label = "R1" if is_long else "S1"
+    sl_label      = "S1" if is_long else "R1"
+    if target_level and sl_ref_level:
+        dist_target_pct = abs(target_level - price) / price * 100
+        dist_sl_pct     = abs(price - sl_ref_level) / price * 100
 
-        if dist_r1_pct > 0 and dist_s1_pct > 0:
-            rr = dist_r1_pct / dist_s1_pct if dist_s1_pct > 0 else 0
+        if dist_target_pct > 0 and dist_sl_pct > 0:
+            rr = dist_target_pct / dist_sl_pct if dist_sl_pct > 0 else 0
             if rr >= 2.0:
                 result.add_note(
-                    f"✅ Pivot R/R: target R1={dist_r1_pct:.2f}% / SL ke S1={dist_s1_pct:.2f}% "
+                    f"✅ Pivot R/R: target {target_label}={dist_target_pct:.2f}% / SL ke {sl_label}={dist_sl_pct:.2f}% "
                     f"→ R/R={rr:.1f}x"
                 )
                 result.confidence_adjustment += 0.03
             elif rr < 1.0:
                 result.add_warning(
-                    f"Pivot R/R buruk: target R1={dist_r1_pct:.2f}% / SL ke S1={dist_s1_pct:.2f}% "
+                    f"Pivot R/R buruk: target {target_label}={dist_target_pct:.2f}% / SL ke {sl_label}={dist_sl_pct:.2f}% "
                     f"→ R/R={rr:.1f}x (< 1.0)",
                     confidence_penalty=0.05,
                 )
 
-        # Jarak ke R1 sangat kecil = upside terbatas
-        if dist_r1_pct < 0.8:
+        # Jarak ke target sangat kecil = ruang gerak terbatas
+        if dist_target_pct < 0.8:
+            arah_label = "upside" if is_long else "downside"
             result.add_warning(
-                f"R1 sangat dekat ({dist_r1_pct:.2f}%) — "
-                f"upside ke target pivot pertama sangat terbatas",
+                f"{target_label} sangat dekat ({dist_target_pct:.2f}%) — "
+                f"{arah_label} ke target pivot pertama sangat terbatas",
                 confidence_penalty=0.05,
             )
 
-    # -- R2 sebagai extended target --
-    if st.r2 and price:
-        dist_r2 = (st.r2 - price) / price * 100
-        if dist_r2 > 3.0:
+    # -- Target ke-2 sebagai extended target --
+    target2_level = st.r2 if is_long else st.s2
+    target2_label = "R2" if is_long else "S2"
+    if target2_level and price:
+        dist_target2 = abs(target2_level - price) / price * 100
+        if dist_target2 > 3.0:
             result.add_note(
-                f"✅ R2 target (${st.r2:.6f}) = +{dist_r2:.2f}% — "
+                f"✅ {target2_label} target (${target2_level:.6f}) = {dist_target2:.2f}% — "
                 f"extended target tersedia"
             )
 
