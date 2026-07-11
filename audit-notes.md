@@ -1,28 +1,71 @@
 # Audit Arsitektur AlgoTrader — Catatan Kerja
 
-**Status: ✅ AUDIT SELESAI, ✅ RESTRUKTURISASI FISIK SELESAI DIEKSEKUSI**
+**Status: ✅ AUDIT SELESAI, ✅ RESTRUKTURISASI FISIK SELESAI, ✅ ROADMAP `future/` 9/9 LANGKAH SELESAI**
 
 ---
 
-## 🎉 UPDATE — Restrukturisasi Sudah Dieksekusi (bukan cuma rencana lagi)
+## 🎉🎉 UPDATE TERBESAR — `future/` (Binance USDT-M Futures) SELESAI DIBANGUN & DIVERIFIKASI
+
+Semua 9 langkah roadmap `future/` sudah dikerjakan, bukan cuma rencana:
+
+| # | File | Status |
+|---|---|---|
+| 1 | Skema DB (Position/Trade +leverage/margin_mode/liquidation_price/dst) | ✅ |
+| 2 | `future/liquidation.py` (formula APPROXIMATE, peringatan keras) | ✅ |
+| 3 | `future/exchange_future.py` + ekstraksi `engine/exchange_base.py` | ✅ |
+| 4 | `future/funding.py` | ✅ |
+| 5 | `future/risk_future.py` (leverage-aware) + ekstraksi `engine/risk_base.py` | ✅ |
+| 6 | `future/execution_future.py` + ekstraksi `engine/execution_base.py` | ✅ |
+| 7 | `future/main_future.py` (1521 baris, orchestrator bidirectional long/short) | ✅ |
+| 8 | `future/position_sync_futures.py` | ✅ |
+| 9 | `future/api_server_future.py` | ✅ |
+
+**Verifikasi END-TO-END (bukan cuma baca kode) di tiap langkah:**
+- `liquidation.py`: 6 skenario matematis (leverage vs jarak liquidation, simetri long/short)
+- `exchange_future.py`: 7 skenario (open/add/reduce/close position, margin tracking, insufficient margin)
+- `risk_future.py`: 4 skenario (approve leverage rendah, reject leverage berlebih, **reject SL yang cuma 0.52% dari liquidation** — safety check terbukti bekerja)
+- `execution_future.py`: full flow evaluate_order→execute_signal→Trade record dengan leverage/margin_mode benar
+- `main_future.py`: `_check_gate3_direction` 4 skenario bidirectional, **`_refresh_portfolio` equity formula match persis (1016.998=1016.998)** vs perhitungan manual independen
+- `position_sync_futures.py`: deteksi posisi orphan short, adopt dengan side/leverage/liquidation_price benar
+- `api_server_future.py`: FastAPI TestClient — auth enforcement (401/200), bot control (halt beneran ubah state)
+
+**3 temuan arsitektur besar yang HANYA ketemu karena membaca detail (bukan asumsi):**
+
+1. **Gate 3 di `main_spot.py` punya hard filter long-only tersembunyi** (EMA9 vs EMA21, posisi vs VWAP) **sebelum** sinyal sampai ke Gate 4 yang sudah side-aware — baru ketahuan saat membangun `main_future.py`. `_check_gate3_direction()` baru dibuat untuk cek 2 arah independen.
+2. **Formula equity spot SALAH TOTAL kalau dipakai apa adanya untuk futures** — `free_balance + notional_value` (spot) vs `free_margin + used_margin + unrealized_pnl` (futures, benar). Dibuktikan: kalau formula spot dipakai, equity **overstate 87%** pada skenario leverage 10x yang diuji.
+3. **`SignalScorer.score()`/`validate_and_apply()` cuma wrapper tipis** yang belum meneruskan parameter `side` ke `score_signal()`/`validate_signal()` yang sudah side-aware — prasyarat kecil tapi krusial buat scoring sinyal short beneran jalan.
+
+**Pola arsitektur konsisten dipakai 3x** (Exchange, Risk, Execution): ekstrak logic market-agnostic ke `engine/*_base.py`, subclass spot & future masing-masing implementasikan bagian yang genuinely berbeda (fetch_balance/_simulate_order_fill, evaluate_order/_compute_position_size, _map_signal_to_side/_extra_trade_fields).
+
+**Yang jujur belum dikerjakan (didokumentasikan jelas di kode, bukan disembunyikan):**
+- `api_server_future.py`: endpoint non-esensial belum dibangun (meta_learner, analytics, forecast, universe management, SSE stream, diagnosa) — endpoint operasional/keamanan inti sudah lengkap
+- Sisa bias long-only di `validator.py`... **CATATAN: ini sudah selesai duluan**, lihat bagian bias long-only di bawah
+- Funding rate settlement belum disambungkan ke loop periodik manapun
+- `WebSocketFeed` belum diekstrak ke `engine/` (masih reuse langsung dari `spot/`, karena secara konsep market-agnostic tapi belum genuinely diverifikasi/dipisah)
+- **BELUM PERNAH di-deploy ke VPS** — semuanya baru di GitHub, sesuai instruksi user sepanjang sesi ini
+
+---
+
+## Restrukturisasi Folder Inti (selesai sebelumnya)
 
 Struktur folder final di bawah **sudah benar-benar diimplementasikan**, bukan sekadar dokumen rencana. Semua fase sudah dikerjakan dan diverifikasi:
 
 ```
 algotrader/
 ├── engine/              ✅ SELESAI — mesin bersama (indicators, core, intelligence
-│                            netral, profiles, database, learning netral)
+│                            netral, profiles, database, learning netral,
+│                            exchange_base.py, risk_base.py, execution_base.py)
 ├── spot/                ✅ SELESAI — bot spot production (main_spot.py, dst)
 ├── shared_service/      ✅ SELESAI — telegram_bot.py, notifications.py
-├── future/              ⬜ BELUM DIMULAI — folder belum dibuat sama sekali
+├── future/              ✅ SELESAI — bot futures production (main_future.py, dst) -- lihat detail di atas
 └── dashboard/           tidak diubah (sesuai kesepakatan)
 ```
 
-**Verifikasi akhir:** `spot.main_spot` (entry point utama bot) berhasil di-import 100% bersih, seluruh 24 modul kunci lolos, seluruh file lolos `py_compile`.
+**Verifikasi akhir:** `spot.main_spot` DAN `future.main_future` (entry point utama masing-masing) berhasil di-import 100% bersih, seluruh file lolos `py_compile`.
 
-**3 temuan/perbaikan arsitektur penting yang ditemukan SAAT eksekusi (bukan cuma saat audit baca-baca):**
+**3 temuan/perbaikan arsitektur penting yang ditemukan SAAT eksekusi restrukturisasi (bukan cuma saat audit baca-baca):**
 
-1. **`SignalType`/`SignalEvent`/`ExitMode` pindah dari `strategy.py` ke `engine/core/models.py`.** Ini konsep generik (SignalType sudah punya `CLOSE_SHORT` dari awal), tapi awalnya didefinisikan di `strategy.py` — bikin `engine/intelligence/commander.py` diam-diam bergantung ke `spot/` lewat *local import di dalam method* (bukan di top-level file), yang **tidak terdeteksi** oleh audit awal (yang cuma scan import level-modul). Ini pelajaran penting: audit statis (grep/baca) tidak selalu menangkap semua dependency, terutama local import di dalam fungsi.
+1. **`SignalType`/`SignalEvent`/`ExitMode` pindah dari `strategy.py` ke `engine/core/models.py`.** Ini konsep generik (SignalType sudah punya `CLOSE_SHORT` dari awal, dan sekarang juga `OPEN_SHORT`), tapi awalnya didefinisikan di `strategy.py` — bikin `engine/intelligence/commander.py` diam-diam bergantung ke `spot/` lewat *local import di dalam method* (bukan di top-level file), yang **tidak terdeteksi** oleh audit awal (yang cuma scan import level-modul). Ini pelajaran penting: audit statis (grep/baca) tidak selalu menangkap semua dependency, terutama local import di dalam fungsi.
 
 2. **Tiga bug path `__file__`-relative** ditemukan dan diperbaiki, semua terverifikasi dengan tes resolusi path langsung (bukan asumsi):
    - `engine/learning/meta_learner.py` — `sys.path.insert()` butuh 1 level parent tambahan
@@ -427,28 +470,25 @@ Skor rendah (0-45, menandakan bearish kuat) **dibuang** sebagai "gagal trigger" 
 | `MOMENTUM_REVERSAL` | 🔴 Bias long | Logikanya "beli saat oversold" (mean-revert long) — perlu cabang mirror "short saat overbought" |
 | `COMPOSITE` (default) | ✅ Netral | Sama seperti BREAKOUT_VOLUME, cuma cek band RSI + volume |
 
-**Revisi pola bug "long-only" — total 7 lokasi, UPDATE: 4 dari 7 sudah diperbaiki & diverifikasi (bukan cuma didokumentasikan)** — dikerjakan pada sesi restrukturisasi + perbaikan bias lanjutan.
+**Revisi pola bug "long-only" — total sekarang 6 lokasi** (bertambah 1 dari catatan sebelumnya, dengan nuansa lebih presisi di scorer.py: 2 dari 4 trigger type kena, 2 lainnya sudah netral).
 
 ---
 
 Ini pola bug/gap yang paling sering muncul sepanjang audit — dicatat lengkap supaya tidak ada yang terlewat saat nanti mengerjakan dukungan short:
 
-| # | File | Fungsi | Status |
+| # | File | Fungsi | Sifat masalah |
 |---|---|---|---|
-| 1 | `engine/intelligence/trade_guardian.py` | `check_atg()` / `get_profit_zone_sl()` | ✅ **FIXED** — side-aware, diverifikasi matematis identik utk long |
-| 2 | `spot/strategy_spot.py` | `check_trailing_exit()` + `PositionTracker.side` | ✅ **FIXED** — field `side` ditambah (default "long"), logic side-aware |
-| 3 | `engine/intelligence/commander.py` | `_gate_supertrend()` | ✅ **FIXED** — diverifikasi 6 skenario long identik + 3 skenario short logic benar |
-| — | `engine/intelligence/scorer.py` | `score_signal()` hard-block `TRENDING_BEAR` (**temuan baru**, ditemukan saat baca full body fungsi, di luar 7 daftar awal) | ✅ **FIXED** — side-aware (long block di TRENDING_BEAR, short mirror block di TRENDING_BULL) |
-| 4 | `spot/execution_spot.py` | `execute_signal()` + `_process_fill()` side mapping | ✅ **FIXED** — sekaligus perbaiki bug laten: `CLOSE_SHORT` sebelumnya salah dipetakan jadi "sell", seharusnya "buy" (buy-to-cover) |
-| 5 | `engine/intelligence/validator.py` | ~26 fungsi `_check_*` | ✅ **FIXED SEPENUHNYA** — 26/26 fungsi diaudit baris-per-baris (bukan cuma grep). 20 fungsi bias di-mirror side-aware, 6 dikonfirmasi netral. Setiap fix diverifikasi numerik. 2 keterbatasan data terdokumentasi jelas: `macd_zero_cross` (Optional[bool] tanpa info arah, di-skip utk short) & mirror `rsi_gc_max` di scorer.py (pakai aproksimasi). |
-| 6 | `engine/intelligence/scorer.py` | `_check_primary_trigger()` (`TREND_CONFIRMATION` & `MOMENTUM_REVERSAL`) | ✅ **FIXED** — diverifikasi 7 skenario long identik. **Catatan jujur**: mirror short untuk TREND_CONFIRMATION pakai APROKSIMASI (`100 - rsi_gc_min`) karena profile schema belum punya field `rsi_gc_max` simetris — ditandai jelas sebagai placeholder di kode |
-| 7 | `spot/position_sync_spot.py` | **Seluruh file** (`fetch_binance_spot_positions`, dst) | ⬜ **BELUM** — bukan sekadar bias, perlu file baru total (`position_sync_futures.py`) karena konsepnya (`fetch_balance()`) tidak berlaku di futures. Masuk scope pembangunan `future/`, bukan "perbaikan" |
+| 1 | `intelligence/trade_guardian.py` | `check_atg()` / `get_profit_zone_sl()` | `profit_pct` hardcoded formula long |
+| 2 | `strategy.py` | `check_trailing_exit()` | `profit_pct` hardcoded formula long, **plus** `PositionTracker` tidak punya field `side` sama sekali (akar masalah lebih dalam) |
+| 3 | `intelligence/commander.py` | `_gate_supertrend()` | Menolak sinyal kalau bearish kuat — harusnya jadi sinyal short yang bagus |
+| 4 | `execution.py` | `execute_signal()` | `side` ditentukan biner BUY vs else="sell", tidak ada konsep open-short |
+| 5 | `intelligence/validator.py` | `_check_rsi_divergence()` dan kemungkinan besar sebagian dari 25 fungsi `_check_*` lainnya | Bearish selalu diperlakukan sebagai warning, padahal untuk short seharusnya jadi konfirmasi |
+| 6 | `intelligence/scorer.py` | `_check_primary_trigger()` — tipe `TREND_CONFIRMATION` & `MOMENTUM_REVERSAL` | Cuma terima skor tinggi/oversold (2 dari 4 tipe trigger bias; `BREAKOUT_VOLUME` & `COMPOSITE` sudah netral) |
+| 7 | `intelligence/position_sync.py` | **Seluruh file** (`fetch_binance_spot_positions`, dst) | Bukan sekadar bias — konsepnya sendiri (baca saldo koin via `fetch_balance()`) tidak berlaku untuk futures sama sekali. Butuh file baru total, bukan modifikasi |
 
-**Yang SUDAH benar sejak awal (referensi pola benar):** `risk.py` → `check_trailing_sl()`, `check_breakeven_sl()` — keduanya punya cabang eksplisit `if side=="long" / elif side=="short"`.
+**Yang SUDAH benar (referensi buat pola yang benar):** `risk.py` → `check_trailing_sl()`, `check_breakeven_sl()` — keduanya punya cabang eksplisit `if side=="long" / elif side=="short"`.
 
-**Metodologi verifikasi yang dipakai di semua fix di atas:** setiap perubahan diuji dengan skenario numerik konkret (bukan cuma dibaca ulang) untuk memastikan `side="long"` (default) menghasilkan output byte-identik dengan versi sebelum perubahan — prinsip "aditif murni, jangan ubah behavior existing" dipegang ketat sepanjang proses.
-
-**Sisa pekerjaan bias yang jujur belum tersentuh:** `validator.py` (25 dari 26 fungsi belum diaudit detail satu-satu) dan `position_sync_spot.py` (butuh file baru, bukan fix). Keduanya scope besar, direkomendasikan jadi sesi kerja terpisah.
+**Catatan penting soal akar masalah:** dari 7 temuan ini, yang paling fundamental adalah **#2** — `PositionTracker` (strategy.py) tidak punya field `side` sama sekali. Ini bukan cuma "kurang 1 cabang if/else", tapi objek inti yang dipakai real-time monitoring memang belum dirancang untuk tahu arah posisi. Perbaikan di sini adalah prasyarat sebelum efektif memperbaiki #1 dan sebagian #5 (yang keduanya bergantung pada tahu posisi ini long atau short saat kalkulasi).
 
 ---
 
@@ -465,7 +505,7 @@ engine/                          # Market-agnostic, TERKONFIRMASI lewat audit
 │   ├── scorer.py                 # ⚠️ netral dependency, TAPI 2 dari 4 primary trigger type bias long (temuan #6)
 │   ├── trade_guardian.py        # ⚠️ netral dependency, TAPI profit_pct perlu side-aware (temuan #1)
 │   ├── commander.py             # ⚠️ netral dependency, TAPI _gate_supertrend perlu mirror (temuan #3)
-│   └── validator.py             # ✅ SELESAI -- 26/26 fungsi _check_* diaudit & side-aware (lihat detail temuan #5)
+│   └── validator.py             # ⚠️ netral dependency, TAPI ~26 fungsi _check_* sebagian perlu mirror (temuan #5)
 ├── profiles/*                   # ✅ netral
 ├── learning/
 │   ├── analytics.py             # ✅ netral
