@@ -641,6 +641,23 @@ class TradingBot:
         except Exception as e:
             log.critical("close_position (DB) GAGAL untuk %s setelah order sukses: %s", pos.symbol, e)
 
+        # [FIX] Backfill Trade.realized_pnl -- kolom ini ADA di skema tapi
+        # tidak pernah otomatis terisi oleh execute_signal()/_process_fill()
+        # (trade_data dict di sana tidak menyertakannya). update_trade_pnl()
+        # sudah tersedia di database.py tapi TIDAK PERNAH dipanggil di
+        # manapun (termasuk spot/main_spot.py -- gap pre-existing, bukan
+        # yang baru muncul di futures). Ditemukan & diperbaiki di sini saat
+        # verifikasi siklus penuh entry->close.
+        realized_pnl_pct = (
+            (realized_pnl / (entry_price * amount) * 100) if (entry_price * amount) > 0 else 0.0
+        )
+        try:
+            await self.db.update_trade_pnl(
+                order_id=trade.order_id, realized_pnl=realized_pnl, realized_pnl_pct=realized_pnl_pct,
+            )
+        except Exception as e:
+            log.warning("update_trade_pnl gagal untuk %s (non-fatal, posisi tetap tercatat benar): %s", pos.symbol, e)
+
         try:
             self.risk_manager.record_symbol_loss(pos.symbol, realized_pnl)
         except Exception:
