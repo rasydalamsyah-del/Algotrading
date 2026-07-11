@@ -113,10 +113,10 @@ async def analyze_position(
     # regime_value dan profile_name asli dikembalikan agar tersimpan benar
     # di kolom entry_regime & strategy_profile saat posisi diadopsi.
     """
-    from intelligence.observer  import observe
-    from intelligence.scorer    import score_signal
-    from intelligence.classifier import classify_regime
-    from profiles.registry      import get_coin_profile
+    from engine.intelligence.observer  import observe
+    from engine.intelligence.scorer    import score_signal
+    from engine.intelligence.classifier import classify_regime
+    from engine.profiles.registry      import get_coin_profile
 
     profile_name = "unknown"
     try:

@@ -12,7 +12,7 @@ from collections import deque
 from dataclasses import dataclass, field
 from typing import Deque, Dict, Optional, Tuple
 
-from constants import (
+from engine.constants import (
     REGIME_VOLATILE_ATR_PERCENTILE_MIN,
     REGIME_VOLATILE_BB_WIDTH_MIN,
     REGIME_TRENDING_ADX_MIN,
@@ -26,7 +26,7 @@ from constants import (
     REGIME_CONFIDENCE_LOW_ADX,
     REGIME_MIN_CONFIDENCE_TO_TRADE,
 )
-from core.models import (
+from engine.core.models import (
     IndicatorSet,
     MarketRegime,
     ObservationReport,

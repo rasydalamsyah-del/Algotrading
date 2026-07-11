@@ -14,8 +14,8 @@ from dataclasses import replace
 from datetime import datetime, timezone
 from typing import Callable, Dict, List, Optional, Tuple
 
-from constants import APP_VERSION
-from database import DatabaseManager, Trade
+from engine.constants import APP_VERSION
+from engine.database import DatabaseManager, Trade
 from exchange import ExchangeConnector, WebSocketFeed
 from risk import RiskAssessment, RiskDecision
 from strategy import SignalEvent, SignalType

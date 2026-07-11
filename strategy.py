@@ -17,21 +17,21 @@ from typing import Dict, List, Optional, Set, Tuple, TYPE_CHECKING
 import time as _time
 import aiohttp
 
-from constants import APP_VERSION, COL_EMA9, COL_EMA21, COL_EMA50, COL_RSI, COL_ATR, REQUIRED_INDICATOR_COLS
-from profiles.base_profile import CoinProfile, AdaptiveParams, StrategyProfile
-from profiles.registry import get_coin_profile
+from engine.constants import APP_VERSION, COL_EMA9, COL_EMA21, COL_EMA50, COL_RSI, COL_ATR, REQUIRED_INDICATOR_COLS
+from engine.profiles.base_profile import CoinProfile, AdaptiveParams, StrategyProfile
+from engine.profiles.registry import get_coin_profile
 
 if TYPE_CHECKING:
-    from core.models import ScoredSignal, ObservationReport
-    from intelligence.observer import MarketObserver
-    from intelligence.classifier import MarketClassifier
-    from intelligence.scorer import SignalScorer
-    from intelligence.validator import SignalValidator
+    from engine.core.models import ScoredSignal, ObservationReport
+    from engine.intelligence.observer import MarketObserver
+    from engine.intelligence.classifier import MarketClassifier
+    from engine.intelligence.scorer import SignalScorer
+    from engine.intelligence.validator import SignalValidator
 
 log = logging.getLogger("strategy")
 
 try:
-    import ta_compat
+    import engine.ta_compat
     import pandas as pd
     _TA_AVAILABLE = True
 except ImportError:
@@ -380,7 +380,7 @@ class VolumetricBreakoutStrategy(BaseStrategy):
 
     def refresh_profiles(self) -> None:
         """Re-classify semua profil setelah WS feed punya data ticker."""
-        from profiles.registry import _PROFILE_CACHE, _COIN_PROFILE_MAP
+        from engine.profiles.registry import _PROFILE_CACHE, _COIN_PROFILE_MAP
         # Clear cache profil yang di-load saat startup (ticker belum ada)
         _PROFILE_CACHE.clear()
         # Hapus entry auto-classify lama dari map (bukan manual entries)
@@ -442,10 +442,10 @@ class VolumetricBreakoutStrategy(BaseStrategy):
 
     def _try_init_pipeline(self) -> None:
         try:
-            from intelligence.observer import MarketObserver
-            from intelligence.classifier import MarketClassifier
-            from intelligence.scorer import SignalScorer
-            from intelligence.validator import SignalValidator
+            from engine.intelligence.observer import MarketObserver
+            from engine.intelligence.classifier import MarketClassifier
+            from engine.intelligence.scorer import SignalScorer
+            from engine.intelligence.validator import SignalValidator
 
             self._observer   = MarketObserver()
             self._classifier = MarketClassifier()
@@ -464,12 +464,12 @@ class VolumetricBreakoutStrategy(BaseStrategy):
             self._pipeline_ready = False
 
     def _load_profiles(self, symbols: List[str]) -> None:
-        from profiles.registry import auto_classify_profile
+        from engine.profiles.registry import auto_classify_profile
         for sym in symbols:
             try:
                 base = sym.split("/")[0]
                 # Cek apakah koin ada di map — kalau tidak, auto-classify
-                from profiles.registry import _COIN_PROFILE_MAP
+                from engine.profiles.registry import _COIN_PROFILE_MAP
                 if base not in _COIN_PROFILE_MAP and self._ws_feed is not None:
                     try:
                         ticker     = self._ws_feed.live_tickers.get(sym, {})
@@ -839,9 +839,9 @@ class VolumetricBreakoutStrategy(BaseStrategy):
         """Engine utama transisi regime untuk posisi open.
         Return: HOLD | HOLD_TIGHTEN_SL | HOLD_RELAX_SL | EXIT
         """
-        from constants import REGIME_ACTION_COOLDOWN_SECS, REGIME_STABILITY_MIN_CYCLES
-        from intelligence.commander import should_exit_on_regime_change
-        from core.models import MarketRegime
+        from engine.constants import REGIME_ACTION_COOLDOWN_SECS, REGIME_STABILITY_MIN_CYCLES
+        from engine.intelligence.commander import should_exit_on_regime_change
+        from engine.core.models import MarketRegime
 
         with self._lock:
             symbol       = tracker.symbol
@@ -1065,7 +1065,7 @@ class VolumetricBreakoutStrategy(BaseStrategy):
                 _vol = observation.primary_tf_indicators.strength.volume_ratio if observation.primary_tf_indicators else None
                 _rsi = observation.primary_tf_indicators.momentum.rsi if observation.primary_tf_indicators else None
                 if all(v is not None for v in [_atr, _price, _vol, _rsi]):
-                    from profiles.base_profile import AdaptiveParams
+                    from engine.profiles.base_profile import AdaptiveParams
                     _adaptive = AdaptiveParams.adjust_for_market(
                         profile=profile,
                         cur_atr=_atr,
@@ -1135,7 +1135,7 @@ class VolumetricBreakoutStrategy(BaseStrategy):
             # difix terpisah) -- sudah diverifikasi tidak ada masalah runtime,
             # cuma nambah 1 query DB per simbol per siklus scoring (trade-off
             # yg disetujui user).
-            from intelligence.validator import validate_and_apply
+            from engine.intelligence.validator import validate_and_apply
             loop = asyncio.get_running_loop()
             scored, _vr = await loop.run_in_executor(
                 None,
@@ -1560,7 +1560,7 @@ class VolumetricBreakoutStrategy(BaseStrategy):
                         entry_trigger = "None"
 
                     # Profile otomatis — ditentukan kondisi indikator saat ini
-                    from profiles.registry import select_profile_from_indicators
+                    from engine.profiles.registry import select_profile_from_indicators
                     _last_regime = getattr(self, '_last_regime', {})
                     _cur_regime  = _last_regime.get(symbol, 'trending_bull')
                     _adx_col = [c for c in df.columns if 'ADX' in c.upper() and 'DI' not in c.upper()]
@@ -1583,7 +1583,7 @@ class VolumetricBreakoutStrategy(BaseStrategy):
                             "[%s] Profile otomatis: %s → %s (regime=%s adx=%.1f rsi=%.1f)",
                             symbol, _base_name, _auto_profile, _cur_regime, _adx_val, rsi,
                         )
-                    from profiles.registry import get_coin_profile as _gcp
+                    from engine.profiles.registry import get_coin_profile as _gcp
                     profile     = _gcp(symbol, override_profile=_auto_profile)
                     profile_val = profile.profile.value if profile else "universal"
                     atr_pct     = atr / close * 100 if close > 0 else 0.0

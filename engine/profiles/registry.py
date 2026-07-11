@@ -12,7 +12,7 @@ import warnings
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Tuple
 
-from profiles.base_profile import (
+from engine.profiles.base_profile import (
     CoinProfile,
     ParameterBounds,
     PrimaryTriggerType,
@@ -21,7 +21,7 @@ from profiles.base_profile import (
     PROFILE_TIMEFRAME,
     TIMEFRAME_CONFIRMATION_MAP,
 )
-from profiles.thresholds import get_profile_thresholds, get_all_profile_names
+from engine.profiles.thresholds import get_profile_thresholds, get_all_profile_names
 
 log = logging.getLogger("profiles.registry")
 

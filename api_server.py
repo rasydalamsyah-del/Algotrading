@@ -87,8 +87,8 @@ from datetime import datetime, timezone, timedelta
 from typing import Any, Dict, List, Optional, TYPE_CHECKING
 
 try:
-    import ta_compat
-    from ta_compat import lookup_col
+    import engine.ta_compat
+    from engine.ta_compat import lookup_col
 except ImportError:
     def lookup_col(bar, *cols, default=0.0):  # type: ignore[misc]
         return default
@@ -101,16 +101,16 @@ from fastapi.security import APIKeyHeader
 from pydantic import BaseModel
 
 # ── Top-level imports yang sebelumnya ada di dalam handler ────────────────────
-from constants import (
+from engine.constants import (
     COL_EMA9, COL_EMA21, COL_EMA50, COL_RSI, COL_ATR,
     COL_WILLR, COL_ROC, COL_RSI_SLOPE, COL_RSI_DIV,
     COL_EMAXS_9_21, COL_CCI, COL_DCU, COL_CMF, COL_PSAR,
     COL_EMA_STACK_SCORE,
 )
-from profiles.registry      import get_coin_profile, select_profile_from_indicators
-from profiles.base_profile  import PROFILE_EMOJI
-from profiles.thresholds    import get_dynamic_threshold, DYNAMIC_THRESHOLD_MATRIX, ENTRY_THRESHOLDS
-from profiles.weights       import LEVEL1_WEIGHTS
+from engine.profiles.registry      import get_coin_profile, select_profile_from_indicators
+from engine.profiles.base_profile  import PROFILE_EMOJI
+from engine.profiles.thresholds    import get_dynamic_threshold, DYNAMIC_THRESHOLD_MATRIX, ENTRY_THRESHOLDS
+from engine.profiles.weights       import LEVEL1_WEIGHTS
 from risk                   import HaltReason
 
 if TYPE_CHECKING:

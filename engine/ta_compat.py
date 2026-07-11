@@ -1711,7 +1711,7 @@ def patch() -> bool:
     Return True jika accessor berhasil diregistrasi ke pandas.
 
     Cara pakai di modul lain:
-        import ta_compat
+        import engine.ta_compat
         # Setelah import, df.ta.* langsung tersedia
         # (tidak perlu panggil patch())
 

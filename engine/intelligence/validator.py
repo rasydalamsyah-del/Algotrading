@@ -11,12 +11,12 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import List, Optional, Tuple
 
-from constants import (
+from engine.constants import (
     OBSERVATION_STALE_THRESHOLD_SECONDS,
     SCORE_NEUTRAL,
     SPREAD_LIMIT_DEFAULT,
 )
-from core.models import (
+from engine.core.models import (
     IndicatorSet,
     MarketRegime,
     ObservationReport,
@@ -208,7 +208,7 @@ def _check_volume_climax(iset: IndicatorSet, result: ValidationResult) -> None:
         )
 
     if iset.patterns.secondary_pattern is not None:
-        from core.models import PatternType
+        from engine.core.models import PatternType
         if iset.patterns.secondary_pattern == PatternType.VOLUME_CLIMAX:
             result.add_warning(
                 "Volume climax pattern sebagai secondary signal",
@@ -1593,7 +1593,7 @@ def _check_strength_context(
     # -- MFI divergence: MFI dan RSI bergerak berbeda = peringatan --
     mfi_div = st.mfi_divergence
     if mfi_div is not None and mfi_div != 0.0:
-        from constants import RSI_DIVERGENCE_THRESHOLD
+        from engine.constants import RSI_DIVERGENCE_THRESHOLD
         if mfi_div > RSI_DIVERGENCE_THRESHOLD:
             result.add_note(
                 f"✅ MFI-RSI divergence bullish ({mfi_div:+.1f}) — "
@@ -1611,7 +1611,7 @@ def _check_strength_context(
 
     # -- ADX kekuatan trend: ADX < 20 = sideways = sinyal trend lebih berisiko --
     if st.adx is not None:
-        from constants import ADX_WEAK_TREND, ADX_STRONG_TREND
+        from engine.constants import ADX_WEAK_TREND, ADX_STRONG_TREND
         if st.adx < ADX_WEAK_TREND:
             result.add_warning(
                 f"ADX rendah ({st.adx:.1f} < {ADX_WEAK_TREND}) — "
@@ -1649,7 +1649,7 @@ def _check_strength_context(
     # terdeteksi. _check_volume_climax() tetap satu-satunya pemilik logic ini
     # (juga sudah cover secondary_pattern == VOLUME_CLIMAX dari patterns.py).
     if st.volume_ratio is not None:
-        from constants import VOLUME_RATIO_ELEVATED, VOLUME_RATIO_SPIKE
+        from engine.constants import VOLUME_RATIO_ELEVATED, VOLUME_RATIO_SPIKE
         if st.volume_climax:
             pass  # ditangani oleh _check_volume_climax(), jangan duplikasi penalty
         elif st.volume_spike:
@@ -1692,7 +1692,7 @@ def validate_signal(
     _check_data_staleness(observation, result)
 
     try:
-        from profiles.thresholds import get_profile_thresholds
+        from engine.profiles.thresholds import get_profile_thresholds
         profile_cfg = get_profile_thresholds(signal.strategy_profile)
         _check_atr_threshold(iset, profile_cfg, result)
         consecutive_max = getattr(profile_cfg, "max_consecutive_losses", max_consecutive_losses)

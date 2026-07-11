@@ -28,7 +28,7 @@ from typing import List, Optional, Tuple
 import numpy as np
 import pandas as pd
 
-from constants import (
+from engine.constants import (
     ENGULFING_MIN_BODY_RATIO,
     ENGULFING_COVERAGE_RATIO,
     HAMMER_LOWER_SHADOW_MULT,
@@ -50,7 +50,7 @@ from constants import (
     PATTERN_NO_CONFIRM_PENALTY,
     SCORE_NEUTRAL,
 )
-from core.models import PatternIndicators, PatternType, PatternContext, clamp_score
+from engine.core.models import PatternIndicators, PatternType, PatternContext, clamp_score
 
 log = logging.getLogger("indicators.patterns")
 _VOLUME_MA_WINDOW = 20

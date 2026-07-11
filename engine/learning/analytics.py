@@ -13,7 +13,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
 
-from constants import (
+from engine.constants import (
     MIN_SAMPLE_FOR_ATTRIBUTION,
     MIN_SAMPLE_FOR_INDICATOR_STATS,
     ANALYTICS_REFRESH_INTERVAL_S,
@@ -24,7 +24,7 @@ from constants import (
     INSIGHT_MIN_SAMPLE_SIZE,
     INDICATOR_PREDICTIVE_THRESHOLD,
 )
-from core.models import (
+from engine.core.models import (
     AttributionReport,
     IndicatorEffectiveness,
     MarketRegime,

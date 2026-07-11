@@ -57,7 +57,7 @@ import pandas as pd
 from numpy.lib.stride_tricks import sliding_window_view
 
 log = logging.getLogger(__name__)
-from core.models import OscillatorIndicators
+from engine.core.models import OscillatorIndicators
 
 # ── Constants ──────────────────────────────────────────────────────────────────
 CCI_PERIOD          = 20

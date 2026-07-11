@@ -39,7 +39,7 @@ from typing import List, Optional, Tuple
 import numpy as np
 import pandas as pd
 
-from constants import (
+from engine.constants import (
     BB_WIDTH_SQUEEZE,
     BB_WIDTH_NORMAL,
     BB_WIDTH_EXPANSION,
@@ -52,7 +52,7 @@ from constants import (
     SCORE_NEUTRAL,
     COL_ATR,
 )
-from core.models import VolatilityIndicators, clamp_score
+from engine.core.models import VolatilityIndicators, clamp_score
 
 log = logging.getLogger("indicators.volatility")
 

@@ -11,13 +11,13 @@ import logging
 from datetime import datetime
 from typing import Any, Dict, List, Optional, Tuple
 
-from constants import (
+from engine.constants import (
     SCORE_NEUTRAL,
     SCORE_MIN,
     SCORE_MAX,
     SIGNAL_CONFIRMATION_MATRIX,
 )
-from core.models import (
+from engine.core.models import (
     DecisionAction,
     IndicatorSet,
     MarketRegime,
@@ -28,13 +28,13 @@ from core.models import (
     clamp_score,
     validate_score,
 )
-from profiles.weights import (
+from engine.profiles.weights import (
     get_level1_weights,
     get_level2_weights,
     get_regime_modifier,
     compute_category_score,
 )
-from profiles.thresholds import get_profile_thresholds, get_dynamic_threshold
+from engine.profiles.thresholds import get_profile_thresholds, get_dynamic_threshold
 
 log = logging.getLogger("intelligence.scorer")
 
@@ -47,7 +47,7 @@ def _check_primary_trigger(
     iset: IndicatorSet,
     profile_cfg,
 ) -> Tuple[bool, str]:
-    from profiles.base_profile import PrimaryTriggerType
+    from engine.profiles.base_profile import PrimaryTriggerType
 
     trigger_type = profile_cfg.primary_trigger_type
 

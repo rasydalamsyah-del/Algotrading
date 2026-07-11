@@ -45,7 +45,7 @@ from typing import Dict, List, Optional, Tuple
 import numpy as np
 import pandas as pd
 
-from constants import (
+from engine.constants import (
     COL_EMA9, COL_EMA21, COL_EMA50, COL_EMA100, COL_EMA200,
     COL_VWAP, COL_VWAP_UPPER_1, COL_VWAP_LOWER_1,
     COL_VWAP_UPPER_2, COL_VWAP_LOWER_2,
@@ -54,7 +54,7 @@ from constants import (
     SUPERTREND_BULL_SCORE, SUPERTREND_BEAR_SCORE,
     SCORE_NEUTRAL, MIN_CANDLES_FOR_INDICATORS,
 )
-from core.models import TrendIndicators, clamp_score
+from engine.core.models import TrendIndicators, clamp_score
 
 log = logging.getLogger("indicators.trend")
 

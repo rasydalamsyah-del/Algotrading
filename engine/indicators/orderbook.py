@@ -48,7 +48,7 @@ from typing import Dict, List, Optional, Tuple
 
 log = logging.getLogger(__name__)
 
-from core.models import OrderbookIndicators
+from engine.core.models import OrderbookIndicators
 
 # ── Constants ─────────────────────────────────────────────────────────────────
 WHALE_WALL_PCT      = 0.08   # level > 8% total volume sisi = whale wall

@@ -86,14 +86,14 @@ section("1. IMPORT & MODULE LOADING")
 modules = {}
 
 try:
-    import ta_compat
+    import engine.ta_compat
     modules["ta_compat"] = ta_compat
     ok("ta_compat loaded")
 except Exception as e:
     fail("ta_compat", str(e))
 
 try:
-    from core.models import (
+    from engine.core.models import (
         ScoredSignal, IndicatorSet, ObservationReport, MarketRegime
     )
     ok("core.models loaded")
@@ -101,87 +101,87 @@ except Exception as e:
     fail("core.models", str(e))
 
 try:
-    from profiles.base_profile import CoinProfile, TIMEFRAME_CONFIRMATION_MAP
+    from engine.profiles.base_profile import CoinProfile, TIMEFRAME_CONFIRMATION_MAP
     ok("profiles.base_profile loaded")
 except Exception as e:
     fail("profiles.base_profile", str(e))
 
 try:
-    from profiles.registry import get_coin_profile, select_profile_from_indicators
+    from engine.profiles.registry import get_coin_profile, select_profile_from_indicators
     ok("profiles.registry loaded")
 except Exception as e:
     fail("profiles.registry", str(e))
 
 try:
-    from profiles.thresholds import get_profile_thresholds, get_dynamic_threshold
+    from engine.profiles.thresholds import get_profile_thresholds, get_dynamic_threshold
     ok("profiles.thresholds loaded")
 except Exception as e:
     fail("profiles.thresholds", str(e))
 
 try:
-    from profiles.weights import LEVEL1_WEIGHTS, LEVEL2_WEIGHTS
+    from engine.profiles.weights import LEVEL1_WEIGHTS, LEVEL2_WEIGHTS
     ok("profiles.weights loaded")
 except Exception as e:
     fail("profiles.weights", str(e))
 
 try:
-    from indicators.momentum  import calculate_rsi_enhanced
-    from indicators.trend import score_trend
-    from indicators.strength   import calculate_all as _str_all
-    from indicators.patterns   import score_pattern as _pat_score, detect_all as _pat_detect
-    from indicators.volatility import calculate_atr_enhanced
-    from indicators.trend      import score_trend as calculate_trend_indicators
-    from indicators.oscillators import score_oscillators as calculate_oscillator_indicators
-    from indicators.structure  import score_structure as calculate_structure_indicators
-    from indicators.orderbook  import score_orderbook_data as calculate_orderbook_indicators
+    from engine.indicators.momentum  import calculate_rsi_enhanced
+    from engine.indicators.trend import score_trend
+    from engine.indicators.strength   import calculate_all as _str_all
+    from engine.indicators.patterns   import score_pattern as _pat_score, detect_all as _pat_detect
+    from engine.indicators.volatility import calculate_atr_enhanced
+    from engine.indicators.trend      import score_trend as calculate_trend_indicators
+    from engine.indicators.oscillators import score_oscillators as calculate_oscillator_indicators
+    from engine.indicators.structure  import score_structure as calculate_structure_indicators
+    from engine.indicators.orderbook  import score_orderbook_data as calculate_orderbook_indicators
     ok("indicators.* loaded")
 except Exception as e:
     fail("indicators.*", str(e))
 
 try:
-    from intelligence.classifier import classify_regime, is_tradeable_regime
+    from engine.intelligence.classifier import classify_regime, is_tradeable_regime
     ok("intelligence.classifier loaded")
 except Exception as e:
     fail("intelligence.classifier", str(e))
 
 try:
-    from intelligence.observer import observe as build_observation_report
+    from engine.intelligence.observer import observe as build_observation_report
     ok("intelligence.observer loaded")
 except Exception as e:
     fail("intelligence.observer", str(e))
 
 try:
-    from intelligence.scorer import score_signal
+    from engine.intelligence.scorer import score_signal
     ok("intelligence.scorer loaded")
 except Exception as e:
     fail("intelligence.scorer", str(e))
 
 try:
-    from intelligence.validator import validate_signal, validate_and_apply
+    from engine.intelligence.validator import validate_signal, validate_and_apply
     ok("intelligence.validator loaded")
 except Exception as e:
     fail("intelligence.validator", str(e))
 
 try:
-    from intelligence.commander import _gate_score_and_trigger
+    from engine.intelligence.commander import _gate_score_and_trigger
     ok("intelligence.commander loaded")
 except Exception as e:
     fail("intelligence.commander", str(e))
 
 try:
-    from intelligence.trade_guardian import check_atg
+    from engine.intelligence.trade_guardian import check_atg
     ok("intelligence.trade_guardian loaded")
 except Exception as e:
     fail("intelligence.trade_guardian", str(e))
 
 try:
-    from learning.analytics import PerformanceAnalytics
+    from engine.learning.analytics import PerformanceAnalytics
     ok("learning.analytics loaded")
 except Exception as e:
     fail("learning.analytics", str(e))
 
 try:
-    from learning.meta_learner import MetaLearner
+    from engine.learning.meta_learner import MetaLearner
     ok("learning.meta_learner loaded")
 except Exception as e:
     fail("learning.meta_learner", str(e))
@@ -194,9 +194,9 @@ section("2. TA_COMPAT — INDIKATOR DASAR")
 df_bull = make_df(200, "bull")
 
 try:
-    import ta_compat
+    import engine.ta_compat
     df_test = df_bull.copy()
-    import ta_compat as _ta
+    import engine.ta_compat as _ta
     df_test.ta = _ta._TAAccessor(df_test)
 
     ema = df_test.ta.ema(length=9)
@@ -322,7 +322,7 @@ except Exception as e:
     fail("get_dynamic_threshold", str(e))
 
 try:
-    from profiles.weights import LEVEL1_WEIGHTS, LEVEL2_WEIGHTS
+    from engine.profiles.weights import LEVEL1_WEIGHTS, LEVEL2_WEIGHTS
     for pname in profile_names:
         assert pname in LEVEL1_WEIGHTS, f"{pname} tidak ada di LEVEL1_WEIGHTS"
         assert pname in LEVEL2_WEIGHTS, f"{pname} tidak ada di LEVEL2_WEIGHTS"
@@ -337,10 +337,10 @@ section("5. REGIME CLASSIFIER")
 
 for label, df in [("BULL", df_bull), ("BEAR", df_bear), ("FLAT", df_range), ("VOLATILE", df_vol)]:
     try:
-        from indicators.volatility import calculate_atr_enhanced
-        from indicators.trend import score_trend as calculate_trend_indicators
-        from indicators.momentum import calculate_rsi_enhanced
-        from core.models import IndicatorSet
+        from engine.indicators.volatility import calculate_atr_enhanced
+        from engine.indicators.trend import score_trend as calculate_trend_indicators
+        from engine.indicators.momentum import calculate_rsi_enhanced
+        from engine.core.models import IndicatorSet
 
         iset = IndicatorSet(symbol="SOL/USDT", timeframe="15m")
         iset.momentum   = calculate_rsi_enhanced(df)
@@ -398,7 +398,7 @@ for label, df in [("BULL", df_bull), ("BEAR", df_bear), ("FLAT", df_range)]:
         prof   = get_coin_profile("SOL/USDT")
         thresh = get_profile_thresholds(prof.profile.value)
         report = build_observation_report("SOL/USDT", prof.profile.value, df, "15m", ob_data=ob)
-        from intelligence.classifier import classify_regime
+        from engine.intelligence.classifier import classify_regime
         report.strategy_profile = prof.profile.value
         _regime, _rconf = classify_regime(report.symbol if hasattr(report,"symbol") else "SOL/USDT", report.primary_tf_indicators) if report.primary_tf_indicators else (MarketRegime.RANGING, 0.5)
         scored = score_signal(report, _regime, 0.7)
@@ -419,7 +419,7 @@ try:
     thresh = get_profile_thresholds(prof.profile.value)
     report = build_observation_report("SOL/USDT", prof.profile.value, df_bull, "15m", ob_data=ob)
     report.strategy_profile = prof.profile.value
-    from intelligence.classifier import classify_regime
+    from engine.intelligence.classifier import classify_regime
     _rg8, _rc8 = classify_regime("SOL/USDT", report.primary_tf_indicators)
     scored = score_signal(report, _rg8, _rc8)
 
@@ -645,7 +645,7 @@ section("12. DATABASE — READ OPERATIONS")
 
 async def test_db():
     try:
-        from database import DatabaseManager
+        from engine.database import DatabaseManager
         db = DatabaseManager("sqlite+aiosqlite:///./data/trading_bot.db")
         await db.init_db()
         ok("DatabaseManager initialized")
@@ -737,7 +737,7 @@ for sym, trend, vol, profile_hint, desc in scenarios:
         prof   = get_coin_profile(sym)
         thresh = get_profile_thresholds(prof.profile.value)
         report = build_observation_report(sym, prof.profile.value, df_s, "15m", ob_data=ob)
-        from intelligence.classifier import classify_regime
+        from engine.intelligence.classifier import classify_regime
         report.strategy_profile = prof.profile.value
         _regime, _rc2 = classify_regime(sym, report.primary_tf_indicators) if report.primary_tf_indicators else (MarketRegime.RANGING, 0.5)
         scored = score_signal(report, _regime, _rc2)

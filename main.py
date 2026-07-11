@@ -38,19 +38,19 @@ import pandas as pd
 import uvicorn
 from dotenv import load_dotenv
 try:
-    from constants import APP_VERSION, MAX_CANDLE_CACHE
+    from engine.constants import APP_VERSION, MAX_CANDLE_CACHE
 except ImportError:
     APP_VERSION = "7.0"
 
-from profiles.registry import get_profile_summary, set_profile_override, get_coin_profile
-from database import DatabaseManager
+from engine.profiles.registry import get_profile_summary, set_profile_override, get_coin_profile
+from engine.database import DatabaseManager
 from exchange import ExchangeConnector, WebSocketFeed
 from strategy import get_strategy, SignalType, SignalEvent, ExitMode, PositionTracker
 from risk import RiskManager, RiskAssessment, RiskDecision, HaltReason
 from execution import OrderExecutionManager
 from api_server import create_app
 from notifications import NotificationManager
-from indicators.orderbook import WhaleDetector  # [v2] dipindah dari main.py ke indicators/orderbook.py
+from engine.indicators.orderbook import WhaleDetector  # [v2] dipindah dari main.py ke indicators/orderbook.py
 
 load_dotenv()
 
@@ -281,7 +281,7 @@ class TradingBot:
         # jalur lazy-load itu sendiri juga dead). Fix: panggil sekali di
         # startup, sebelum strategy/profile apapun dipakai.
         try:
-            from profiles.registry import load_all_overrides_from_db
+            from engine.profiles.registry import load_all_overrides_from_db
             _n_overrides = await load_all_overrides_from_db(self.db)
             log.info("Parameter overrides dari DB di-restore: %d symbol.", _n_overrides)
         except Exception as _ovr_err:
@@ -527,7 +527,7 @@ class TradingBot:
             return
 
         try:
-            from intelligence.commander import IntelligenceCommander
+            from engine.intelligence.commander import IntelligenceCommander
             self._commander = IntelligenceCommander(
                 db=self.db,
                 config=self.config,
@@ -538,7 +538,7 @@ class TradingBot:
             )
             log.info("Intelligence commander: AKTIF")
             try:
-                from intelligence.classifier import restore_regimes_from_db
+                from engine.intelligence.classifier import restore_regimes_from_db
                 await restore_regimes_from_db(self.config["universe_watchlist"], self.db)
             except Exception as _re:
                 log.warning("Regime restore gagal: %s", _re)
@@ -550,7 +550,7 @@ class TradingBot:
 
         if self.config.get("analytics_enabled", True):
             try:
-                from learning.analytics import PerformanceAnalytics
+                from engine.learning.analytics import PerformanceAnalytics
                 self._analytics = PerformanceAnalytics(db=self.db, config=self.config)
 
                 await self._analytics.load_persistent_parameters()
@@ -562,7 +562,7 @@ class TradingBot:
 
         if self.config.get("meta_learner_enabled", False) and self._analytics:
             try:
-                from learning.meta_learner import MetaLearner
+                from engine.learning.meta_learner import MetaLearner
                 self._meta_learner = MetaLearner(
                     db_manager=self.db,
                     analytics_engine=self._analytics,
@@ -758,7 +758,7 @@ class TradingBot:
                             pos.symbol, pos.amount, actual_qty,
                         )
                         from sqlalchemy import update as sa_update
-                        from database import Position
+                        from engine.database import Position
                         async with self.db._session() as s:
                             await s.execute(
                                 sa_update(Position)
@@ -1214,7 +1214,7 @@ class TradingBot:
                 # ════════════════════════════════════════════
                 # GATE 3 — Fetch OHLCV + Indikator Dasar
                 # ════════════════════════════════════════════
-                from profiles.registry import get_coin_profile, auto_classify_profile, _COIN_PROFILE_MAP, _PROFILE_CACHE
+                from engine.profiles.registry import get_coin_profile, auto_classify_profile, _COIN_PROFILE_MAP, _PROFILE_CACHE
                 # Auto-classify hanya kalau belum ada di map (hindari classify ulang)
                 _base = symbol.split("/")[0]
                 if _base not in _COIN_PROFILE_MAP:
@@ -1396,7 +1396,7 @@ class TradingBot:
                 # Cek threshold dengan multiplier (kalau ada monitor flag)
                 total_score = float(getattr(scored, "total_score", 0) or 0)
                 try:
-                    from profiles.thresholds import get_dynamic_threshold
+                    from engine.profiles.thresholds import get_dynamic_threshold
                     _regime_val = scored.regime.value if scored.regime else "undefined"
                     base_threshold = get_dynamic_threshold(profile.profile.value, _regime_val)
                 except Exception:
@@ -1427,7 +1427,7 @@ class TradingBot:
                 _kelly_size_pct: Optional[float] = None
                 if self._commander is not None:
                     try:
-                        from intelligence.commander import decide as _cmd_decide
+                        from engine.intelligence.commander import decide as _cmd_decide
                         _open_syms = []
                         try:
                             _open_pos = await self.db.get_open_positions()
@@ -1455,7 +1455,7 @@ class TradingBot:
                             )
                             # ── Jalur Entry 2: cek transisi regime ──
                             try:
-                                from intelligence.classifier import is_regime_transition
+                                from engine.intelligence.classifier import is_regime_transition
                                 _is_trans, _from_r, _to_r = is_regime_transition(symbol)
                                 _coin_prof = self.strategy._profiles.get(symbol)
                                 _allow_trans = (
@@ -1812,7 +1812,7 @@ class TradingBot:
 
             # [MSL-A FIX] Bersihkan state orderbook yang sudah tidak aktif > 1 jam
             try:
-                from indicators.orderbook import cleanup_stale_states
+                from engine.indicators.orderbook import cleanup_stale_states
                 n = cleanup_stale_states()
                 if n:
                     log.info("Orderbook: %d stale state dibersihkan.", n)
@@ -1997,7 +1997,7 @@ class TradingBot:
 
                     # ── Adaptive Trade Guardian (ATG) ──────────────────────
                     try:
-                        from intelligence.trade_guardian import check_atg
+                        from engine.intelligence.trade_guardian import check_atg
                         _atg_df = None
                         try:
                             import pandas as pd
@@ -2266,261 +2266,12 @@ class TradingBot:
             log.warning("REST price fallback gagal untuk %s: %s", symbol, e)
             return None
 
-    async def _try_shadow_trade(self, signal: SignalEvent) -> None:
-        """
-        Saat algotrader pintu tutup (max open positions), titipkan sinyal
-        ke algotrader_test agar dicoba secara demo (Cara B):
-          1. Cek slot algotrader_test — kalau penuh, shadow ditangguhkan
-          2. Tulis shadow position ke DB algotrader_test (penanda titipan)
-          3. Tambahkan koin ke WATCHLIST algotrader_test sementara
-          4. algotrader_test scan & beli sendiri pakai saldo demo
-        Penanda: strategy_name = "SHADOW:algotrader:<symbol>"
-        """
-        peer_db_path = os.getenv("CROSS_LEARN_DB", "")
-        peer_env     = os.getenv("PEER_BOT_ENV",  "")
-        peer_dir     = os.getenv("PEER_BOT_DIR",  "")
-
-        if not peer_db_path or not peer_env or not peer_dir:
-            log.debug("ShadowTrade: PEER_BOT tidak dikonfigurasi — skip.")
-            return
-
-        symbol     = signal.symbol
-        shadow_tag = "SHADOW:algotrader"
-
-        try:
-            # --- Load DB algotrader_test ---
-            import importlib.util
-            spec = importlib.util.spec_from_file_location(
-                "_peer_db", os.path.join(peer_dir, "database.py")
-            )
-            peer_db_mod = importlib.util.module_from_spec(spec)
-            spec.loader.exec_module(peer_db_mod)
-
-            peer_db = peer_db_mod.DatabaseManager(
-                f"sqlite+aiosqlite:///{peer_db_path}"
-            )
-            await peer_db.init_db()
-
-            # --- Cek duplikat posisi ---
-            existing = await peer_db.get_open_position_by_symbol(symbol)
-            if existing:
-                log.debug(
-                    "ShadowTrade: %s sudah ada posisi di algotrader_test — skip.",
-                    symbol,
-                )
-                await peer_db.close()
-                return
-
-            # --- Baca .env algotrader_test ---
-            peer_env_data = {}
-            try:
-                with open(peer_env, "r") as f:
-                    for line in f:
-                        line = line.strip()
-                        if "=" in line and not line.startswith("#"):
-                            k, v = line.split("=", 1)
-                            peer_env_data[k.strip()] = v.strip()
-            except Exception as e:
-                log.warning("ShadowTrade: gagal baca peer .env: %s", e)
-                await peer_db.close()
-                return
-
-            peer_universe_raw = peer_env_data.get("UNIVERSE_WATCHLIST", "")
-            peer_universe     = [s.strip() for s in peer_universe_raw.split(",") if s.strip()]
-            peer_max           = int(peer_env_data.get("MAX_OPEN_POSITIONS", "5"))
-
-            # --- Cek: koin sudah ada di watchlist algotrader_test ---
-            if symbol in peer_universe:
-                log.debug(
-                    "ShadowTrade: %s sudah di universe algotrader_test — skip.",
-                    symbol,
-                )
-                await peer_db.close()
-                return
-
-            # --- Cek: koin sudah dalam shadow list ---
-            peer_positions = await peer_db.get_open_positions()
-            shadow_syms    = {
-                p.symbol for p in peer_positions
-                if (p.strategy_name or "").startswith(shadow_tag)
-            }
-            if symbol in shadow_syms:
-                log.debug(
-                    "ShadowTrade: %s sudah dalam shadow list — skip.", symbol
-                )
-                await peer_db.close()
-                return
-
-            # Shadow pakai slot ekstra — tidak dibatasi MAX_OPEN_POSITIONS test
-            # Hitung info shadow aktif untuk log
-            regular_open = [
-                p for p in peer_positions
-                if not (p.strategy_name or "").startswith(shadow_tag)
-            ]
-            shadow_open  = [
-                p for p in peer_positions
-                if (p.strategy_name or "").startswith(shadow_tag)
-            ]
-
-            # --- Tulis shadow position ke DB test ---
-            shadow_name = f"{shadow_tag}:{symbol}"
-            price       = signal.price or 0.0
-            atr         = signal.metadata.get("atr")
-
-            await peer_db.upsert_position(symbol, {
-                "entry_time":        datetime.now(timezone.utc).replace(tzinfo=None),
-                "entry_price":       round(price, 8),
-                "current_price":     round(price, 8),
-                "amount":            0.0,
-                "side":              "long",
-                "is_open":           True,
-                "is_closing":        False,
-                "stop_loss_price":   signal.stop_loss,
-                "take_profit_price": signal.take_profit,
-                "atr_at_entry":      round(float(atr), 8) if atr else None,
-                "strategy_name":     shadow_name,
-                "entry_order_id":    f"SHADOW_{symbol}_{int(datetime.now().timestamp())}",
-            })
-            await peer_db.close()
-
-            # --- Inject ke universe_overrides DB algotrader_test (tanpa restart) ---
-            try:
-                import importlib.util as _ilu
-                _spec2 = _ilu.spec_from_file_location("_peer_db2", peer_dir + "/database.py")
-                _pmod2 = _ilu.module_from_spec(_spec2)
-                _spec2.loader.exec_module(_pmod2)
-                _pdb2  = _pmod2.DatabaseManager(f"sqlite+aiosqlite:///{peer_db_path}")
-                await _pdb2.init_db()
-                await _pdb2.upsert_universe_override(
-                    symbol = symbol,
-                    source = "shadow",
-                    notes  = f"SHADOW:algotrader — titipan saat pintu tutup",
-                )
-                await _pdb2.close()
-                log.info(
-                    "ShadowTrade: %s diinjeksi ke universe_overrides algotrader_test (tanpa restart).",
-                    symbol,
-                )
-            except Exception as e:
-                log.warning("ShadowTrade: gagal inject universe_overrides: %s", e)
-
-            log.info(
-                "ShadowTrade: [%s] berhasil dititipkan ke algotrader_test. "
-                "Shadow slots: %d | Regular slots: %d/%d",
-                symbol, len(shadow_open) + 1, len(regular_open), peer_max,
-            )
-
-            if self.notifier:
-                try:
-                    msg = (
-                        f"\U0001f504 *Shadow Trade Aktif*\n"
-                        f"Koin *{symbol}* dititipkan ke algotrader_test\n"
-                        f"_(pintu algotrader sedang tutup)_\n"
-                        f"Entry ref: `{price:.6f}` | SL: `{signal.stop_loss or 0:.6f}`\n"
-                        f"Slot test: {len(regular_open)}/{peer_max} | "
-                        f"Shadow aktif: {len(shadow_open) + 1}"
-                    )
-                    await self.notifier.notify_info(msg)
-                except Exception as e:
-                    log.warning("ShadowTrade: gagal kirim notif: %s", e)
-
-        except Exception as e:
-            log.warning(
-                "ShadowTrade: error saat titip koin %s: %s", symbol, e, exc_info=True
-            )
-
-    async def _cleanup_shadow_trade(self, symbol: str) -> None:
-        """
-        Dipanggil saat algotrader berhasil buka posisi baru:
-          1. Tutup shadow position di DB algotrader_test
-          2. Hapus koin dari WATCHLIST algotrader_test
-          3. Restart algotrader_test agar baca universe terbaru
-        """
-        peer_db_path = os.getenv("CROSS_LEARN_DB", "")
-        peer_env     = os.getenv("PEER_BOT_ENV",  "")
-        peer_dir     = os.getenv("PEER_BOT_DIR",  "")
-
-        if not peer_db_path or not peer_env or not peer_dir:
-            return
-
-        shadow_tag = "SHADOW:algotrader"
-
-        try:
-            # --- Load DB algotrader_test ---
-            import importlib.util
-            spec = importlib.util.spec_from_file_location(
-                "_peer_db", os.path.join(peer_dir, "database.py")
-            )
-            peer_db_mod = importlib.util.module_from_spec(spec)
-            spec.loader.exec_module(peer_db_mod)
-
-            peer_db = peer_db_mod.DatabaseManager(
-                f"sqlite+aiosqlite:///{peer_db_path}"
-            )
-            await peer_db.init_db()
-
-            existing = await peer_db.get_open_position_by_symbol(symbol)
-
-            # Hanya cleanup kalau memang shadow position (bukan posisi regular test)
-            if not existing or not (existing.strategy_name or "").startswith(shadow_tag):
-                await peer_db.close()
-                return
-
-            # --- Tutup shadow position di DB ---
-            from sqlalchemy import update as _sa_update
-            async with peer_db._session() as s:
-                await s.execute(
-                    _sa_update(peer_db_mod.Position)
-                    .where(peer_db_mod.Position.symbol == symbol)
-                    .where(peer_db_mod.Position.is_open == True)
-                    .where(peer_db_mod.Position.strategy_name.like(f"{shadow_tag}%"))
-                    .values(
-                        is_open      = False,
-                        exit_time    = datetime.now(timezone.utc).replace(tzinfo=None),
-                        realized_pnl = 0.0,
-                    )
-                )
-                await s.commit()
-
-            await peer_db.close()
-            log.info(
-                "ShadowTrade cleanup: shadow position %s ditutup di DB algotrader_test.",
-                symbol,
-            )
-
-            # --- Deactivate dari universe_overrides DB algotrader_test (tanpa restart) ---
-            try:
-                import importlib.util as _ilu
-                _spec3 = _ilu.spec_from_file_location("_peer_db3", peer_dir + "/database.py")
-                _pmod3 = _ilu.module_from_spec(_spec3)
-                _spec3.loader.exec_module(_pmod3)
-                _pdb3  = _pmod3.DatabaseManager(f"sqlite+aiosqlite:///{peer_db_path}")
-                await _pdb3.init_db()
-                await _pdb3.deactivate_universe_override(symbol)
-                await _pdb3.close()
-                log.info(
-                    "ShadowTrade cleanup: %s dinonaktifkan dari universe_overrides algotrader_test (tanpa restart).",
-                    symbol,
-                )
-            except Exception as e:
-                log.warning("ShadowTrade cleanup: gagal deactivate universe_overrides: %s", e)
-
-            if self.notifier:
-                try:
-                    msg = (
-                        "\U00002705 *Shadow Trade Selesai*\n"
-                        f"Koin *{symbol}* berhasil dibeli algotrader.\n"
-                        "Shadow di algotrader_test sudah dibersihkan.\n"
-                        "Watchlist test kembali normal."
-                    )
-                    await self.notifier.notify_info(msg)
-                except Exception as e:
-                    log.warning("ShadowTrade cleanup: gagal kirim notif: %s", e)
-
-        except Exception as e:
-            log.warning(
-                "ShadowTrade cleanup: error untuk %s: %s", symbol, e, exc_info=True
-            )
+    # [DEPRECATED-REMOVED] _try_shadow_trade() dan _cleanup_shadow_trade()
+    # dihapus -- keduanya bagian dari sistem 'algotrader_test' peer-bot yang
+    # sudah dikonfirmasi tidak dipakai lagi selamanya (lihat audit-notes.md).
+    # Ini juga menghilangkan noise error berulang di log:
+    # "ShadowTrade cleanup: error ... No such file or directory:
+    # '/root/algotrader_test/database.py'"
 
     async def _handle_signal(self, signal: SignalEvent) -> None:
         log.info("SIGNAL: %s", signal)
@@ -2611,9 +2362,10 @@ class TradingBot:
 
         if not assessment.is_approved:
             log.info("Risk REJECTED %s: %s", symbol, assessment.reason)
-            # Jika ditolak karena slot penuh → titipkan ke algotrader_test
-            if "Max open positions" in (assessment.reason or ""):
-                await self._try_shadow_trade(signal)
+            # [DEPRECATED-REMOVED] Sebelumnya ada titip ke algotrader_test
+            # (Shadow Trade) di sini kalau ditolak karena slot penuh --
+            # dihapus bersama sistem algotrader_test yang sudah tidak
+            # dipakai lagi selamanya.
             _reset_position_flag()
             return
 
@@ -2773,7 +2525,7 @@ class TradingBot:
         p_obj = None
         if p:
             try:
-                from database import Position
+                from engine.database import Position
                 p_obj = await self.db.get_open_position_by_symbol(symbol)
             except Exception:
                 pass
@@ -2820,9 +2572,6 @@ class TradingBot:
                 "CRITICAL", "main",
                 f"register_position gagal {symbol} — trailing stop tidak aktif!"
             )
-
-        # Bersihkan shadow position di algotrader_test jika ada
-        await self._cleanup_shadow_trade(symbol)
 
         log.info(
             "POSISI DIBUKA: %s | entry=%.6f amount=%.8f SL=%.6f TP=%.6f",
@@ -3018,7 +2767,7 @@ class TradingBot:
         # ditutup — agar absorption/spoofing history tidak terbawa ke trade berikutnya.
         # reset_state() ada di orderbook.py tapi belum pernah dipanggil dari manapun.
         try:
-            from indicators.orderbook import reset_state as _ob_reset
+            from engine.indicators.orderbook import reset_state as _ob_reset
             _ob_reset(pos.symbol)
         except Exception:
             pass  # non-critical, jangan crash close flow

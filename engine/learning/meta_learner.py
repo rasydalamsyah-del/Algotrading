@@ -10,7 +10,7 @@ import logging
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
-from constants import (
+from engine.constants import (
     META_LEARNER_MIN_SAMPLE,
     META_LEARNER_MAX_THRESHOLD_CHANGE,
     META_LEARNER_COOLING_OFF_DAYS,
@@ -23,7 +23,7 @@ from constants import (
     META_PARAM_BOUNDS,
     INSIGHT_MIN_SAMPLE_SIZE,
 )
-from core.models import (
+from engine.core.models import (
     AttributionReport,
     IndicatorEffectiveness,
     MarketRegime,
@@ -62,10 +62,16 @@ _CATEGORY_MAP = {
 def _apply_weight_change(profile: str, indicator: str, delta: float) -> tuple:
     import sys, logging
     log = logging.getLogger(__name__)
-    sys.path.insert(0, str(__import__("pathlib").Path(__file__).resolve().parent.parent))
+    # [FIX PASCA-RESTRUKTURISASI] File ini pindah dari learning/meta_learner.py
+    # ke engine/learning/meta_learner.py -- nesting bertambah 1 level, jadi
+    # butuh parent.parent.parent (bukan parent.parent lagi) untuk tetap
+    # mencapai REPO ROOT yang sebenarnya (tempat "engine" sendiri berada
+    # sebagai package, supaya "from engine.profiles.weights import ..." di
+    # bawah ini bisa di-resolve dengan benar).
+    sys.path.insert(0, str(__import__("pathlib").Path(__file__).resolve().parent.parent.parent))
 
     try:
-        from profiles.weights import LEVEL1_WEIGHTS
+        from engine.profiles.weights import LEVEL1_WEIGHTS
     except ImportError:
         return False, "Gagal import LEVEL1_WEIGHTS"
 
@@ -102,6 +108,12 @@ def _apply_weight_change(profile: str, indicator: str, delta: float) -> tuple:
     total = sum(weights.values())
     weights = {k: round(v / total, 4) for k, v in weights.items()}
 
+    # [CATATAN PASCA-RESTRUKTURISASI] parent.parent DI SINI (beda dari baris
+    # sys.path.insert di atas) TIDAK diubah -- kebetulan tetap benar karena
+    # "learning/" dan "profiles/" sama-sama pindah bareng ke dalam "engine/",
+    # sehingga posisi relatif keduanya (sibling folder) tidak berubah:
+    # engine/learning/meta_learner.py -> parent.parent = engine/ -> /profiles/weights.py
+    # = engine/profiles/weights.py, lokasi baru yang benar.
     weights_path = str(__import__("pathlib").Path(__file__).resolve().parent.parent / "profiles" / "weights.py")
     try:
         with open(weights_path, "r") as f:
@@ -939,7 +951,7 @@ class MetaLearner:
         sug:         ParameterSuggestion,
         approved_by: str = "auto",
     ) -> Tuple[bool, str]:
-        from profiles.registry import apply_parameter_override
+        from engine.profiles.registry import apply_parameter_override
 
         # [BUG-FIX] Cooldown 1 jam sebelumnya HANYA dicek untuk parameter
         # numerik (entry_threshold, volume_multiplier, dst) karena cabang
@@ -1060,7 +1072,7 @@ class MetaLearner:
         sug:    ParameterSuggestion,
         reason: str,
     ) -> Tuple[bool, str]:
-        from profiles.registry import revert_parameter_override
+        from engine.profiles.registry import revert_parameter_override
 
         if sug.parameter_name.startswith(("weight_", "disable_regime_")):
             log.warning(
@@ -1282,7 +1294,7 @@ class MetaLearner:
         profile: str,
     ) -> Optional[float]:
         try:
-            from profiles.thresholds import get_dynamic_threshold
+            from engine.profiles.thresholds import get_dynamic_threshold
             # Gunakan regime undefined sebagai base threshold untuk meta learner
             return get_dynamic_threshold(profile, "undefined")
         except Exception as e:
@@ -1298,7 +1310,7 @@ class MetaLearner:
         param_name: str,
     ) -> Optional[float]:
         try:
-            from profiles.thresholds import get_profile_thresholds
+            from engine.profiles.thresholds import get_profile_thresholds
             thresh = get_profile_thresholds(profile)
             val = getattr(thresh, param_name, None)
             return float(val) if val is not None else None

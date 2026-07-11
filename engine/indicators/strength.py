@@ -41,7 +41,7 @@ from typing import List, Optional, Tuple
 import numpy as np
 import pandas as pd
 
-from constants import (
+from engine.constants import (
     ADX_WEAK_TREND,
     ADX_MODERATE_TREND,
     ADX_STRONG_TREND,
@@ -58,7 +58,7 @@ from constants import (
     RSI_DIVERGENCE_THRESHOLD,
     SCORE_NEUTRAL,
 )
-from core.models import StrengthIndicators, clamp_score
+from engine.core.models import StrengthIndicators, clamp_score
 
 log = logging.getLogger("indicators.strength")
 _ADX_WEIGHT    = 0.35
@@ -565,7 +565,7 @@ def calculate_money_flow(
             composite_score=SCORE_NEUTRAL,
         )
 
-    from indicators.momentum import _calc_rsi
+    from engine.indicators.momentum import _calc_rsi
     mfi_series = _calc_mfi(df, period)
     mfi_val    = float(mfi_series.iloc[-1])
     use_external = rsi_series is not None and len(rsi_series) == len(df)

@@ -26,13 +26,13 @@ _env_path = os.path.join(_bot_src, ".env")
 load_dotenv(_env_path)
 
 try:
-    import ta_compat
+    import engine.ta_compat
 except ImportError:
     pass
 
-from constants import APP_VERSION
-from profiles.base_profile import PROFILE_EMOJI, PROFILE_TIMEFRAME
-from profiles.registry import get_coin_profile, get_profile_summary
+from engine.constants import APP_VERSION
+from engine.profiles.base_profile import PROFILE_EMOJI, PROFILE_TIMEFRAME
+from engine.profiles.registry import get_coin_profile, get_profile_summary
 
 log = logging.getLogger("telegram_ctrl")
 
@@ -581,7 +581,7 @@ async def _render_diagnosa_from_api(data: dict) -> None:
 
 async def _diagnosa_direct() -> None:
     try:
-        from constants import COL_EMA9, COL_EMA21, COL_EMA50, COL_RSI, COL_ATR
+        from engine.constants import COL_EMA9, COL_EMA21, COL_EMA50, COL_RSI, COL_ATR
     except ImportError:
         COL_EMA9, COL_EMA21, COL_EMA50, COL_RSI, COL_ATR = (
             "EMA_9", "EMA_21", "EMA_50", "RSI_14", "ATRr_14"

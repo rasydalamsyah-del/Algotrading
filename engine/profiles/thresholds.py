@@ -10,13 +10,13 @@ import logging
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Tuple
 
-from profiles.base_profile import (
+from engine.profiles.base_profile import (
     CoinProfile,
     ParameterBounds,
     PrimaryTriggerType,
     StrategyProfile,
 )
-from constants import (
+from engine.constants import (
     SCORE_NEUTRAL,
     KELLY_MIN_SAMPLE,
     KELLY_MAX_SIZE_PCT,

@@ -30,13 +30,13 @@ from typing import Dict, List, Optional, Tuple
 
 import pandas as pd
 
-from constants import (
+from engine.constants import (
     OBSERVATION_CACHE_TTL_SECONDS,
     OBSERVATION_STALE_THRESHOLD_SECONDS,
     SCORE_NEUTRAL,
     MIN_CANDLES_FOR_INDICATORS,
 )
-from core.models import (
+from engine.core.models import (
     IndicatorSet,
     ObservationReport,
     TrendIndicators,
@@ -49,14 +49,14 @@ from core.models import (
     StructureIndicators,
     OrderbookIndicators,
 )
-from indicators.trend import score_trend
-from indicators.momentum import score_momentum, _calc_rsi
-from indicators.strength import score_strength
-from indicators.volatility import score_volatility
-from indicators.patterns import score_pattern
-from indicators.oscillators import score_oscillators
-from indicators.structure import score_structure
-from indicators.orderbook import score_orderbook_data
+from engine.indicators.trend import score_trend
+from engine.indicators.momentum import score_momentum, _calc_rsi
+from engine.indicators.strength import score_strength
+from engine.indicators.volatility import score_volatility
+from engine.indicators.patterns import score_pattern
+from engine.indicators.oscillators import score_oscillators
+from engine.indicators.structure import score_structure
+from engine.indicators.orderbook import score_orderbook_data
 
 log = logging.getLogger("intelligence.observer")
 

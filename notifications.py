@@ -17,7 +17,7 @@ from typing import List, Optional, Tuple
 
 import aiohttp
 
-from constants import APP_VERSION
+from engine.constants import APP_VERSION
 
 log = logging.getLogger("notifications")
 

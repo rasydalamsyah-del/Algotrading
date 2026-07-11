@@ -26,7 +26,7 @@ from typing import List, Optional, Tuple
 import numpy as np
 import pandas as pd
 
-from constants import (
+from engine.constants import (
     RSI_OVERSOLD_EXTREME,
     RSI_OVERSOLD,
     RSI_BULL_ZONE_LOW,
@@ -43,7 +43,7 @@ from constants import (
     SCORE_NEUTRAL,
     MIN_CANDLES_FOR_INDICATORS,
 )
-from core.models import MomentumIndicators, clamp_score
+from engine.core.models import MomentumIndicators, clamp_score
 
 log = logging.getLogger("indicators.momentum")
 
