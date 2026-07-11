@@ -65,37 +65,52 @@ class ValidationResult:
             parts.append(f"Confidence adj: {self.confidence_adjustment:+.2f}")
         return " | ".join(parts)
 
-def _check_rsi_divergence(iset: IndicatorSet, result: ValidationResult) -> None:
+def _check_rsi_divergence(iset: IndicatorSet, result: ValidationResult, side: str = "long") -> None:
+    # [FUTURES-READY] side="long" default identik persis dgn sebelumnya.
+    # Short: mirror -- bearish divergence jadi konfirmasi, bullish jadi warning.
     div = iset.momentum.rsi_divergence
     if div is None or div == 0.0:
         return
+    is_long = side != "short"
+    confirming = div > 0 if is_long else div < 0
+    opposing   = div < 0 if is_long else div > 0
 
-    if div > 0:
-        result.add_note(f"✅ RSI bullish divergence terdeteksi ({div:.1f}) — konfirmasi sinyal")
+    if confirming:
+        arah = "bullish" if is_long else "bearish"
+        result.add_note(f"✅ RSI {arah} divergence terdeteksi ({div:.1f}) — konfirmasi sinyal")
         result.confidence_adjustment += 0.05
-    elif div < 0:
+    elif opposing:
+        arah = "bearish" if is_long else "bullish"
+        sinyal = "BUY" if is_long else "SHORT"
         result.add_warning(
-            f"RSI bearish divergence ({div:.1f}) — berlawanan dengan sinyal BUY",
+            f"RSI {arah} divergence ({div:.1f}) — berlawanan dengan sinyal {sinyal}",
             confidence_penalty=0.08,
         )
 
-def _check_macd_divergence(iset: IndicatorSet, result: ValidationResult) -> None:
+def _check_macd_divergence(iset: IndicatorSet, result: ValidationResult, side: str = "long") -> None:
+    # [FUTURES-READY] side="long" default identik persis dgn sebelumnya.
     div = iset.momentum.macd_divergence
     if div is None or div == 0.0:
         return
+    is_long = side != "short"
+    confirming = div > 0 if is_long else div < 0
+    opposing   = div < 0 if is_long else div > 0
 
-    if div > 0:
-        result.add_note(f"✅ MACD bullish divergence ({div:.1f})")
+    if confirming:
+        arah = "bullish" if is_long else "bearish"
+        result.add_note(f"✅ MACD {arah} divergence ({div:.1f})")
         result.confidence_adjustment += 0.03
-    elif div < 0:
+    elif opposing:
+        arah = "bearish" if is_long else "bullish"
         result.add_warning(
-            f"MACD bearish divergence ({div:.1f})",
+            f"MACD {arah} divergence ({div:.1f})",
             confidence_penalty=0.05,
         )
 
 def _check_pattern_type_context(
     iset: IndicatorSet,
     result: ValidationResult,
+    side: str = "long",
 ) -> None:
     """
     [UPGRADE] Aktifkan primary_pattern — field paling informatif di
@@ -120,42 +135,57 @@ def _check_pattern_type_context(
         return
 
     pattern_label = pattern.value.replace("_", " ")
+    # [FUTURES-READY] side="long" default identik persis dgn sebelumnya.
+    # Short: pattern bearish jadi konfirmasi, bullish jadi warning.
+    is_long = side != "short"
+    confirming = is_bullish if is_long else not is_bullish
 
-    if is_bullish:
+    if confirming:
+        arah = "bullish" if is_bullish else "bearish"
         result.add_note(
-            f"✅ Pattern bullish '{pattern_label}' terdeteksi di candle terakhir"
+            f"✅ Pattern {arah} '{pattern_label}' terdeteksi di candle terakhir"
         )
         result.confidence_adjustment += 0.04
     else:
+        arah = "bullish" if is_bullish else "bearish"
+        arah_entry = "long" if is_long else "short"
         result.add_warning(
-            f"Pattern bearish '{pattern_label}' terdeteksi di candle terakhir — "
-            f"melawan arah entry long",
+            f"Pattern {arah} '{pattern_label}' terdeteksi di candle terakhir — "
+            f"melawan arah entry {arah_entry}",
             confidence_penalty=0.06,
         )
 
 def _check_support_resistance_context(
     iset: IndicatorSet,
     result: ValidationResult,
+    side: str = "long",
 ) -> None:
+    # [FUTURES-READY] side="long" default identik persis dgn sebelumnya.
+    # Short: mirror -- dekat resistance jadi favorable (entry short dgn
+    # ekspektasi ditolak turun), dekat support jadi kurang optimal (risiko
+    # bounce naik melawan posisi short).
     context = iset.patterns.pattern_context
+    is_long = side != "short"
+    favorable_context = PatternContext.NEAR_SUPPORT if is_long else PatternContext.NEAR_RESISTANCE
+    unfavorable_context = PatternContext.NEAR_RESISTANCE if is_long else PatternContext.NEAR_SUPPORT
 
-    if context == PatternContext.NEAR_SUPPORT:
-        # [UPGRADE] Aktifkan distance_to_support — sebelumnya idle, padahal
-        # pasangannya (distance_to_resistance) sudah ditampilkan di cabang
-        # NEAR_RESISTANCE. Sekadar info display, tidak mengubah besaran bonus
-        # (sama seperti pola yang dipakai di cabang resistance).
-        dist_to_sup = iset.patterns.distance_to_support
-        dist_str = f"{dist_to_sup:.2f}%" if dist_to_sup else "unknown"
+    if context == favorable_context:
+        dist = (iset.patterns.distance_to_support if is_long
+                else iset.patterns.distance_to_resistance)
+        dist_str = f"{dist:.2f}%" if dist else "unknown"
+        label = "support" if is_long else "resistance"
         result.add_note(
-            f"✅ Harga dekat support ({dist_str}) — risk/reward favorable untuk entry"
+            f"✅ Harga dekat {label} ({dist_str}) — risk/reward favorable untuk entry"
         )
         result.confidence_adjustment += 0.04
 
-    elif context == PatternContext.NEAR_RESISTANCE:
-        dist_to_res = iset.patterns.distance_to_resistance
-        dist_str = f"{dist_to_res:.2f}%" if dist_to_res else "unknown"
+    elif context == unfavorable_context:
+        dist = (iset.patterns.distance_to_resistance if is_long
+                else iset.patterns.distance_to_support)
+        dist_str = f"{dist:.2f}%" if dist else "unknown"
+        label = "resistance" if is_long else "support"
         result.add_warning(
-            f"Harga dekat resistance ({dist_str}) — potensi terhalang, "
+            f"Harga dekat {label} ({dist_str}) — potensi terhalang, "
             f"risk/reward kurang optimal",
             confidence_penalty=0.06,
         )
@@ -169,7 +199,11 @@ def _check_support_resistance_context(
 def _check_higher_tf_alignment(
     observation: ObservationReport,
     result: ValidationResult,
+    side: str = "long",
 ) -> None:
+    # [FUTURES-READY] side="long" default identik persis dgn sebelumnya.
+    # Short: mirror -- conf_score RENDAH (bearish di TF besar) jadi konfirmasi,
+    # conf_score TINGGI (bullish di TF besar) jadi warning berlawanan arah.
     if not observation.confirmation_tf_valid:
         result.add_note(
             "⚠️ Confirmation TF tidak tersedia atau tidak valid — "
@@ -179,17 +213,21 @@ def _check_higher_tf_alignment(
         return
 
     conf_score = observation.confirmation_tf_score
+    is_long = side != "short"
+    confirming = conf_score >= 60.0 if is_long else conf_score <= 40.0
+    opposing   = conf_score <= 40.0 if is_long else conf_score >= 60.0
 
-    if conf_score >= 60.0:
+    if confirming:
         result.add_note(
             f"✅ Higher TF align (conf_score={conf_score:.1f}) — "
             f"sinyal didukung timeframe lebih besar"
         )
         result.confidence_adjustment += 0.06
 
-    elif conf_score <= 40.0:
+    elif opposing:
+        arah = "BEARISH" if is_long else "BULLISH"
         result.add_warning(
-            f"Higher TF BEARISH (conf_score={conf_score:.1f}) — "
+            f"Higher TF {arah} (conf_score={conf_score:.1f}) — "
             f"sinyal berlawanan dengan trend di TF lebih besar",
             confidence_penalty=0.12,
         )
@@ -1676,6 +1714,10 @@ def validate_signal(
     signal: ScoredSignal,
     db_manager=None,
     max_consecutive_losses: int = 3,
+    side: str = "long",
+    # [FUTURES-READY] side="long" default -- semua pemanggil existing yang
+    # tidak eksplisit mengirim side akan tetap dapat "long", behavior
+    # IDENTIK PERSIS dengan sebelum parameter ini ditambahkan.
 ) -> ValidationResult:
     result = ValidationResult()
     observation = signal.observation
@@ -1700,15 +1742,15 @@ def validate_signal(
         profile_cfg = None
         consecutive_max = max_consecutive_losses
 
-    _check_rsi_divergence(iset, result)
+    _check_rsi_divergence(iset, result, side=side)
 
-    _check_macd_divergence(iset, result)
+    _check_macd_divergence(iset, result, side=side)
 
-    _check_support_resistance_context(iset, result)
+    _check_support_resistance_context(iset, result, side=side)
 
-    _check_pattern_type_context(iset, result)
+    _check_pattern_type_context(iset, result, side=side)
 
-    _check_higher_tf_alignment(observation, result)
+    _check_higher_tf_alignment(observation, result, side=side)
 
     _check_volume_climax(iset, result)
 
