@@ -1964,6 +1964,7 @@ def _check_donchian_context(
 def _check_strength_context(
     iset: IndicatorSet,
     result: ValidationResult,
+    side: str = "long",
 ) -> None:
     """[UPGRADE] Aktifkan obv, obv_trend, mfi_divergence yang sebelumnya idle.
 
@@ -1971,23 +1972,36 @@ def _check_strength_context(
     - ADX/DI: sudah dipakai di _check_oscillator_context
     - obv + obv_trend: konfirmasi volume flow searah price action
     - mfi_divergence:  divergence antara MFI dan RSI = early warning reversal
+
+    [FUTURES-READY] side="long" default IDENTIK PERSIS dgn sebelumnya. Short:
+    OBV trend, MFI-RSI divergence, dan DI alignment di-mirror. TIDAK diubah
+    (genuinely netral): ADX (ukur KEKUATAN trend, bukan arah -- trend kuat
+    bagus utk trend-following di arah manapun), volume ratio/spike (konfirmasi
+    momentum berlaku sama utk breakout naik maupun turun).
     """
     st = iset.strength
     if st is None or st.composite_score is None:
         return
+    is_long = side != "short"
 
     # -- OBV trend: apakah volume flow searah price? --
     obv_trend = st.obv_trend
-    if obv_trend == "rising":
+    favorable_obv   = "rising" if is_long else "falling"
+    unfavorable_obv = "falling" if is_long else "rising"
+    if obv_trend == favorable_obv:
+        arah = "uptrend" if is_long else "downtrend"
+        tekanan = "akumulasi" if is_long else "distribusi"
+        tekanan_opp = "distribusi" if is_long else "akumulasi"
         result.add_note(
-            f"✅ OBV rising — volume flow mengonfirmasi uptrend: "
-            f"tekanan akumulasi lebih besar dari distribusi"
+            f"✅ OBV {obv_trend} — volume flow mengonfirmasi {arah}: "
+            f"tekanan {tekanan} lebih besar dari {tekanan_opp}"
         )
         result.confidence_adjustment += 0.04
-    elif obv_trend == "falling":
+    elif obv_trend == unfavorable_obv:
+        tekanan = "distribusi" if is_long else "akumulasi"
         result.add_warning(
-            "OBV falling — volume flow berlawanan dengan price: "
-            "distribusi lebih dominan, potensi weakness tersembunyi",
+            f"OBV {unfavorable_obv} — volume flow berlawanan dengan price: "
+            f"{tekanan} lebih dominan, potensi weakness tersembunyi",
             confidence_penalty=0.06,
         )
 
@@ -2002,18 +2016,24 @@ def _check_strength_context(
     mfi_div = st.mfi_divergence
     if mfi_div is not None and mfi_div != 0.0:
         from engine.constants import RSI_DIVERGENCE_THRESHOLD
-        if mfi_div > RSI_DIVERGENCE_THRESHOLD:
+        confirming_mfi = mfi_div > RSI_DIVERGENCE_THRESHOLD if is_long else mfi_div < -RSI_DIVERGENCE_THRESHOLD
+        opposing_mfi   = mfi_div < -RSI_DIVERGENCE_THRESHOLD if is_long else mfi_div > RSI_DIVERGENCE_THRESHOLD
+        if confirming_mfi:
+            arah = "bullish" if is_long else "bearish"
+            tekanan = "beli" if is_long else "jual"
             result.add_note(
-                f"✅ MFI-RSI divergence bullish ({mfi_div:+.1f}) — "
-                f"money flow (MFI) naik lebih cepat dari RSI: "
-                f"tekanan beli berbasis volume lebih kuat dari momentum harga"
+                f"✅ MFI-RSI divergence {arah} ({mfi_div:+.1f}) — "
+                f"money flow (MFI) bergerak lebih cepat dari RSI: "
+                f"tekanan {tekanan} berbasis volume lebih kuat dari momentum harga"
             )
             result.confidence_adjustment += 0.05
-        elif mfi_div < -RSI_DIVERGENCE_THRESHOLD:
+        elif opposing_mfi:
+            arah = "bearish" if is_long else "bullish"
+            tekanan = "selling" if is_long else "buying"
             result.add_warning(
-                f"MFI-RSI divergence bearish ({mfi_div:+.1f}) — "
-                f"money flow turun lebih cepat dari RSI: "
-                f"volume selling pressure lebih besar dari yang terlihat di harga",
+                f"MFI-RSI divergence {arah} ({mfi_div:+.1f}) — "
+                f"money flow bergerak berlawanan lebih cepat dari RSI: "
+                f"volume {tekanan} pressure lebih besar dari yang terlihat di harga",
                 confidence_penalty=0.06,
             )
 
@@ -2033,18 +2053,26 @@ def _check_strength_context(
             )
             result.confidence_adjustment += 0.03
 
-    # -- DI alignment: +DI > -DI = directional bias bullish --
+    # -- DI alignment: mirror utk short (-DI dominan jadi confirming) --
     if st.plus_di is not None and st.minus_di is not None:
-        if st.plus_di > st.minus_di * 1.5:
+        confirming_di = st.plus_di > st.minus_di * 1.5 if is_long else st.minus_di > st.plus_di * 1.5
+        opposing_di   = st.minus_di > st.plus_di * 1.5 if is_long else st.plus_di > st.minus_di * 1.5
+        if confirming_di:
+            dominant, other = (st.plus_di, st.minus_di) if is_long else (st.minus_di, st.plus_di)
+            dominant_label, other_label = ("DI+", "DI-") if is_long else ("DI-", "DI+")
+            arah = "bullish" if is_long else "bearish"
             result.add_note(
-                f"✅ DI+ ({st.plus_di:.1f}) jauh di atas DI- ({st.minus_di:.1f}) — "
-                f"directional pressure bullish dominan"
+                f"✅ {dominant_label} ({dominant:.1f}) jauh di atas {other_label} ({other:.1f}) — "
+                f"directional pressure {arah} dominan"
             )
             result.confidence_adjustment += 0.03
-        elif st.minus_di > st.plus_di * 1.5:
+        elif opposing_di:
+            dominant, other = (st.minus_di, st.plus_di) if is_long else (st.plus_di, st.minus_di)
+            dominant_label, other_label = ("DI-", "DI+") if is_long else ("DI+", "DI-")
+            arah = "bearish" if is_long else "bullish"
             result.add_warning(
-                f"DI- ({st.minus_di:.1f}) jauh di atas DI+ ({st.plus_di:.1f}) — "
-                f"directional pressure bearish dominan",
+                f"{dominant_label} ({dominant:.1f}) jauh di atas {other_label} ({other:.1f}) — "
+                f"directional pressure {arah} dominan",
                 confidence_penalty=0.05,
             )
 
@@ -2131,7 +2159,7 @@ def validate_signal(
     _check_kc_context(iset, result, side=side)
     _check_macd_context(iset, result, side=side)
     _check_stoch_context(iset, result, side=side)
-    _check_strength_context(iset, result)
+    _check_strength_context(iset, result, side=side)
 
     _check_oscillator_context(iset, result, side=side)
 
