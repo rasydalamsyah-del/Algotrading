@@ -664,6 +664,7 @@ class SignalScorer:
         regime: MarketRegime,
         regime_confidence: float,
         main_loop=None,
+        side: str = "long",
     ) -> Optional[ScoredSignal]:
         return score_signal(
             observation=observation,
@@ -672,4 +673,5 @@ class SignalScorer:
             profile_override=profile,
             db_manager=self._db,
             main_loop=main_loop,
+            side=side,
         )

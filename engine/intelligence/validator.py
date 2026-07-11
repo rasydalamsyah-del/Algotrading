@@ -2223,8 +2223,9 @@ def apply_validation(signal: ScoredSignal, result: ValidationResult) -> ScoredSi
 def validate_and_apply(
     signal: ScoredSignal,
     db_manager=None,
+    side: str = "long",
 ) -> Tuple[ScoredSignal, ValidationResult]:
-    result = validate_signal(signal, db_manager=db_manager)
+    result = validate_signal(signal, db_manager=db_manager, side=side)
     updated_signal = apply_validation(signal, result)
     # [UPGRADE] summarize_validation diintegrasikan ke debug logging agar
     # output validator terlihat di log tanpa perlu caller memanggil manual.

@@ -961,6 +961,11 @@ class VolumetricBreakoutStrategy(BaseStrategy):
         confirmation_df: Optional[pd.DataFrame] = None,
         confirmation_timeframe: Optional[str] = None,
         ob_data: Optional[dict] = None,
+        side: str = "long",
+        # [FUTURES-READY] side="long" default -- IDENTIK PERSIS dgn sebelum
+        # parameter ini ada. Diteruskan ke scorer & validator (keduanya sudah
+        # side-aware sejak perbaikan bias long-only) supaya scoring untuk
+        # kandidat short bisa benar-benar dievaluasi, bukan cuma dari sisi long.
     ) -> Optional["ScoredSignal"]:
         if not self._pipeline_ready:
             log.debug(
@@ -1072,6 +1077,7 @@ class VolumetricBreakoutStrategy(BaseStrategy):
                 regime,
                 regime_confidence,
                 _main_loop,
+                side,
             )
 
             if scored is None:
@@ -1110,6 +1116,7 @@ class VolumetricBreakoutStrategy(BaseStrategy):
                 validate_and_apply,
                 scored,
                 _db,
+                side,
             )
 
             # [TAMBAHAN] Logging pasif sentiment_score untuk pipeline v7.
