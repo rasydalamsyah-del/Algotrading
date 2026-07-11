@@ -852,8 +852,16 @@ def _check_oscillator_context(iset: IndicatorSet, result: ValidationResult, side
         )
 
 
-def _check_structure_context(iset: IndicatorSet, result: ValidationResult) -> None:
-    """Ichimoku, SAR, Pivot, Fibonacci — posisi harga terhadap struktur pasar."""
+def _check_structure_context(iset: IndicatorSet, result: ValidationResult, side: str = "long") -> None:
+    """Ichimoku, SAR, Pivot, Fibonacci — posisi harga terhadap struktur pasar.
+
+    [FUTURES-READY] side="long" default IDENTIK PERSIS dgn sebelumnya. Short:
+    Ichimoku cloud/TK-cross/SAR di-mirror; Pivot & Fibonacci pakai sisi
+    support/resistance berlawanan (mis. long peduli jarak ke resistance
+    utk cek upside, short peduli jarak ke support utk cek downside).
+    Cabang "inside cloud" TIDAK diubah -- pasar ragu/sinyal lemah berlaku
+    sama untuk kedua arah, genuinely netral.
+    """
     st = iset.structure
     if not st.is_valid():
         return
@@ -861,17 +869,26 @@ def _check_structure_context(iset: IndicatorSet, result: ValidationResult) -> No
     price = iset.current_price
     if not price or price <= 0:
         return
+    is_long = side != "short"
 
     # Ichimoku — posisi vs cloud
-    if st.price_vs_cloud == "above":
-        result.add_note("✅ Ichimoku: harga di atas cloud — trend bullish terkonfirmasi")
+    favorable_cloud   = "above" if is_long else "below"
+    unfavorable_cloud = "below" if is_long else "above"
+    if st.price_vs_cloud == favorable_cloud:
+        arah = "bullish" if is_long else "bearish"
+        posisi = "atas" if is_long else "bawah"
+        result.add_note(f"✅ Ichimoku: harga di {posisi} cloud — trend {arah} terkonfirmasi")
         result.confidence_adjustment += 0.04
         if st.cloud_thickness and st.cloud_thickness / price > 0.015:
-            result.add_note("✅ Cloud tebal — support kuat di bawah harga")
+            label = "support" if is_long else "resistance"
+            result.add_note(f"✅ Cloud tebal — {label} kuat di {'bawah' if is_long else 'atas'} harga")
             result.confidence_adjustment += 0.02
-    elif st.price_vs_cloud == "below":
+    elif st.price_vs_cloud == unfavorable_cloud:
+        arah = "bearish" if is_long else "bullish"
+        posisi = "bawah" if is_long else "atas"
+        arah_entry = "long" if is_long else "short"
         result.add_warning(
-            "Ichimoku: harga di bawah cloud — trend bearish, entry long berisiko",
+            f"Ichimoku: harga di {posisi} cloud — trend {arah}, entry {arah_entry} berisiko",
             confidence_penalty=0.08,
         )
     elif st.price_vs_cloud == "inside":
@@ -880,57 +897,70 @@ def _check_structure_context(iset: IndicatorSet, result: ValidationResult) -> No
             confidence_penalty=0.04,
         )
 
-    if st.tk_cross == "bullish":
-        result.add_note("✅ Ichimoku TK Cross bullish — momentum entry terkonfirmasi")
+    confirming_tk = "bullish" if is_long else "bearish"
+    opposing_tk   = "bearish" if is_long else "bullish"
+    if st.tk_cross == confirming_tk:
+        result.add_note(f"✅ Ichimoku TK Cross {confirming_tk} — momentum entry terkonfirmasi")
         result.confidence_adjustment += 0.03
-    elif st.tk_cross == "bearish":
+    elif st.tk_cross == opposing_tk:
         result.add_warning(
-            "Ichimoku TK Cross bearish — momentum berbalik",
+            f"Ichimoku TK Cross {opposing_tk} — momentum berbalik",
             confidence_penalty=0.06,
         )
 
     # Parabolic SAR
-    if st.sar_direction == "up":
-        result.add_note(f"✅ SAR uptrend (${st.sar_value:.6f}) — trailing support aktif")
+    favorable_sar   = "up" if is_long else "down"
+    unfavorable_sar = "down" if is_long else "up"
+    if st.sar_direction == favorable_sar:
+        label = "uptrend" if is_long else "downtrend"
+        result.add_note(f"✅ SAR {label} (${st.sar_value:.6f}) — trailing support/resistance aktif")
         result.confidence_adjustment += 0.02
-    elif st.sar_direction == "down":
+    elif st.sar_direction == unfavorable_sar:
+        label = "downtrend" if is_long else "uptrend"
+        posisi = "bawah" if is_long else "atas"
+        arah_entry = "long" if is_long else "short"
         result.add_warning(
-            f"SAR downtrend (${st.sar_value:.6f}) — harga di bawah SAR, hindari entry long",
+            f"SAR {label} (${st.sar_value:.6f}) — harga di {posisi} SAR, hindari entry {arah_entry}",
             confidence_penalty=0.07,
         )
 
-    # Pivot Points — posisi vs nearest resistance
-    if st.nearest_resistance and price > 0:
-        dist_res_pct = (st.nearest_resistance - price) / price * 100
-        if dist_res_pct < 1.0:
+    # Pivot Points — long peduli jarak ke resistance (upside), short peduli jarak ke support (downside)
+    barrier_level = st.nearest_resistance if is_long else st.nearest_support
+    barrier_label = "resistance" if is_long else "support"
+    ruang_label   = "upside" if is_long else "downside"
+    if barrier_level and price > 0:
+        dist_pct = abs(barrier_level - price) / price * 100
+        if dist_pct < 1.0:
             result.add_warning(
-                f"Pivot: harga hanya {dist_res_pct:.2f}% dari resistance "
-                f"(${st.nearest_resistance:.6f}) — upside sangat terbatas",
+                f"Pivot: harga hanya {dist_pct:.2f}% dari {barrier_label} "
+                f"(${barrier_level:.6f}) — {ruang_label} sangat terbatas",
                 confidence_penalty=0.08,
             )
-        elif dist_res_pct < 2.0:
+        elif dist_pct < 2.0:
             result.add_warning(
-                f"Pivot: resistance dekat ({dist_res_pct:.2f}%) — "
+                f"Pivot: {barrier_label} dekat ({dist_pct:.2f}%) — "
                 f"perhatikan R/R",
                 confidence_penalty=0.03,
             )
-        elif dist_res_pct > 4.0:
+        elif dist_pct > 4.0:
             result.add_note(
-                f"✅ Pivot: ruang gerak {dist_res_pct:.2f}% sebelum resistance — "
+                f"✅ Pivot: ruang gerak {dist_pct:.2f}% sebelum {barrier_label} — "
                 f"R/R favorable"
             )
             result.confidence_adjustment += 0.02
 
-    if st.nearest_support and price > 0:
-        dist_sup_pct = (price - st.nearest_support) / price * 100
-        if dist_sup_pct < 1.5:
+    entry_zone_level = st.nearest_support if is_long else st.nearest_resistance
+    entry_zone_label = "support" if is_long else "resistance"
+    if entry_zone_level and price > 0:
+        dist_zone_pct = abs(price - entry_zone_level) / price * 100
+        if dist_zone_pct < 1.5:
             result.add_note(
-                f"✅ Pivot: harga dekat support (${st.nearest_support:.6f}, "
-                f"{dist_sup_pct:.2f}%) — zona entry ideal"
+                f"✅ Pivot: harga dekat {entry_zone_label} (${entry_zone_level:.6f}, "
+                f"{dist_zone_pct:.2f}%) — zona entry ideal"
             )
             result.confidence_adjustment += 0.03
 
-    # Fibonacci — level kunci
+    # Fibonacci 61.8% — level kunci, netral (berfungsi sbg support/resistance di kedua arah)
     if st.fib_618 and price > 0:
         dist_fib_pct = abs(price - st.fib_618) / price * 100
         if dist_fib_pct < 0.8:
@@ -940,12 +970,17 @@ def _check_structure_context(iset: IndicatorSet, result: ValidationResult) -> No
             )
             result.confidence_adjustment += 0.04
 
-    if st.nearest_fib_resistance and price > 0:
-        dist_fib_res = (st.nearest_fib_resistance - price) / price * 100
-        if dist_fib_res < 1.5:
+    # Fibonacci barrier -- long pakai fib resistance (batasi upside),
+    # short pakai fib support (batasi downside)
+    fib_barrier = st.nearest_fib_resistance if is_long else st.nearest_fib_support
+    fib_barrier_label = "resistance" if is_long else "support"
+    fib_ruang_label = "upside" if is_long else "downside"
+    if fib_barrier and price > 0:
+        dist_fib_barrier = abs(fib_barrier - price) / price * 100
+        if dist_fib_barrier < 1.5:
             result.add_warning(
-                f"Fibonacci: resistance Fib dekat ({dist_fib_res:.2f}%) — "
-                f"upside terbatas",
+                f"Fibonacci: {fib_barrier_label} Fib dekat ({dist_fib_barrier:.2f}%) — "
+                f"{fib_ruang_label} terbatas",
                 confidence_penalty=0.04,
             )
 
