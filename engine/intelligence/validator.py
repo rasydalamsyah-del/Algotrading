@@ -985,7 +985,7 @@ def _check_structure_context(iset: IndicatorSet, result: ValidationResult, side:
             )
 
 
-def _check_orderbook_context(iset: IndicatorSet, result: ValidationResult) -> None:
+def _check_orderbook_context(iset: IndicatorSet, result: ValidationResult, side: str = "long") -> None:
     """[UPGRADE] Semua 22 field OrderbookIndicators kini aktif.
 
     Sebelumnya hanya 6 field terpakai. Sekarang:
@@ -998,99 +998,138 @@ def _check_orderbook_context(iset: IndicatorSet, result: ValidationResult) -> No
     - absorption_score     → sub-skor absorption event
     - liquidity_score      → total depth USDT → apakah cukup likuid untuk entry?
     - spoofing_confidence  → berapa % wall yang kemungkinan genuine (bukan spoof)
+
+    [FUTURES-READY] side="long" default IDENTIK PERSIS dgn sebelumnya. Short:
+    imbalance/whale wall/cluster wall/absorption di-mirror (ask<->bid tertukar
+    makna favorable/unfavorable), whale_score threshold di-mirror. TIDAK
+    diubah (genuinely netral, soal kualitas eksekusi bukan arah): spoofing_confidence,
+    liquidity_score, spread_score.
     """
     ob = iset.orderbook
     if not ob.is_valid():
         return
 
     price = iset.current_price
+    is_long = side != "short"
 
     # ── Imbalance ─────────────────────────────────────────────────────────────
     imb = ob.bid_ask_imbalance
     if imb is not None:
-        if imb >= 0.65:
+        favorable_imb = imb >= 0.65 if is_long else imb <= 0.35
+        unfavorable_imb = imb <= 0.35 if is_long else imb >= 0.65
+        if favorable_imb:
+            side_label = "bid" if is_long else "ask"
+            tekanan = "beli" if is_long else "jual"
             result.add_note(
-                f"✅ Orderbook: bid dominan ({imb:.2f}, score={ob.imbalance_score:.0f}) — "
-                f"tekanan beli kuat, mendukung entry"
+                f"✅ Orderbook: {side_label} dominan ({imb:.2f}, score={ob.imbalance_score:.0f}) — "
+                f"tekanan {tekanan} kuat, mendukung entry"
             )
             result.confidence_adjustment += 0.04
-        elif imb <= 0.35:
+        elif unfavorable_imb:
+            side_label = "ask" if is_long else "bid"
+            tekanan = "jual" if is_long else "beli"
+            arah_entry = "long" if is_long else "short"
             result.add_warning(
-                f"Orderbook: ask dominan ({imb:.2f}, score={ob.imbalance_score:.0f}) — "
-                f"tekanan jual kuat, hati-hati entry long",
+                f"Orderbook: {side_label} dominan ({imb:.2f}, score={ob.imbalance_score:.0f}) — "
+                f"tekanan {tekanan} kuat, hati-hati entry {arah_entry}",
                 confidence_penalty=0.08,
             )
-        elif imb >= 0.55:
-            result.add_note(f"📊 Orderbook: sedikit condong bid ({imb:.2f})")
+        elif (imb >= 0.55) if is_long else (imb <= 0.45):
+            side_label = "bid" if is_long else "ask"
+            result.add_note(f"📊 Orderbook: sedikit condong {side_label} ({imb:.2f})")
 
-    # ── Whale walls (single level) ────────────────────────────────────────────
-    if ob.whale_ask_wall and ob.ask_wall_strength:
-        dist_adj = ob.ask_wall_dist if ob.ask_wall_dist is not None else 1.0
-        eff_str  = ob.ask_wall_strength * dist_adj
+    # ── Whale walls (single level): utk long, ask wall=resistance(bad),
+    # bid wall=support(good). Utk short, MIRROR: ask wall=favorable (potensi
+    # rejection turun), bid wall=unfavorable (potensi rejection naik) ──────────
+    favorable_wall_price   = ob.whale_bid_wall if is_long else ob.whale_ask_wall
+    favorable_wall_strength = ob.bid_wall_strength if is_long else ob.ask_wall_strength
+    favorable_wall_dist     = ob.bid_wall_dist if is_long else ob.ask_wall_dist
+    unfavorable_wall_price    = ob.whale_ask_wall if is_long else ob.whale_bid_wall
+    unfavorable_wall_strength = ob.ask_wall_strength if is_long else ob.bid_wall_strength
+    unfavorable_wall_dist     = ob.ask_wall_dist if is_long else ob.bid_wall_dist
+
+    if unfavorable_wall_price and unfavorable_wall_strength:
+        dist_adj = unfavorable_wall_dist if unfavorable_wall_dist is not None else 1.0
+        eff_str  = unfavorable_wall_strength * dist_adj
+        label = "ask" if is_long else "bid"
         result.add_warning(
-            f"Whale ask wall di ${ob.whale_ask_wall:.6f} "
-            f"({ob.ask_wall_strength:.1f}% vol, relevance={dist_adj:.2f}, eff={eff_str:.1f}) — "
-            f"resistance dari whale{' (dekat harga, sangat relevan)' if dist_adj > 0.7 else ' (jauh, pengaruh kecil)'}",
+            f"Whale {label} wall di ${unfavorable_wall_price:.6f} "
+            f"({unfavorable_wall_strength:.1f}% vol, relevance={dist_adj:.2f}, eff={eff_str:.1f}) — "
+            f"resistance/support dari whale{' (dekat harga, sangat relevan)' if dist_adj > 0.7 else ' (jauh, pengaruh kecil)'}",
             confidence_penalty=0.06 * dist_adj,
         )
 
-    if ob.whale_bid_wall and ob.bid_wall_strength:
-        dist_adj = ob.bid_wall_dist if ob.bid_wall_dist is not None else 1.0
+    if favorable_wall_price and favorable_wall_strength:
+        dist_adj = favorable_wall_dist if favorable_wall_dist is not None else 1.0
+        label = "bid" if is_long else "ask"
         result.add_note(
-            f"✅ Whale bid wall di ${ob.whale_bid_wall:.6f} "
-            f"({ob.bid_wall_strength:.1f}% vol, relevance={dist_adj:.2f}) — "
-            f"support kuat dari whale"
+            f"✅ Whale {label} wall di ${favorable_wall_price:.6f} "
+            f"({favorable_wall_strength:.1f}% vol, relevance={dist_adj:.2f}) — "
+            f"support/resistance kuat dari whale searah posisi"
         )
         result.confidence_adjustment += 0.03 * dist_adj
 
     # ── Cluster walls (MSL-3): lebih reliable dari single wall ────────────────
-    if ob.cluster_bid_wall and ob.cluster_bid_str:
-        # Cluster berbeda dari whale wall = double support layer
-        is_different = (ob.cluster_bid_wall != ob.whale_bid_wall)
-        dist_adj = ob.bid_wall_dist if ob.bid_wall_dist is not None else 1.0
+    favorable_cluster_wall = ob.cluster_bid_wall if is_long else ob.cluster_ask_wall
+    favorable_cluster_str  = ob.cluster_bid_str if is_long else ob.cluster_ask_str
+    favorable_whale_ref    = ob.whale_bid_wall if is_long else ob.whale_ask_wall
+    if favorable_cluster_wall and favorable_cluster_str:
+        is_different = (favorable_cluster_wall != favorable_whale_ref)
+        dist_adj = favorable_wall_dist if favorable_wall_dist is not None else 1.0
+        label = "bid" if is_long else "ask"
         if is_different:
             result.add_note(
-                f"✅ Cluster bid wall di ${ob.cluster_bid_wall:.6f} "
-                f"({ob.cluster_bid_str:.1f}% vol) — "
-                f"support berlapis: whale + cluster di level berbeda"
+                f"✅ Cluster {label} wall di ${favorable_cluster_wall:.6f} "
+                f"({favorable_cluster_str:.1f}% vol) — "
+                f"support/resistance berlapis: whale + cluster di level berbeda"
             )
             result.confidence_adjustment += 0.03 * dist_adj
         else:
             result.add_note(
-                f"✅ Bid wall dikonfirmasi cluster ({ob.cluster_bid_str:.1f}% vol) — "
+                f"✅ {label.capitalize()} wall dikonfirmasi cluster ({favorable_cluster_str:.1f}% vol) — "
                 f"wall lebih genuine, bukan single order"
             )
             result.confidence_adjustment += 0.02
 
-    if ob.cluster_ask_wall and ob.cluster_ask_str:
-        is_different = (ob.cluster_ask_wall != ob.whale_ask_wall)
-        dist_adj = ob.ask_wall_dist if ob.ask_wall_dist is not None else 1.0
+    unfavorable_cluster_wall = ob.cluster_ask_wall if is_long else ob.cluster_bid_wall
+    unfavorable_cluster_str  = ob.cluster_ask_str if is_long else ob.cluster_bid_str
+    unfavorable_whale_ref    = ob.whale_ask_wall if is_long else ob.whale_bid_wall
+    if unfavorable_cluster_wall and unfavorable_cluster_str:
+        is_different = (unfavorable_cluster_wall != unfavorable_whale_ref)
+        dist_adj = unfavorable_wall_dist if unfavorable_wall_dist is not None else 1.0
+        label = "ask" if is_long else "bid"
         if is_different:
             result.add_warning(
-                f"Cluster ask wall di ${ob.cluster_ask_wall:.6f} "
-                f"({ob.cluster_ask_str:.1f}% vol) — "
-                f"resistance berlapis: whale + cluster",
+                f"Cluster {label} wall di ${unfavorable_cluster_wall:.6f} "
+                f"({unfavorable_cluster_str:.1f}% vol) — "
+                f"resistance/support berlapis: whale + cluster",
                 confidence_penalty=0.04 * dist_adj,
             )
 
-    # ── Absorption ────────────────────────────────────────────────────────────
-    if ob.absorbed_ask:
+    # ── Absorption: long favorable=absorbed_ask(breakout up), short
+    # favorable=absorbed_bid(breakdown down) ──────────────────────────────────
+    favorable_absorbed   = ob.absorbed_ask if is_long else ob.absorbed_bid
+    unfavorable_absorbed = ob.absorbed_bid if is_long else ob.absorbed_ask
+    if favorable_absorbed:
+        label = "ASK" if is_long else "BID"
+        arah = "breakout" if is_long else "breakdown"
         result.add_note(
-            "🚀 Orderbook: whale ASK wall terserap — "
-            f"breakout signal kuat (absorption_score={ob.absorption_score:.0f})"
+            f"🚀 Orderbook: whale {label} wall terserap — "
+            f"{arah} signal kuat (absorption_score={ob.absorption_score:.0f})"
         )
         result.confidence_adjustment += 0.06
 
-    if ob.absorbed_bid:
-        # [UPGRADE] absorbed_bid sebelumnya tidak dipakai — ini BEARISH signal
+    if unfavorable_absorbed:
+        label = "BID" if is_long else "ASK"
+        tekanan = "jual" if is_long else "beli"
         result.add_warning(
-            "⚠️ Orderbook: whale BID wall terserap — "
-            f"breakdown signal: support dari whale gagal menahan tekanan jual "
+            f"⚠️ Orderbook: whale {label} wall terserap — "
+            f"signal berlawanan arah: level whale gagal menahan tekanan {tekanan} "
             f"(absorption_score={ob.absorption_score:.0f})",
             confidence_penalty=0.07,
         )
 
-    # ── Spoofing confidence ───────────────────────────────────────────────────
+    # ── Spoofing confidence (netral, soal kualitas data bukan arah) ──────────
     sc = ob.spoofing_confidence
     if sc is not None and sc < 0.7:
         result.add_warning(
@@ -1105,7 +1144,7 @@ def _check_orderbook_context(iset: IndicatorSet, result: ValidationResult) -> No
         )
         result.confidence_adjustment += 0.02
 
-    # ── Liquidity score ───────────────────────────────────────────────────────
+    # ── Liquidity score (netral, soal kualitas eksekusi bukan arah) ──────────
     liq = ob.liquidity_score
     if liq is not None:
         if liq < 35:
@@ -1121,7 +1160,7 @@ def _check_orderbook_context(iset: IndicatorSet, result: ValidationResult) -> No
             )
             result.confidence_adjustment += 0.02
 
-    # ── Spread score (kontekstual vs baseline historis coin) ─────────────────
+    # ── Spread score (netral, kontekstual vs baseline historis coin) ─────────
     ssp = ob.spread_score
     if ssp is not None and ssp <= 40:
         result.add_warning(
@@ -1136,19 +1175,23 @@ def _check_orderbook_context(iset: IndicatorSet, result: ValidationResult) -> No
             f"spread dalam range historis coin ini"
         )
 
-    # ── Whale score composite ─────────────────────────────────────────────────
+    # ── Whale score composite: mirror threshold di sekitar titik tengah ──────
     ws = ob.whale_score
     if ws is not None:
-        if ws >= 65:
+        favorable_ws = ws >= 65 if is_long else ws <= 35
+        unfavorable_ws = ws <= 35 if is_long else ws >= 65
+        if favorable_ws:
+            arah = "bullish" if is_long else "bearish"
             result.add_note(
                 f"✅ Whale score {ws:.0f} — "
-                f"aktivitas whale net bullish, mendukung entry"
+                f"aktivitas whale net {arah}, mendukung entry"
             )
             result.confidence_adjustment += 0.02
-        elif ws <= 35:
+        elif unfavorable_ws:
+            arah = "bearish" if is_long else "bullish"
             result.add_warning(
                 f"Whale score {ws:.0f} — "
-                f"aktivitas whale net bearish",
+                f"aktivitas whale net {arah}",
                 confidence_penalty=0.04,
             )
 
@@ -2103,7 +2146,7 @@ def validate_signal(
     _check_fib_detail_context(iset, result, side=side)
     _check_donchian_context(iset, result, side=side)
 
-    _check_orderbook_context(iset, result)
+    _check_orderbook_context(iset, result, side=side)
 
     _check_consecutive_losses(
         symbol=signal.symbol,
