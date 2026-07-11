@@ -16,12 +16,22 @@ from typing import Optional, Callable, Dict, Any, List, Tuple
 import ccxt.pro as ccxt
 from asyncio_throttle import Throttler
 
+from engine.exchange_base import BaseExchangeConnector
+
 log = logging.getLogger("exchange")
 
 def _utcnow() -> datetime:
     return datetime.now(timezone.utc).replace(tzinfo=None)
 
-class ExchangeConnector:
+class ExchangeConnector(BaseExchangeConnector):
+    """
+    Spot-specific ExchangeConnector -- extend BaseExchangeConnector (engine/
+    exchange_base.py) yang menangani semua bagian generik (connect, precision
+    helpers, fetch_ohlcv/ticker/orderbook, create_order dispatcher, cancel_order,
+    fetch_order, retry logic). Di sini cuma tersisa yang benar-benar spot-specific:
+    fetch_balance() (saldo virtual 1 currency) dan _simulate_order_fill()
+    (update _paper_balance langsung, tanpa leverage/margin).
+    """
     def __init__(
         self,
         exchange_id:         str,
@@ -35,61 +45,38 @@ class ExchangeConnector:
         initial_capital:     float = 1000.0,
         quote_currency:      str   = "USDT",
     ):
-        self.exchange_id   = exchange_id
-        self.testnet       = testnet
-        self.db            = db
-        # [FITUR BARU -- PAPER TRADING MODE, 2026-07-10] Kalau True: data pasar
-        # (ticker/orderbook/candle/fee) TETAP 100% ASLI dari exchange (dibaca
-        # normal, tidak disentuh sama sekali) -- TAPI create_order()/cancel_order()
-        # TIDAK PERNAH benar-benar dikirim ke exchange. Order disimulasikan pakai
-        # harga pasar RIIL saat itu (dari fetch_ticker asli), diberi ID unik
-        # berawalan "PAPER-" supaya jelas terlihat di log/DB, dan disimpan
-        # in-memory (self._paper_orders) supaya fetch_order() bisa
-        # mengembalikan status yang konsisten. TIDAK ADA jalur di sini yang bisa
-        # membuat create_order/cancel_order asli terpanggil ketika paper_trading
-        # True -- lihat create_order()/cancel_order() di bawah, keduanya
-        # return LEBIH AWAL (early return) sebelum baris manapun yang menyentuh
-        # self._ex.create_order/self._ex.cancel_order.
+        super().__init__(
+            exchange_id=exchange_id,
+            api_key=api_key,
+            api_secret=api_secret,
+            default_type="spot",
+            api_passphrase=api_passphrase,
+            testnet=testnet,
+            requests_per_second=requests_per_second,
+            db=db,
+        )
+        # [FITUR -- PAPER TRADING MODE] Kalau True: data pasar (ticker/
+        # orderbook/candle/fee) TETAP 100% ASLI dari exchange (dibaca normal,
+        # tidak disentuh sama sekali) -- TAPI create_order()/cancel_order()
+        # TIDAK PERNAH benar-benar dikirim ke exchange. Order disimulasikan
+        # pakai harga pasar RIIL saat itu (dari fetch_ticker asli), diberi ID
+        # unik berawalan "PAPER-". Tidak ada jalur di sini yang bisa membuat
+        # create_order/cancel_order asli terpanggil ketika paper_trading True
+        # -- lihat _simulate_order_fill(), yang dipanggil via create_order()
+        # dispatcher di base class SEBELUM baris manapun yang menyentuh
+        # self._ex.create_order.
         self.paper_trading    = paper_trading
         self._paper_orders: Dict[str, Dict] = {}
         # [PAPER TRADING] Saldo virtual TERISOLASI dari saldo real exchange.
         # Diinisialisasi HANYA dari INITIAL_CAPITAL, bukan pernah dibaca dari
-        # akun asli. fetch_balance() akan mengembalikan dict ini (bukan
-        # query ke exchange) selama paper_trading=True -- lihat fetch_balance().
+        # akun asli. fetch_balance() akan mengembalikan dict ini (bukan query
+        # ke exchange) selama paper_trading=True.
         self._paper_quote_ccy = quote_currency
         self._paper_balance: Dict[str, float] = {quote_currency: float(initial_capital)}
-        self._throttler  = Throttler(
-            rate_limit=int(requests_per_second), period=1.0
-        )
-
-        cls = getattr(ccxt, exchange_id)
-        exchange_config = {
-            "apiKey":          api_key,
-            "secret":          api_secret,
-            "enableRateLimit": True,
-            "timeout": 30000,
-            "options": {
-                "defaultType": "spot",
-                "adjustForTimeDifference": True,
-                "recvWindow": 10000,
-            },
-        }
-        if api_passphrase:
-            exchange_config["password"] = api_passphrase
-        self._ex: ccxt.Exchange = cls(exchange_config)
-
-        if testnet:
-            if hasattr(self._ex, "set_sandbox_mode"):
-                self._ex.set_sandbox_mode(True)
-                log.warning("TESTNET MODE — no real funds at risk.")
-            else:
-                log.warning(
-                    "Exchange %s has no sandbox mode.", exchange_id
-                )
 
         if self.paper_trading:
             log.warning(
-                "📝 PAPER TRADING MODE AKTIF — data pasar 100%% ASLI (harga/"
+                "📝 PAPER TRADING MODE AKTIF (SPOT) — data pasar 100%% ASLI (harga/"
                 "orderbook/fee dari exchange sungguhan), TAPI order TIDAK "
                 "PERNAH benar-benar dikirim ke exchange. Semua order "
                 "disimulasikan pakai harga pasar riil saat itu. "
@@ -101,129 +88,6 @@ class ExchangeConnector:
                 "membaca saldo asli selama mode ini aktif.",
                 self._paper_balance[quote_currency], quote_currency,
             )
-
-        self.is_connected: bool       = False
-        self._markets: Dict[str, Any] = {}
-
-    async def connect(self) -> bool:
-        try:
-            # Sync local drift against exchange server clock to avoid
-            # InvalidNonce (-1021) on signed endpoints.
-            await self._ex.load_time_difference()
-            self._markets = await self._ex.load_markets()
-            # Balance requires API credentials; allow "public-only" connect
-            # (useful for smoke tests / indicator pipelines).
-            if getattr(self._ex, "apiKey", None) and getattr(self._ex, "secret", None):
-                await self._ex.fetch_balance()
-            self.is_connected = True
-            log.info(
-                "Connected to %s (%s) | %d markets loaded",
-                self.exchange_id.upper(),
-                "TESTNET" if self.testnet else "LIVE",
-                len(self._markets),
-            )
-            return True
-        except ccxt.AuthenticationError as e:
-            log.critical(
-                "Authentication FAILED for %s: %s", self.exchange_id, e
-            )
-            return False
-        except Exception as e:
-            log.critical("Connection error: %r", e, exc_info=True)
-            return False
-
-    async def disconnect(self) -> None:
-        await self._ex.close()
-        self.is_connected = False
-        log.info("Exchange connection closed.")
-
-    def get_market_info(self, symbol: str) -> Dict:
-        market = self._markets.get(symbol, {})
-        prec   = market.get("precision", {})
-        limits = market.get("limits", {})
-        return {
-            "symbol":           symbol,
-            "base":             market.get("base", ""),
-            "quote":            market.get("quote", ""),
-            "active":           market.get("active", True),
-            "precision_price":  prec.get("price"),
-            "precision_amount": prec.get("amount"),
-            "min_amount":       limits.get("amount", {}).get("min", 0),
-            "max_amount":       limits.get("amount", {}).get("max"),
-            "min_cost":         limits.get("cost", {}).get("min", 0),
-            "taker_fee":        market.get("taker", 0.001),
-            "maker_fee":        market.get("maker", 0.001),
-        }
-
-    def amount_to_precision(self, symbol: str, amount: float) -> float:
-        try:
-            return float(self._ex.amount_to_precision(symbol, amount))
-        except Exception:
-            return round(amount, 8)
-
-    def price_to_precision(self, symbol: str, price: float) -> float:
-        try:
-            return float(self._ex.price_to_precision(symbol, price))
-        except Exception:
-            return round(price, 8)
-
-    def get_taker_fee(self, symbol: str) -> float:
-        return self._markets.get(symbol, {}).get("taker", 0.001)
-
-    def get_maker_fee(self, symbol: str) -> float:
-        return self._markets.get(symbol, {}).get("maker", 0.001)
-
-    def get_min_order_cost(self, symbol: str) -> float:
-        return (
-            self._markets.get(symbol, {})
-            .get("limits", {})
-            .get("cost", {})
-            .get("min", 1.0)
-        )
-
-    def parse_balance(self, balance: dict, currency: str) -> tuple:
-        """Return (free, used, total) safely — handles Bybit/OKX None fields."""
-        def _f(section):
-            v = (balance.get(section) or {}).get(currency)
-            return float(v) if v is not None else 0.0
-        free  = _f("free")
-        used  = _f("used")
-        total = _f("total") or (free + used)
-        return free, used, total
-
-    async def fetch_ohlcv(
-        self,
-        symbol:    str,
-        timeframe: str = "15m",
-        limit:     int = 200,
-        since:     Optional[int] = None,
-    ) -> List[List]:
-        t0 = time.monotonic()
-        async with self._throttler:
-            result = await self._retry(
-                self._ex.fetch_ohlcv, symbol, timeframe, since, limit,
-                _ep="ohlcv",
-            )
-        await self._log_lat("fetch_ohlcv", t0)
-        return result or []
-
-    async def fetch_ticker(self, symbol: str) -> Dict:
-        t0 = time.monotonic()
-        async with self._throttler:
-            result = await self._retry(
-                self._ex.fetch_ticker, symbol, _ep="ticker"
-            )
-        await self._log_lat("fetch_ticker", t0)
-        return result or {}
-
-    async def fetch_order_book(self, symbol: str, limit: int = 20) -> Dict:
-        t0 = time.monotonic()
-        async with self._throttler:
-            result = await self._retry(
-                self._ex.fetch_order_book, symbol, limit, _ep="order_book"
-            )
-        await self._log_lat("fetch_order_book", t0)
-        return result or {}
 
     async def fetch_balance(self) -> Dict:
         # [PAPER TRADING] JANGAN PERNAH query exchange asli untuk saldo --
@@ -245,56 +109,6 @@ class ExchangeConnector:
                 self._ex.fetch_balance, _ep="balance"
             )
         await self._log_lat("fetch_balance", t0)
-        return result or {}
-
-    async def fetch_open_orders(
-        self, symbol: Optional[str] = None
-    ) -> List[Dict]:
-        t0 = time.monotonic()
-        async with self._throttler:
-            result = await self._retry(
-                self._ex.fetch_open_orders, symbol, _ep="open_orders"
-            )
-        await self._log_lat("fetch_open_orders", t0)
-        return result or []
-
-    async def create_order(
-        self,
-        symbol:     str,
-        order_type: str,
-        side:       str,
-        amount:     float,
-        price:      Optional[float] = None,
-        params:     Dict            = None,
-    ) -> Dict:
-        params = params or {}
-        amount = self.amount_to_precision(symbol, amount)
-        if price is not None:
-            price = self.price_to_precision(symbol, price)
-
-        # [PAPER TRADING] Early return SEBELUM baris manapun yang menyentuh
-        # self._ex.create_order -- order TIDAK PERNAH mencapai exchange asli
-        # kalau paper_trading=True. Ini SATU-SATUNYA percabangan yang
-        # mengontrol perilaku ini di seluruh fungsi (mudah diverifikasi/
-        # diaudit -- tidak ada logika lanjutan setelah blok if ini yang bisa
-        # "lolos" ke exchange asli).
-        if self.paper_trading:
-            return await self._simulate_order_fill(
-                symbol, order_type, side, amount, price,
-            )
-
-        t0 = time.monotonic()
-        async with self._throttler:
-            log.info(
-                "SUBMIT ORDER: %s %s %s | amount=%.8f price=%s",
-                symbol, side.upper(), order_type, amount, price,
-            )
-            result = await self._retry(
-                self._ex.create_order,
-                symbol, order_type, side, amount, price, params,
-                _ep="create_order",
-            )
-        await self._log_lat("create_order", t0)
         return result or {}
 
     async def _simulate_order_fill(
@@ -383,118 +197,6 @@ class ExchangeConnector:
         )
         return dict(order)
 
-    async def cancel_order(self, order_id: str, symbol: str) -> Dict:
-        if self.paper_trading or str(order_id).startswith("PAPER-"):
-            existing = self._paper_orders.get(order_id)
-            if existing is not None:
-                existing = dict(existing)
-                existing["status"] = "canceled"
-                self._paper_orders[order_id] = existing
-                log.warning("📝 [PAPER ORDER] cancel disimulasikan: %s", order_id)
-                return existing
-            return {"id": order_id, "status": "canceled", "info": {"paper_trading": True}}
-
-        t0 = time.monotonic()
-        async with self._throttler:
-            result = await self._retry(
-                self._ex.cancel_order, order_id, symbol, _ep="cancel_order"
-            )
-        await self._log_lat("cancel_order", t0)
-        return result or {}
-
-    async def fetch_order(self, order_id: str, symbol: str) -> Dict:
-        # [PAPER TRADING] Order simulasi tidak pernah ada di exchange asli --
-        # kalau order_id ini hasil simulasi kita (awalan "PAPER-" atau memang
-        # tercatat di self._paper_orders), jawab dari catatan in-memory kita
-        # sendiri, JANGAN pernah query exchange asli utk order_id yang jelas
-        # tidak akan pernah ditemukan di sana.
-        if str(order_id).startswith("PAPER-") or order_id in self._paper_orders:
-            existing = self._paper_orders.get(order_id)
-            if existing is not None:
-                return dict(existing)
-            # Order simulasi yang entah kenapa tidak tercatat (seharusnya
-            # tidak pernah terjadi) -- jangan pernah lanjut ke exchange asli.
-            log.error(
-                "📝 [PAPER ORDER] fetch_order utk id=%s tidak ditemukan di "
-                "catatan simulasi -- mengembalikan status unknown, BUKAN "
-                "query ke exchange asli.", order_id,
-            )
-            return {"id": order_id, "status": "unknown", "info": {"paper_trading": True}}
-
-        t0 = time.monotonic()
-        async with self._throttler:
-            result = await self._retry(
-                self._ex.fetch_order, order_id, symbol, _ep="fetch_order"
-            )
-        await self._log_lat("fetch_order", t0)
-        return result or {}
-
-    async def _log_lat(
-        self, endpoint: str, t0: float, success: bool = True
-    ) -> None:
-        if self.db:
-            try:
-                await self.db.save_api_metric(
-                    endpoint=endpoint,
-                    latency_ms=(time.monotonic() - t0) * 1000,
-                    success=success,
-                )
-            except Exception:
-                pass
-
-    async def _retry(
-        self,
-        fn:       Callable,
-        *args,
-        retries:  int   = 3,
-        delay:    float = 1.5,
-        _ep:      str   = "?",
-        **kwargs,
-    ) -> Any:
-        clean_kw   = {k: v for k, v in kwargs.items() if not k.startswith("_")}
-        # [BUG-FIX] raise None kalau retries<=0.
-        # Sebelumnya: last_exc diinisialisasi None, dan kalau `retries` <= 0,
-        # loop `for attempt in range(1, retries+1)` tidak pernah jalan sama
-        # sekali, jadi `raise last_exc` di akhir fungsi me-raise None →
-        # "TypeError: exceptions must derive from BaseException", menutupi
-        # error aslinya. Tidak ada caller saat ini yang pakai retries=0, tapi
-        # signature mengizinkannya jadi tetap dijaga.
-        # Sekarang: fallback ke RuntimeError yang jelas kalau itu terjadi.
-        last_exc: Exception = RuntimeError(
-            f"_retry({_ep}): retries={retries} — tidak ada percobaan dijalankan"
-        )
-        for attempt in range(1, retries + 1):
-            try:
-                return await fn(*args, **clean_kw)
-            except ccxt.RateLimitExceeded as e:
-                wait = delay * (2 ** attempt)
-                log.warning(
-                    "Rate limit [%s] attempt %d/%d — wait %.1fs",
-                    _ep, attempt, retries, wait,
-                )
-                await asyncio.sleep(wait)
-                last_exc = e
-            except ccxt.NetworkError as e:
-                log.warning(
-                    "Network error [%s] attempt %d: %s", _ep, attempt, e
-                )
-                await asyncio.sleep(delay * attempt * 3)
-                last_exc = e
-            except ccxt.ExchangeNotAvailable as e:
-                log.error("Exchange unavailable [%s]: %s", _ep, e)
-                await asyncio.sleep(delay * attempt * 2)
-                last_exc = e
-            except (ccxt.InsufficientFunds, ccxt.InvalidOrder) as e:
-                log.error(
-                    "Hard error [%s]: %s — not retrying", _ep, e
-                )
-                raise
-            except Exception as e:
-                log.error(
-                    "Unexpected error [%s] attempt %d: %s", _ep, attempt, e
-                )
-                raise
-        raise last_exc
 
 class WebSocketFeed:
 
