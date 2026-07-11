@@ -1428,23 +1428,34 @@ class TradingBot:
                 log.error("Analytics loop error: %s", e)
 
     async def run_config_watcher(self) -> None:
+        """[REUSE pola spot] Baca 'config_update_futures' dari bot_state
+        (ditulis oleh POST /api/config/update di api_server_future.py)."""
+        import json
+        log.info("Config watcher (futures) dimulai (interval=30s).")
         while self.is_running:
             try:
-                await asyncio.sleep(15)
-                if self.db is None:
-                    continue
-                try:
-                    overrides = await self.db.get_bot_config_overrides()
-                except Exception:
-                    overrides = None
-                if overrides:
-                    self.config.update(overrides)
-                    if self.risk_manager:
-                        self.risk_manager._update_config(self.config)
+                raw = await self.db.get_bot_state("config_update_futures")
+                if raw:
+                    updates = json.loads(raw)
+                    applied = []
+                    for key, value in updates.items():
+                        if key in self.config:
+                            self.config[key] = value
+                            applied.append(key)
+                    if applied:
+                        if "universe_watchlist" in applied and self.strategy:
+                            self.strategy.update_symbols(self.config["universe_watchlist"])
+                            if self.ws_feed:
+                                await self.ws_feed.add_symbols(self.config["universe_watchlist"])
+                        if self.risk_manager:
+                            self.risk_manager._update_config(self.config)
+                        await self.db.clear_bot_state("config_update_futures")
+                        log.info("Config futures diupdate via dashboard: %s", applied)
             except asyncio.CancelledError:
                 break
             except Exception as e:
-                log.debug("Config watcher error: %s", e)
+                log.debug("Config watcher (futures) error: %s", e)
+            await asyncio.sleep(30)
 
     async def run_position_sync_loop(self) -> None:
         """
