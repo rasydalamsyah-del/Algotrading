@@ -74,7 +74,30 @@ class OrderExecutionManager:
             return None
 
         symbol = signal.symbol
-        side   = "buy" if signal.signal_type == SignalType.BUY else "sell"
+        # [FUTURES-READY] Pemetaan eksplisit SignalType -> aksi order exchange
+        # (bukan ternary biner lagi). Mekanika "buy"/"sell" di level exchange
+        # ITU SENDIRI sudah reusable utk long & short (buy = bayar ask, sell
+        # = kena bid, berlaku utk kedua arah posisi) -- yang perlu benar
+        # adalah PEMETAAN dari SignalType ke aksi ini.
+        #
+        # BUY         -> "buy"  (buka long)
+        # CLOSE_LONG  -> "sell" (tutup long)
+        # CLOSE_SHORT -> "buy"  (tutup short / buy-to-cover) -- SEBELUMNYA BUG:
+        #   ternary lama "buy" if ==BUY else "sell" akan salah memetakan
+        #   CLOSE_SHORT jadi "sell", padahal seharusnya "buy". Tidak berdampak
+        #   nyata sampai saat ini karena CLOSE_SHORT belum pernah dihasilkan
+        #   di manapun dalam codebase (dikonfirmasi audit), tapi ini bug laten
+        #   yang akan aktif begitu future/ mulai menghasilkan sinyal short.
+        # SELL        -> "sell" (fallback, belum ada makna eksplisit saat ini)
+        #
+        # BELUM ADA: SignalType.OPEN_SHORT -- perlu ditambahkan saat future/
+        # benar-benar mengimplementasikan pembukaan posisi short baru.
+        if signal.signal_type == SignalType.BUY:
+            side = "buy"
+        elif signal.signal_type == SignalType.CLOSE_SHORT:
+            side = "buy"
+        else:
+            side = "sell"
         price  = signal.price
         amount = assessment.approved_size
 
@@ -794,7 +817,11 @@ class OrderExecutionManager:
             "order_id":          order_id,
             "timestamp":         _utcnow(),
             "symbol":            symbol,
-            "side":              "buy" if signal.signal_type == SignalType.BUY else "sell",
+            # [FUTURES-READY] Pemetaan eksplisit yang sama dengan execute_signal()
+            # (lihat komentar lengkap di sana) -- didefinisikan ulang secara lokal
+            # di sini karena _process_fill() adalah method terpisah, variabel
+            # `side` dari execute_signal() tidak dalam scope di sini.
+            "side":              ("buy" if signal.signal_type in (SignalType.BUY, SignalType.CLOSE_SHORT) else "sell"),
             "order_type":        order.get("type", "market"),
             "status":            status,
             "requested_price":   round(float(requested_price), 8),
