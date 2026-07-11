@@ -1,6 +1,31 @@
 # Audit Arsitektur AlgoTrader — Catatan Kerja
 
-Status: 🔄 Sedang berjalan | Terakhir update: mulai audit
+**Status: ✅ SELESAI** | Cakupan: seluruh file backend inti (main.py, exchange.py, risk.py, strategy.py, execution.py, seluruh intelligence/, indicators/, database.py, profiles/, learning/, api_server.py, telegram_bot.py, ta_compat.py). `dashboard/*.html` sengaja tidak diaudit (dikonfirmasi tidak diperlukan untuk keputusan struktur saat ini).
+
+---
+
+## Ringkasan Eksekutif (baca ini dulu)
+
+**Tujuan audit:** memetakan setiap file untuk menentukan struktur folder baru (`engine/` / `spot/` / `future/`) sebelum menambahkan dukungan Binance Futures (long + short + leverage), tanpa mematikan sistem spot yang sudah berjalan.
+
+**3 temuan paling penting:**
+1. **`indicators/` 100% netral** — dikonfirmasi dua kali (grep kata kunci DAN baca logic `calculate_ema_stack`). Skornya sendiri sudah simetris (0=bearish kuat, 100=bullish kuat). Bias muncul di lapisan **konsumsi** skor (`scorer.py`), bukan di perhitungan indikatornya. **`indicators/` aman dipindah ke `engine/` tanpa modifikasi apapun.**
+2. **7 lokasi bug/gap "long-only bias"** teridentifikasi dan terdokumentasi lengkap (lihat tabel di bagian bawah), dengan **satu akar masalah paling fundamental**: `PositionTracker` (strategy.py) tidak memiliki field `side` sama sekali — objek inti yang dipakai monitoring posisi real-time buta arah trading.
+3. **`intelligence/position_sync.py` bukan sekadar bias** — seluruh konsepnya (baca saldo koin lewat `fetch_balance()`) tidak punya padanan di futures. Butuh file baru total (`position_sync_futures.py`), bukan modifikasi.
+
+**Keputusan yang sudah diambil (dikonfirmasi user):**
+| # | Keputusan | Status |
+|---|---|---|
+| 1 | Model DB: kolom nullable ditambah ke skema sama (bukan skema terpisah) — karena DB fisik sudah terpisah per market, risiko campur data nihil | ✅ Diputuskan |
+| 2 | `scorer.py` — audit dianggap cukup (4 tipe primary trigger sudah dipetakan lengkap) | ✅ Diputuskan |
+| 3 | Field `side` di `PositionTracker` dikerjakan **duluan di `spot/`**, sebelum `future/` mulai dibangun — supaya fondasi benar sejak awal | ✅ Diputuskan |
+| 4 | `dashboard/*.html` — di-skip, tidak relevan untuk keputusan struktur saat ini | ✅ Diputuskan |
+| 5 | `intelligence/position_sync.py` — audit selesai 100% (329 baris dibaca penuh) | ✅ Selesai |
+
+**Belum dikerjakan (murni dokumentasi/perencanaan, belum ada file yang dipindah):**
+- Implementasi nyata pemindahan file ke struktur `engine/`/`spot/`/`future/`
+- Penambahan field `side` ke `PositionTracker` (langkah pertama yang disepakati untuk dikerjakan lebih dulu)
+- Pembangunan `future/` (exchange_future.py, risk_future.py, liquidation.py, dst) — belum dimulai sama sekali, masih tahap desain di dokumen ini
 
 ---
 
