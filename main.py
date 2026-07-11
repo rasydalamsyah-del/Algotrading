@@ -2629,42 +2629,50 @@ class TradingBot:
                 )
                 assessment.approved_size = _kelly_max_qty
 
-        trade = await self.executor.execute_signal(signal, assessment)
-
-        if trade is None:
-            log.warning("execute_signal gagal untuk %s — posisi TIDAK dibuka.", symbol)
-            _reset_position_flag()
-            return
-
-        actual_amount = float(trade.filled or trade.amount)
-        # [BUG-FIX cross-file, pasangan fix di execution.py._execute_iceberg]
-        # Sebelumnya entry_price SELALU pakai trade.executed_price, yaitu
-        # harga CHUNK PERTAMA saja untuk order iceberg (trade = trades[0]).
-        # amount sudah benar diagregasi dari semua chunk lewat parsing note
-        # di bawah, tapi entry_price tidak — sekarang iceberg_avg_price
-        # (rata-rata tertimbang harga eksekusi semua chunk) turut di-parse
-        # dan dipakai kalau ada, supaya cost basis posisi akurat.
-        entry_price = trade.executed_price
-        if trade.notes and "iceberg_actual_filled=" in (trade.notes or ""):
-            try:
-                tag    = next(p for p in trade.notes.split("|") if p.strip().startswith("iceberg_actual_filled="))
-                parsed = float(tag.split("=")[1])
-                if parsed > 0:
-                    actual_amount = parsed
-                    log.info("Iceberg actual_amount diambil dari notes: %s = %.8f", trade.symbol, actual_amount)
-            except (StopIteration, ValueError, IndexError) as e:
-                log.warning("Gagal parse iceberg_actual_filled: %s — fallback %.8f", e, actual_amount)
-            try:
-                tag2 = next((p for p in trade.notes.split("|") if p.strip().startswith("iceberg_avg_price=")), None)
-                if tag2:
-                    parsed_price = float(tag2.split("=")[1])
-                    if parsed_price > 0:
-                        entry_price = parsed_price
-                        log.info("Iceberg entry_price diambil dari rata-rata tertimbang notes: %s = %.8f", trade.symbol, entry_price)
-            except (ValueError, IndexError) as e:
-                log.warning("Gagal parse iceberg_avg_price: %s — fallback executed_price %.8f", e, entry_price)
-
+        # [BUG-FIX] Lock digeser lebih awal, membungkus execute_signal() juga.
+        # Sebelumnya lock hanya membungkus upsert_position() -- tapi order fill
+        # (yang mengubah saldo paper trading secara instan di exchange.py) terjadi
+        # di dalam execute_signal(), SEBELUM lock ini. Ada beberapa await point di
+        # dalam execute_signal() (save_trade, notifikasi) yang bisa diselingi oleh
+        # run_portfolio_monitor() -- jika itu terjadi, _refresh_portfolio() membaca
+        # saldo yang sudah berkurang tapi posisi yang belum tercatat di DB, memicu
+        # drawdown palsu (terbukti kejadian nyata: kasus AIGENSYN & PYR).
         async with self._equity_lock:
+            trade = await self.executor.execute_signal(signal, assessment)
+
+            if trade is None:
+                log.warning("execute_signal gagal untuk %s — posisi TIDAK dibuka.", symbol)
+                _reset_position_flag()
+                return
+
+            actual_amount = float(trade.filled or trade.amount)
+            # [BUG-FIX cross-file, pasangan fix di execution.py._execute_iceberg]
+            # Sebelumnya entry_price SELALU pakai trade.executed_price, yaitu
+            # harga CHUNK PERTAMA saja untuk order iceberg (trade = trades[0]).
+            # amount sudah benar diagregasi dari semua chunk lewat parsing note
+            # di bawah, tapi entry_price tidak — sekarang iceberg_avg_price
+            # (rata-rata tertimbang harga eksekusi semua chunk) turut di-parse
+            # dan dipakai kalau ada, supaya cost basis posisi akurat.
+            entry_price = trade.executed_price
+            if trade.notes and "iceberg_actual_filled=" in (trade.notes or ""):
+                try:
+                    tag    = next(p for p in trade.notes.split("|") if p.strip().startswith("iceberg_actual_filled="))
+                    parsed = float(tag.split("=")[1])
+                    if parsed > 0:
+                        actual_amount = parsed
+                        log.info("Iceberg actual_amount diambil dari notes: %s = %.8f", trade.symbol, actual_amount)
+                except (StopIteration, ValueError, IndexError) as e:
+                    log.warning("Gagal parse iceberg_actual_filled: %s — fallback %.8f", e, actual_amount)
+                try:
+                    tag2 = next((p for p in trade.notes.split("|") if p.strip().startswith("iceberg_avg_price=")), None)
+                    if tag2:
+                        parsed_price = float(tag2.split("=")[1])
+                        if parsed_price > 0:
+                            entry_price = parsed_price
+                            log.info("Iceberg entry_price diambil dari rata-rata tertimbang notes: %s = %.8f", trade.symbol, entry_price)
+                except (ValueError, IndexError) as e:
+                    log.warning("Gagal parse iceberg_avg_price: %s — fallback executed_price %.8f", e, entry_price)
+
             try:
                 await self.db.upsert_position(symbol, {
                     "entry_time":        datetime.now(timezone.utc).replace(tzinfo=None),
