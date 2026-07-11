@@ -716,100 +716,138 @@ def _check_stoch_context(
             f"momentum belum terkonfirmasi {'bullish' if is_long else 'bearish'}"
         )
 
-def _check_oscillator_context(iset: IndicatorSet, result: ValidationResult) -> None:
-    """CCI, Williams %R, ROC — early warning momentum & overbought/oversold."""
+def _check_oscillator_context(iset: IndicatorSet, result: ValidationResult, side: str = "long") -> None:
+    """CCI, Williams %R, ROC — early warning momentum & overbought/oversold.
+
+    [FUTURES-READY] side="long" default IDENTIK PERSIS dgn sebelumnya. Short:
+    seluruh 7 sub-check (CCI level/trend/divergence, Williams%R level/trend,
+    ROC momentum/crossover) di-mirror penuh.
+    """
     osc = iset.oscillators
     if not osc.is_valid():
         return
+    is_long = side != "short"
 
     # ── CCI ───────────────────────────────────────────────────────────────────
     if osc.cci is not None:
-        if osc.cci > 150:
+        overbought = osc.cci > 150 if is_long else osc.cci < -150
+        oversold   = osc.cci < -100 if is_long else osc.cci > 100
+        healthy    = (0 < osc.cci < 100) if is_long else (-100 < osc.cci < 0)
+        if overbought:
+            zone = "overbought" if is_long else "oversold (mirror utk short)"
             result.add_warning(
-                f"CCI {osc.cci:.1f} — ekstrem overbought, potensi pullback",
+                f"CCI {osc.cci:.1f} — ekstrem {zone}, potensi pullback",
                 confidence_penalty=0.06,
             )
-        elif osc.cci < -100:
-            result.add_note(f"✅ CCI {osc.cci:.1f} — oversold, mendukung entry long")
+        elif oversold:
+            zone = "oversold" if is_long else "overbought (mirror utk short)"
+            arah = "long" if is_long else "short"
+            result.add_note(f"✅ CCI {osc.cci:.1f} — {zone}, mendukung entry {arah}")
             result.confidence_adjustment += 0.03
-        elif 0 < osc.cci < 100:
-            result.add_note(f"✅ CCI {osc.cci:.1f} — zona bullish sehat")
+        elif healthy:
+            arah = "bullish" if is_long else "bearish"
+            result.add_note(f"✅ CCI {osc.cci:.1f} — zona {arah} sehat")
             result.confidence_adjustment += 0.02
 
     # [v2] CCI trend — arah pergerakan indikator lebih penting dari nilai sesaat
-    if osc.cci_trend == "rising" and osc.cci is not None and osc.cci < 0:
+    recovering = (osc.cci_trend == "rising" and osc.cci is not None and osc.cci < 0) if is_long else                  (osc.cci_trend == "falling" and osc.cci is not None and osc.cci > 0)
+    weakening  = (osc.cci_trend == "falling" and osc.cci is not None and osc.cci > 50) if is_long else                  (osc.cci_trend == "rising" and osc.cci is not None and osc.cci < -50)
+    if recovering:
+        arah = "negatif" if is_long else "positif"
         result.add_note(
-            f"✅ CCI rising ({osc.cci:.1f}) dari zona negatif — potensi recovery"
+            f"✅ CCI {osc.cci_trend} ({osc.cci:.1f}) dari zona {arah} — potensi recovery"
         )
         result.confidence_adjustment += 0.02
-    elif osc.cci_trend == "falling" and osc.cci is not None and osc.cci > 50:
+    elif weakening:
+        arah = "positif" if is_long else "negatif"
         result.add_warning(
-            f"CCI falling ({osc.cci:.1f}) dari zona positif — momentum melemah",
+            f"CCI {osc.cci_trend} ({osc.cci:.1f}) dari zona {arah} — momentum melemah",
             confidence_penalty=0.03,
         )
 
     # [v2] CCI divergence — early reversal signal
     if osc.cci_divergence is not None:
-        if osc.cci_divergence > 5:
+        confirming = osc.cci_divergence > 5 if is_long else osc.cci_divergence < -5
+        opposing   = osc.cci_divergence < -5 if is_long else osc.cci_divergence > 5
+        if confirming:
+            arah = "bullish" if is_long else "bearish"
+            arah_reversal = "up" if is_long else "down"
             result.add_note(
-                f"✅ CCI bullish divergence ({osc.cci_divergence:.1f}) — potensi reversal up"
+                f"✅ CCI {arah} divergence ({osc.cci_divergence:.1f}) — potensi reversal {arah_reversal}"
             )
             result.confidence_adjustment += 0.04
-        elif osc.cci_divergence < -5:
+        elif opposing:
+            arah = "bearish" if is_long else "bullish"
+            arah_reversal = "down" if is_long else "up"
             result.add_warning(
-                f"CCI bearish divergence ({osc.cci_divergence:.1f}) — potensi reversal down",
+                f"CCI {arah} divergence ({osc.cci_divergence:.1f}) — potensi reversal {arah_reversal}",
                 confidence_penalty=0.04,
             )
 
     # ── Williams %R ───────────────────────────────────────────────────────────
     if osc.williams_r is not None:
-        if osc.williams_r >= -20:
+        overbought_wr = osc.williams_r >= -20 if is_long else osc.williams_r <= -80
+        oversold_wr   = osc.williams_r <= -80 if is_long else osc.williams_r >= -20
+        if overbought_wr:
+            zone = "overbought" if is_long else "oversold (mirror utk short)"
             result.add_warning(
-                f"Williams %R {osc.williams_r:.1f} — overbought zone",
+                f"Williams %R {osc.williams_r:.1f} — {zone} zone",
                 confidence_penalty=0.04,
             )
-        elif osc.williams_r <= -80:
-            result.add_note(f"✅ Williams %R {osc.williams_r:.1f} — oversold, momentum recovery")
+        elif oversold_wr:
+            zone = "oversold" if is_long else "overbought (mirror utk short)"
+            result.add_note(f"✅ Williams %R {osc.williams_r:.1f} — {zone}, momentum recovery")
             result.confidence_adjustment += 0.02
 
-    # [v2] Williams %R trend — apakah bergerak keluar dari oversold?
-    if osc.willr_trend == "rising" and osc.williams_r is not None and osc.williams_r <= -70:
+    # [v2] Williams %R trend — apakah bergerak keluar dari extreme searah posisi?
+    wr_recovering = (osc.willr_trend == "rising" and osc.williams_r is not None and osc.williams_r <= -70) if is_long else                     (osc.willr_trend == "falling" and osc.williams_r is not None and osc.williams_r >= -30)
+    wr_weakening  = (osc.willr_trend == "falling" and osc.williams_r is not None and osc.williams_r >= -30) if is_long else                     (osc.willr_trend == "rising" and osc.williams_r is not None and osc.williams_r <= -70)
+    if wr_recovering:
+        zone = "oversold" if is_long else "overbought"
         result.add_note(
-            f"✅ Williams %R rising dari oversold ({osc.williams_r:.1f}) — sinyal recovery"
+            f"✅ Williams %R {osc.willr_trend} dari {zone} ({osc.williams_r:.1f}) — sinyal recovery"
         )
         result.confidence_adjustment += 0.02
-    elif osc.willr_trend == "falling" and osc.williams_r is not None and osc.williams_r >= -30:
+    elif wr_weakening:
+        zone = "overbought" if is_long else "oversold"
+        tekanan = "jual" if is_long else "beli"
         result.add_warning(
-            f"Williams %R jatuh dari overbought ({osc.williams_r:.1f}) — tekanan jual",
+            f"Williams %R bergerak dari {zone} ({osc.williams_r:.1f}) — tekanan {tekanan}",
             confidence_penalty=0.03,
         )
 
     # ── ROC — early warning momentum ──────────────────────────────────────────
     if osc.roc is not None and osc.roc_slope is not None:
-        if osc.roc > 0 and osc.roc_slope < -1.5:
+        exhausting = (osc.roc > 0 and osc.roc_slope < -1.5) if is_long else (osc.roc < 0 and osc.roc_slope > 1.5)
+        strengthening = (osc.roc > 0 and osc.roc_slope > 1.0) if is_long else (osc.roc < 0 and osc.roc_slope < -1.0)
+        if exhausting:
             result.add_warning(
-                f"ROC positif ({osc.roc:.2f}%) tapi melambat (slope={osc.roc_slope:.2f}) "
+                f"ROC {osc.roc:+.2f}% tapi melambat (slope={osc.roc_slope:.2f}) "
                 f"— momentum mulai habis",
                 confidence_penalty=0.05,
             )
-        elif osc.roc > 0 and osc.roc_slope > 1.0:
+        elif strengthening:
             result.add_note(
-                f"✅ ROC {osc.roc:.2f}% akselerasi (slope={osc.roc_slope:.2f}) "
+                f"✅ ROC {osc.roc:+.2f}% akselerasi (slope={osc.roc_slope:.2f}) "
                 f"— momentum menguat"
             )
             result.confidence_adjustment += 0.03
 
     # [v2] ROC fast/slow crossover
-    if osc.roc_crossover == "bullish":
+    confirming_cross = "bullish" if is_long else "bearish"
+    opposing_cross   = "bearish" if is_long else "bullish"
+    cross_op         = ">" if is_long else "<"
+    cross_op_opp     = "<" if is_long else ">"
+    if osc.roc_crossover == confirming_cross:
         result.add_note(
-            f"✅ ROC crossover bullish (fast={osc.roc:.2f}% > slow={osc.roc_slow:.2f}%) "
-            f"— momentum shift positif"
+            f"✅ ROC crossover {confirming_cross} (fast={osc.roc:.2f}% {cross_op} slow={osc.roc_slow:.2f}%) "
+            f"— momentum shift {'positif' if is_long else 'negatif'}"
         )
         result.confidence_adjustment += 0.03
-    elif osc.roc_crossover == "bearish":
+    elif osc.roc_crossover == opposing_cross:
         result.add_warning(
-            f"ROC crossover bearish (fast={osc.roc:.2f}% < slow={osc.roc_slow:.2f}%) "
-            f"— momentum shift negatif",
+            f"ROC crossover {opposing_cross} (fast={osc.roc:.2f}% {cross_op_opp} slow={osc.roc_slow:.2f}%) "
+            f"— momentum shift {'negatif' if is_long else 'positif'}",
             confidence_penalty=0.04,
         )
 
