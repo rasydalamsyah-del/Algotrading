@@ -1002,6 +1002,57 @@ class DatabaseManager:
             )
             return list(result.scalars().all())
 
+    async def reduce_position_amount(
+        self,
+        symbol:              str,
+        reduce_amount:       float,
+        realized_pnl_partial: float,
+        exit_price:          float,
+    ) -> Optional[Position]:
+        """
+        [FUTURES-READY -- BARU] Kurangi amount posisi TANPA menutupnya
+        (is_open tetap True) -- utk partial close/scale-out. BEDA dari
+        close_position() yang selalu menandai posisi selesai sepenuhnya.
+        realized_pnl_partial DIAKUMULASI ke Position.realized_pnl (bukan
+        overwrite), supaya kalau ada beberapa partial close berturut,
+        totalnya tetap benar sampai posisi akhirnya full-closed.
+        """
+        async with self._session() as s:
+            result = await s.execute(
+                select(Position).where(
+                    Position.symbol == symbol,
+                    Position.is_open == True,
+                )
+            )
+            pos = result.scalar_one_or_none()
+            if not pos:
+                log.warning("reduce_position_amount: no open position for %s", symbol)
+                return None
+
+            new_amount = (pos.amount or 0) - reduce_amount
+            if new_amount <= 1e-12:
+                log.warning(
+                    "reduce_position_amount(%s): reduce_amount (%.8f) >= "
+                    "amount tersisa (%.8f) -- gunakan close_position() untuk "
+                    "penutupan penuh, bukan fungsi ini.",
+                    symbol, reduce_amount, pos.amount or 0,
+                )
+                new_amount = 0.0
+
+            pos.amount = round(new_amount, 8)
+            pos.current_price = round(exit_price, 8)
+            pos.realized_pnl = round((pos.realized_pnl or 0.0) + realized_pnl_partial, 8)
+            cost = (pos.entry_price or 0) * (pos.amount or 0)
+            pos.realized_pnl_pct = round((pos.realized_pnl / cost * 100) if cost > 0 else 0.0, 6)
+            # [PENTING] Reset is_closing=False -- posisi TETAP terbuka setelah
+            # partial close, perlu kembali dipantau normal (SL/TP/liquidation)
+            # oleh run_sl_tp_monitor(), bukan "nyangkut" dianggap sedang ditutup.
+            pos.is_closing = False
+
+            await s.commit()
+            await s.refresh(pos)
+            return pos
+
     async def close_position(
         self,
         symbol:       str,

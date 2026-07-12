@@ -580,7 +580,17 @@ class TradingBot:
                 reason = signal.metadata.get("exit_reason", "Strategy exit signal") if signal.metadata else "Strategy exit signal"
                 await self._close_position_market(pos, signal.price, reason)
 
-    async def _close_position_market(self, pos, exit_price: float, reason: str) -> None:
+    async def _close_position_market(
+        self, pos, exit_price: float, reason: str, close_amount: Optional[float] = None,
+    ) -> None:
+        """
+        [FUTURES-READY -- close_amount BARU] Kalau close_amount diberikan
+        dan < pos.amount, ini PARTIAL close (scale-out) -- posisi TETAP
+        terbuka dengan amount berkurang. Kalau None (default) atau >=
+        pos.amount, tetap full close seperti sebelumnya (behavior TIDAK
+        BERUBAH untuk semua caller existing yang tidak menyertakan
+        parameter ini -- SL/TP/liquidation/panic semuanya tetap full close).
+        """
         async with self._closing_lock:
             if pos.symbol in self._closing_symbols:
                 return
@@ -590,41 +600,57 @@ class TradingBot:
         except Exception as e:
             log.warning("mark_position_closing gagal untuk %s: %s", pos.symbol, e)
         try:
-            await self._do_close_position(pos, exit_price, reason)
+            await self._do_close_position(pos, exit_price, reason, close_amount=close_amount)
         finally:
             async with self._closing_lock:
                 self._closing_symbols.discard(pos.symbol)
 
-    async def _do_close_position(self, pos, exit_price: float, reason: str) -> None:
+    async def _do_close_position(
+        self, pos, exit_price: float, reason: str, close_amount: Optional[float] = None,
+    ) -> None:
         """
         [FUTURES-SPECIFIC] SignalType.CLOSE_LONG/CLOSE_SHORT sesuai pos.side
         (bukan SignalType.SELL hardcoded spt spot). evaluate_order dgn
         existing_position_side=pos.side supaya risk_future.py tau ini
         reduce/close (bypass sizing cap), bukan buka posisi baru.
+
+        [BARU] close_amount opsional -- kalau diisi dan < pos.amount, ini
+        PARTIAL close (posisi tetap terbuka dgn amount berkurang, pakai
+        db.reduce_position_amount() bukan db.close_position()).
         """
         existing = await self.db.get_open_position_by_symbol(pos.symbol)
         if not existing:
             log.warning("Position %s sudah tidak open di DB — skip close (reason=%s)", pos.symbol, reason)
             return
 
+        full_amount = float(pos.amount or 0)
+        amount_to_close = float(close_amount) if close_amount is not None else full_amount
+        if amount_to_close <= 0 or amount_to_close > full_amount + 1e-9:
+            log.error(
+                "close_amount tidak valid untuk %s: %.8f (posisi hanya %.8f) — dibatalkan.",
+                pos.symbol, amount_to_close, full_amount,
+            )
+            return
+        is_partial = amount_to_close < full_amount - 1e-9
+
         close_signal_type = SignalType.CLOSE_LONG if pos.side == "long" else SignalType.CLOSE_SHORT
         close_signal = SignalEvent(
             symbol=pos.symbol, signal_type=close_signal_type, price=exit_price,
             timestamp=_utcnow_dt(), strategy=pos.strategy_name or "risk_monitor",
-            metadata={"exit_reason": reason},
+            metadata={"exit_reason": reason, "partial": is_partial},
         )
 
         # order_side level-exchange: tutup long="sell", tutup short="buy"
         order_side = "sell" if pos.side == "long" else "buy"
         close_assessment_raw = await self.risk_manager.evaluate_order(
-            symbol=pos.symbol, side=order_side, price=exit_price, quantity=pos.amount,
+            symbol=pos.symbol, side=order_side, price=exit_price, quantity=amount_to_close,
             existing_position_side=pos.side,
         )
         close_assessment = RiskAssessment(
             decision=RiskDecision.APPROVED, reason=reason,
             approved_size=(close_assessment_raw.approved_size
                            if close_assessment_raw.is_approved and close_assessment_raw.approved_size
-                           else pos.amount),
+                           else amount_to_close),
             stop_loss=None, take_profit=None,
         )
 
@@ -645,18 +671,24 @@ class TradingBot:
         self._close_retry_count.pop(pos.symbol, None)
 
         # [FUTURES-SPECIFIC] Hitung realized_pnl manual dari entry vs exit
-        # price (memperhitungkan side) -- Trade.realized_pnl TIDAK otomatis
-        # terisi oleh execute_signal()/_process_fill() (kolom itu ada di
-        # skema tapi memang diisi terpisah, bukan saat insert trade).
+        # price (memperhitungkan side DAN amount_to_close, bukan selalu
+        # full_amount) -- Trade.realized_pnl TIDAK otomatis terisi oleh
+        # execute_signal()/_process_fill() (kolom itu ada di skema tapi
+        # memang diisi terpisah, bukan saat insert trade).
         entry_price = float(pos.entry_price or 0)
-        amount      = float(pos.amount or 0)
         if pos.side == "long":
-            realized_pnl = (trade.executed_price - entry_price) * amount
+            realized_pnl = (trade.executed_price - entry_price) * amount_to_close
         else:
-            realized_pnl = (entry_price - trade.executed_price) * amount
+            realized_pnl = (entry_price - trade.executed_price) * amount_to_close
 
         try:
-            await self.db.close_position(pos.symbol, exit_price=trade.executed_price, realized_pnl=realized_pnl)
+            if is_partial:
+                await self.db.reduce_position_amount(
+                    pos.symbol, reduce_amount=amount_to_close,
+                    realized_pnl_partial=realized_pnl, exit_price=trade.executed_price,
+                )
+            else:
+                await self.db.close_position(pos.symbol, exit_price=trade.executed_price, realized_pnl=realized_pnl)
         except Exception as e:
             log.critical("close_position (DB) GAGAL untuk %s setelah order sukses: %s", pos.symbol, e)
 
@@ -668,7 +700,7 @@ class TradingBot:
         # yang baru muncul di futures). Ditemukan & diperbaiki di sini saat
         # verifikasi siklus penuh entry->close.
         realized_pnl_pct = (
-            (realized_pnl / (entry_price * amount) * 100) if (entry_price * amount) > 0 else 0.0
+            (realized_pnl / (entry_price * amount_to_close) * 100) if (entry_price * amount_to_close) > 0 else 0.0
         )
         try:
             await self.db.update_trade_pnl(
@@ -682,8 +714,12 @@ class TradingBot:
         except Exception:
             pass
 
-        log.info("POSISI DITUTUP (futures): %s %s @ %.6f | realized_pnl=%+.4f | reason=%s",
-                  pos.side.upper(), pos.symbol, trade.executed_price, realized_pnl, reason)
+        log.info(
+            "POSISI %s (futures): %s %s @ %.6f | amount=%.8f/%.8f | realized_pnl=%+.4f | reason=%s",
+            "DIKURANGI SEBAGIAN" if is_partial else "DITUTUP PENUH",
+            pos.side.upper(), pos.symbol, trade.executed_price,
+            amount_to_close, full_amount, realized_pnl, reason,
+        )
         if self.notifier:
             try:
                 await self.notifier.notify_trade_closed(trade)
