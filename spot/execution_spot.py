@@ -8,7 +8,6 @@ verifikasi fill). Di sini cuma tersisa pemetaan SignalType->side spot-specific.
 
 from __future__ import annotations
 
-from typing import Optional
 
 from engine.execution_base import BaseOrderExecutionManager
 from engine.core.models import SignalEvent, SignalType

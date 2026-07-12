@@ -14,7 +14,6 @@ from datetime import datetime, timezone
 from typing import Optional, Callable, Dict, Any, List, Tuple
 
 import ccxt.pro as ccxt
-from asyncio_throttle import Throttler
 
 from engine.exchange_base import BaseExchangeConnector
 

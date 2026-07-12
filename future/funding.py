@@ -19,7 +19,7 @@ bukan memprediksi funding rate masa depan.
 """
 
 from dataclasses import dataclass
-from typing import List, Optional
+from typing import List
 from datetime import datetime
 
 

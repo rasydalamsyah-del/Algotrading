@@ -18,7 +18,7 @@ sendiri.
 from __future__ import annotations
 
 import logging
-from typing import Optional, Dict, List, Tuple
+from typing import Optional, Dict, Tuple
 
 from engine.risk_base import BaseRiskManager, HaltReason, RiskDecision, RiskAssessment
 from future.liquidation import calculate_liquidation_price, is_stop_loss_safe

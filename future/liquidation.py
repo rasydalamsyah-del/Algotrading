@@ -47,7 +47,6 @@ Referensi konsep umum (isolated margin, tanpa funding fee, tanpa fee taker/maker
 """
 
 from dataclasses import dataclass
-from typing import Optional
 
 
 DEFAULT_MMR = 0.005  # 0.5% -- APPROXIMATE, lihat peringatan di atas

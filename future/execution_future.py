@@ -11,7 +11,7 @@ Extend engine.execution_base.BaseOrderExecutionManager. Di sini cuma tersisa:
 
 from __future__ import annotations
 
-from typing import Dict, Optional
+from typing import Dict
 
 from engine.execution_base import BaseOrderExecutionManager
 from engine.risk_base import RiskAssessment
