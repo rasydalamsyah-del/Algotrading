@@ -1,0 +1,350 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+
+<helmet>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <style>
+    @keyframes pulse{0%,100%{opacity:1}50%{opacity:.3}}
+    body{margin:0;background:#0b0e11;-webkit-font-smoothing:antialiased}
+    a{color:#4589ff}
+    a:hover{color:#6ea3ff}
+    ::-webkit-scrollbar{width:5px;height:5px}
+    ::-webkit-scrollbar-thumb{background:#253550;border-radius:3px}
+  </style>
+</helmet>
+
+<div style="min-height:100vh;background:#0b0e11;color:#e6eaf2;font-family:'Inter',system-ui,sans-serif;font-size:13px;line-height:1.5">
+
+  <nav style="position:sticky;top:0;z-index:80;height:56px;background:rgba(11,14,17,0.95);backdrop-filter:blur(20px);border-bottom:1px solid #1e2d45;display:flex;align-items:center;padding:0 20px;gap:14px">
+    <sc-if value="{{ isMobile }}" hint-placeholder-val="{{ false }}">
+      <button onclick="{{ toggleSidebar }}" style="background:none;border:none;color:#8a9bba;font-size:20px;cursor:pointer;padding:4px;flex-shrink:0;line-height:1">☰</button>
+    </sc-if>
+    <a href="Dashboard.dc.html" style="display:flex;align-items:center;gap:9px;font-weight:700;font-size:14px;flex-shrink:0;text-decoration:none;color:#e6eaf2">
+      <div style="width:30px;height:30px;border-radius:8px;background:linear-gradient(135deg,#4589ff,#00d68f);display:flex;align-items:center;justify-content:center;font-size:15px">📈</div>
+      AlgoTrader <span style="color:#4589ff;margin-left:2px">Pro</span> <span style="font-size:10px;color:#4a5878;font-weight:400">v7.0</span>
+    </a>
+    <div style="flex:1"></div>
+    <div style="display:flex;align-items:center;gap:5px;font-size:10px;color:#4a5878;font-family:'JetBrains Mono',monospace">
+      <div style="width:7px;height:7px;border-radius:50%;background:{{ wsColor }};animation:{{ wsAnim }}"></div>
+      {{ wsLabel }}
+    </div>
+  </nav>
+
+  <div style="display:flex;min-height:calc(100vh - 56px)">
+    <sc-if value="{{ showBackdrop }}" hint-placeholder-val="{{ false }}">
+      <div onclick="{{ closeSidebar }}" style="position:fixed;inset:0;top:56px;background:rgba(0,0,0,0.6);z-index:110"></div>
+    </sc-if>
+    <aside style="{{ sidebarStyle }}">
+      <div style="padding:6px 10px 3px;font-size:9px;font-weight:700;color:#4a5878;letter-spacing:1.2px;text-transform:uppercase">Overview</div>
+      <a href="Dashboard.dc.html" style="display:flex;align-items:center;gap:9px;padding:8px 10px;border-radius:6px;color:#8a9bba;font-size:12px;font-weight:500;cursor:pointer;text-decoration:none" style-hover="color:#e6eaf2;background:#1a2235">
+        <span style="font-size:13px">⬛</span> Dashboard
+      </a>
+      <a href="Watchlist.dc.html" style="display:flex;align-items:center;gap:9px;padding:8px 10px;border-radius:6px;color:#8a9bba;font-size:12px;font-weight:500;cursor:pointer;text-decoration:none" style-hover="color:#e6eaf2;background:#1a2235">
+        <span style="font-size:13px">👁</span> Watchlist
+      </a>
+      <div style="height:1px;background:#1e2d45;margin:6px 0"></div>
+      <div style="padding:6px 10px 3px;font-size:9px;font-weight:700;color:#4a5878;letter-spacing:1.2px;text-transform:uppercase">Trading</div>
+      <a href="Positions.dc.html" style="display:flex;align-items:center;gap:9px;padding:8px 10px;border-radius:6px;color:#8a9bba;font-size:12px;font-weight:500;cursor:pointer;text-decoration:none" style-hover="color:#e6eaf2;background:#1a2235">
+        <span style="font-size:13px">📌</span> Open Positions
+      </a>
+      <div style="display:flex;align-items:center;gap:9px;padding:8px 10px;border-radius:6px;color:#4589ff;background:rgba(69,137,255,0.08);border:1px solid rgba(69,137,255,0.2);font-size:12px;font-weight:500;cursor:pointer">
+        <span style="font-size:13px">📋</span> Trade History
+      </div>
+      <div style="height:1px;background:#1e2d45;margin:6px 0"></div>
+      <div style="padding:6px 10px 3px;font-size:9px;font-weight:700;color:#4a5878;letter-spacing:1.2px;text-transform:uppercase">Analysis</div>
+      <a href="Analytics.dc.html" style="display:flex;align-items:center;gap:9px;padding:8px 10px;border-radius:6px;color:#8a9bba;font-size:12px;font-weight:500;cursor:pointer;text-decoration:none" style-hover="color:#e6eaf2;background:#1a2235"
+        <span style="font-size:13px">📊</span> Analytics &amp; PnL
+      </a>
+      <a href="Diagnosa.dc.html" style="display:flex;align-items:center;gap:9px;padding:8px 10px;border-radius:6px;color:#8a9bba;font-size:12px;font-weight:500;cursor:pointer;text-decoration:none" style-hover="color:#e6eaf2;background:#1a2235">
+        <span style="font-size:13px">🔍</span> Diagnosa Sinyal
+      </a>
+      <a href="Risk Monitor.dc.html" style="display:flex;align-items:center;gap:9px;padding:8px 10px;border-radius:6px;color:#8a9bba;font-size:12px;font-weight:500;cursor:pointer;text-decoration:none" style-hover="color:#e6eaf2;background:#1a2235">
+        <span style="font-size:13px">🛡</span> Risk Monitor
+      </a>
+      <div style="height:1px;background:#1e2d45;margin:6px 0"></div>
+      <div style="padding:6px 10px 3px;font-size:9px;font-weight:700;color:#4a5878;letter-spacing:1.2px;text-transform:uppercase">System</div>
+      <a href="AI Learner.dc.html" style="display:flex;align-items:center;gap:9px;padding:8px 10px;border-radius:6px;color:#8a9bba;font-size:12px;font-weight:500;cursor:pointer;text-decoration:none" style-hover="color:#e6eaf2;background:#1a2235">
+        <span style="font-size:13px">🧠</span> AI Learner
+      </a>
+      <a href="Gate Scanner.dc.html" style="display:flex;align-items:center;gap:9px;padding:8px 10px;border-radius:6px;color:#f0b429;font-size:12px;font-weight:700;cursor:pointer;text-decoration:none;background:linear-gradient(135deg,rgba(168,85,247,.12),rgba(245,158,11,.12));border:1px solid rgba(245,158,11,.25);margin-top:4px">
+        <span style="font-size:13px">🎯</span> Gate Scanner
+      </a>
+      <a href="Settings.dc.html" style="display:flex;align-items:center;gap:9px;padding:8px 10px;border-radius:6px;color:#8a9bba;font-size:12px;font-weight:500;cursor:pointer;text-decoration:none" style-hover="color:#e6eaf2;background:#1a2235">
+        <span style="font-size:13px">⚙️</span> Settings
+      </a>
+    </aside>
+
+    <main style="flex:1;padding:{{ mainPadding }};min-width:0">
+
+      <sc-if value="{{ isMobile }}" hint-placeholder-val="{{ false }}">
+        <div style="display:flex;gap:6px;overflow-x:auto;margin-bottom:14px;padding-bottom:2px">
+          <sc-for list="{{ navItems }}" as="n" hint-placeholder-count="4">
+            <a href="{{ n.href }}" style="display:flex;align-items:center;gap:5px;padding:7px 12px;border-radius:20px;font-size:11px;font-weight:600;white-space:nowrap;flex-shrink:0;text-decoration:none;background:rgba(69,137,255,0.08);color:#4589ff;border:1px solid rgba(69,137,255,0.2)">
+              <span>{{ n.icon }}</span>{{ n.label }}
+            </a>
+          </sc-for>
+        </div>
+      </sc-if>
+
+      <sc-if value="{{ usingDemo }}" hint-placeholder-val="{{ false }}">
+        <div style="display:flex;align-items:center;gap:10px;background:rgba(240,180,41,0.08);border:1px solid rgba(240,180,41,0.3);border-radius:10px;padding:10px 16px;margin-bottom:16px;font-size:11.5px;color:#f0b429">
+          <span>⚠</span><span>{{ demoMessage }}</span>
+          <button onclick="{{ retryFetch }}" style="margin-left:auto;background:none;border:1px solid rgba(240,180,41,0.4);border-radius:6px;padding:5px 12px;color:#f0b429;font-size:11px;cursor:pointer;font-family:inherit;white-space:nowrap;flex-shrink:0">Coba sambungkan ulang</button>
+        </div>
+      </sc-if>
+
+      <div style="display:flex;align-items:flex-start;justify-content:space-between;margin-bottom:16px;gap:10px;flex-wrap:wrap">
+        <div>
+          <div style="font-size:17px;font-weight:700">Trade History</div>
+          <div style="font-size:11px;color:#4a5878;margin-top:2px">{{ subtitle }}</div>
+        </div>
+        <button onclick="{{ retryFetch }}" style="background:none;border:1px solid #1e2d45;border-radius:6px;padding:6px 12px;font-size:11px;color:#8a9bba;cursor:pointer;font-family:inherit">↻ Refresh</button>
+      </div>
+
+      <div style="display:grid;grid-template-columns:{{ kpiCols }};gap:10px;margin-bottom:16px">
+        <div style="background:#111722;border:1px solid #1e2d45;border-radius:10px;padding:14px 16px;position:relative;overflow:hidden">
+          <div style="position:absolute;top:0;left:0;right:0;height:2px;background:#00d68f;opacity:.8"></div>
+          <div style="font-size:10px;font-weight:600;color:#4a5878;text-transform:uppercase;letter-spacing:.6px;margin-bottom:7px">Total Wins</div>
+          <div style="font-size:20px;font-weight:700;font-family:'JetBrains Mono',monospace;color:#00d68f">{{ wins }}</div>
+          <div style="font-size:10px;color:#4a5878;margin-top:5px;font-family:'JetBrains Mono',monospace">{{ grossProfit }} gross profit</div>
+        </div>
+        <div style="background:#111722;border:1px solid #1e2d45;border-radius:10px;padding:14px 16px;position:relative;overflow:hidden">
+          <div style="position:absolute;top:0;left:0;right:0;height:2px;background:#f0455a;opacity:.8"></div>
+          <div style="font-size:10px;font-weight:600;color:#4a5878;text-transform:uppercase;letter-spacing:.6px;margin-bottom:7px">Total Losses</div>
+          <div style="font-size:20px;font-weight:700;font-family:'JetBrains Mono',monospace;color:#f0455a">{{ losses }}</div>
+          <div style="font-size:10px;color:#4a5878;margin-top:5px;font-family:'JetBrains Mono',monospace">{{ grossLoss }} gross loss</div>
+        </div>
+        <div style="background:#111722;border:1px solid #1e2d45;border-radius:10px;padding:14px 16px;position:relative;overflow:hidden">
+          <div style="position:absolute;top:0;left:0;right:0;height:2px;background:{{ netPnlColor }};opacity:.8"></div>
+          <div style="font-size:10px;font-weight:600;color:#4a5878;text-transform:uppercase;letter-spacing:.6px;margin-bottom:7px">Net P&amp;L</div>
+          <div style="font-size:20px;font-weight:700;font-family:'JetBrains Mono',monospace;color:{{ netPnlColor }}">{{ netPnl }}</div>
+          <div style="font-size:10px;color:#4a5878;margin-top:5px;font-family:'JetBrains Mono',monospace">After fees: {{ afterFees }}</div>
+        </div>
+        <div style="background:#111722;border:1px solid #1e2d45;border-radius:10px;padding:14px 16px;position:relative;overflow:hidden">
+          <div style="position:absolute;top:0;left:0;right:0;height:2px;background:#f0b429;opacity:.8"></div>
+          <div style="font-size:10px;font-weight:600;color:#4a5878;text-transform:uppercase;letter-spacing:.6px;margin-bottom:7px">Total Fees Paid</div>
+          <div style="font-size:20px;font-weight:700;font-family:'JetBrains Mono',monospace;color:#f0b429">{{ fees }}</div>
+          <div style="font-size:10px;color:#4a5878;margin-top:5px;font-family:'JetBrains Mono',monospace">Avg slip: {{ avgSlip }}</div>
+        </div>
+      </div>
+
+      <div style="display:flex;gap:6px;margin-bottom:16px;align-items:center;flex-wrap:wrap">
+        <sc-for list="{{ tradeFilters }}" as="tf" hint-placeholder-count="5">
+          <button onclick="{{ tf.onClick }}" style="padding:4px 11px;border-radius:20px;font-size:10.5px;font-weight:600;cursor:pointer;border:1px solid {{ tf.border }};background:{{ tf.bg }};color:{{ tf.color }};white-space:nowrap;font-family:inherit">{{ tf.label }}</button>
+        </sc-for>
+        <input value="{{ symFilterInput }}" oninput="{{ onSymFilterInput }}" placeholder="Symbol..." style="margin-left:auto;width:130px;background:#0f1420;border:1px solid #1e2d45;border-radius:6px;padding:5px 9px;font-size:10.5px;color:#e6eaf2;outline:none;font-family:inherit;box-sizing:border-box" />
+      </div>
+
+      <div style="background:#111722;border:1px solid #1e2d45;border-radius:10px;overflow:hidden">
+        <div style="padding:12px 14px;border-bottom:1px solid #1e2d45;display:flex;align-items:center;justify-content:space-between">
+          <div style="font-size:11px;font-weight:600;color:#8a9bba;text-transform:uppercase;letter-spacing:.5px">Trade History</div>
+          <div style="font-size:10.5px;color:#4a5878">{{ countLabel }}</div>
+        </div>
+        <div style="overflow-x:auto">
+          <table style="width:100%;border-collapse:collapse;font-size:11px;min-width:900px">
+            <thead>
+              <tr>
+                <th style="padding:9px 10px;text-align:left;font-size:9.5px;font-weight:600;color:#4a5878;text-transform:uppercase;letter-spacing:.5px;border-bottom:1px solid #1e2d45;background:#0b0e11;white-space:nowrap">Time</th>
+                <th style="padding:9px 10px;text-align:left;font-size:9.5px;font-weight:600;color:#4a5878;text-transform:uppercase;letter-spacing:.5px;border-bottom:1px solid #1e2d45;background:#0b0e11;white-space:nowrap">Symbol</th>
+                <th style="padding:9px 10px;text-align:left;font-size:9.5px;font-weight:600;color:#4a5878;text-transform:uppercase;letter-spacing:.5px;border-bottom:1px solid #1e2d45;background:#0b0e11;white-space:nowrap">Side</th>
+                <th style="padding:9px 10px;text-align:right;font-size:9.5px;font-weight:600;color:#4a5878;text-transform:uppercase;letter-spacing:.5px;border-bottom:1px solid #1e2d45;background:#0b0e11;white-space:nowrap">Price</th>
+                <th style="padding:9px 10px;text-align:right;font-size:9.5px;font-weight:600;color:#4a5878;text-transform:uppercase;letter-spacing:.5px;border-bottom:1px solid #1e2d45;background:#0b0e11;white-space:nowrap">Cost</th>
+                <th style="padding:9px 10px;text-align:right;font-size:9.5px;font-weight:600;color:#4a5878;text-transform:uppercase;letter-spacing:.5px;border-bottom:1px solid #1e2d45;background:#0b0e11;white-space:nowrap">Fee</th>
+                <th style="padding:9px 10px;text-align:right;font-size:9.5px;font-weight:600;color:#4a5878;text-transform:uppercase;letter-spacing:.5px;border-bottom:1px solid #1e2d45;background:#0b0e11;white-space:nowrap">Slip%</th>
+                <th style="padding:9px 10px;text-align:right;font-size:9.5px;font-weight:600;color:#4a5878;text-transform:uppercase;letter-spacing:.5px;border-bottom:1px solid #1e2d45;background:#0b0e11;white-space:nowrap">PnL</th>
+                <th style="padding:9px 10px;text-align:left;font-size:9.5px;font-weight:600;color:#4a5878;text-transform:uppercase;letter-spacing:.5px;border-bottom:1px solid #1e2d45;background:#0b0e11;white-space:nowrap">Origin</th>
+              </tr>
+            </thead>
+            <tbody>
+              <sc-if value="{{ hasTrades }}" hint-placeholder-val="{{ true }}">
+                <sc-for list="{{ rows }}" as="t" hint-placeholder-count="6">
+                  <tr>
+                    <td style="padding:10px;border-bottom:1px solid rgba(30,45,69,0.5);color:#8a9bba;font-family:'JetBrains Mono',monospace;white-space:nowrap">{{ t.time }}</td>
+                    <td style="padding:10px;border-bottom:1px solid rgba(30,45,69,0.5);font-weight:700;white-space:nowrap">{{ t.symbol }}</td>
+                    <td style="padding:10px;border-bottom:1px solid rgba(30,45,69,0.5);white-space:nowrap"><span style="display:inline-block;padding:2px 7px;border-radius:4px;font-size:9.5px;font-weight:700;background:{{ t.sideBg }};color:{{ t.sideColor }}">{{ t.side }}</span></td>
+                    <td style="padding:10px;text-align:right;border-bottom:1px solid rgba(30,45,69,0.5);font-family:'JetBrains Mono',monospace;color:#8a9bba;white-space:nowrap">{{ t.price }}</td>
+                    <td style="padding:10px;text-align:right;border-bottom:1px solid rgba(30,45,69,0.5);font-family:'JetBrains Mono',monospace;color:#8a9bba;white-space:nowrap">{{ t.cost }}</td>
+                    <td style="padding:10px;text-align:right;border-bottom:1px solid rgba(30,45,69,0.5);font-family:'JetBrains Mono',monospace;color:#f0b429;white-space:nowrap">{{ t.fee }}</td>
+                    <td style="padding:10px;text-align:right;border-bottom:1px solid rgba(30,45,69,0.5);font-family:'JetBrains Mono',monospace;color:{{ t.slipColor }};white-space:nowrap">{{ t.slip }}</td>
+                    <td style="padding:10px;text-align:right;border-bottom:1px solid rgba(30,45,69,0.5);font-family:'JetBrains Mono',monospace;font-weight:600;color:{{ t.pnlColor }};white-space:nowrap">{{ t.pnl }}</td>
+                    <td style="padding:10px;border-bottom:1px solid rgba(30,45,69,0.5);white-space:nowrap"><span title="{{ t.originFull }}" style="display:inline-block;max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:9px;padding:2px 5px;border-radius:3px;background:#0b0e11;color:#4a5878;border:1px solid #1e2d45">{{ t.origin }}</span></td>
+                  </tr>
+                </sc-for>
+              </sc-if>
+              <sc-if value="{{ hasNoTrades }}" hint-placeholder-val="{{ false }}">
+                <tr><td colspan="9" style="text-align:center;padding:32px;color:#4a5878">📋 Tidak ada trade yang cocok dengan filter</td></tr>
+              </sc-if>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </main>
+  </div>
+</div>
+
+</x-dc>
+<script type="text/x-dc" data-dc-script>
+
+function fmtUSD(v, d = 2) { if (v == null) return '—'; return '$' + Number(v).toLocaleString('en-US', { minimumFractionDigits: d, maximumFractionDigits: d }); }
+function signUSD(v) { if (v == null) return '—'; return (v >= 0 ? '+' : '') + fmtUSD(v); }
+
+function demoTrades() {
+  const now = Date.now();
+  const syms = ['ALT/USDT', 'SUI/USDT', 'PEPE/USDT', 'CRV/USDT', 'KAT/USDT', 'ZBT/USDT'];
+  return Array.from({ length: 24 }, (_, i) => {
+    const win = i % 3 !== 0;
+    const price = 0.5 + (i * 0.37) % 5;
+    return {
+      timestamp: new Date(now - i * 3600e3 * 2.3).toISOString(),
+      symbol: syms[i % syms.length],
+      side: i % 2 === 0 ? 'buy' : 'sell',
+      order_type: 'market',
+      executed_price: price,
+      filled: 100 + i * 4,
+      cost: price * (100 + i * 4),
+      fee_cost: price * (100 + i * 4) * 0.001,
+      slippage_pct: (i % 5) * 0.03,
+      realized_pnl: i % 2 === 0 ? null : (win ? 1 : -1) * (5 + i * 1.7),
+      stop_loss_price: price * 0.96,
+      take_profit_price: price * 1.05,
+      signal_origin: 'scalp_volatile|RIDE_WAVE|score=' + (60 + i),
+    };
+  });
+}
+
+class Component extends DCLogic {
+  state = {
+    apiBase: 'http://localhost:8000/api', apiKey: '',
+    trades: [], usingDemo: false, demoMessage: '', apiOnline: false,
+    filter: 'all', symFilter: '', symFilterInput: '',
+  };
+
+  componentDidMount() {
+    try {
+      const b = localStorage.getItem('gs_api_base'); if (b) this.state.apiBase = b;
+      const k = localStorage.getItem('gs_api_key'); if (k) this.state.apiKey = k;
+    } catch (e) {}
+    this.state.isMobile = window.innerWidth <= 768;
+    this._onResize = () => this.setState({ isMobile: window.innerWidth <= 768 });
+    window.addEventListener('resize', this._onResize);
+    this.fetchData();
+  }
+  componentWillUnmount() { if (this._onResize) window.removeEventListener('resize', this._onResize); }
+
+  toggleSidebar = () => this.setState(s => ({ sidebarOpen: !s.sidebarOpen }));
+  closeSidebar = () => this.setState({ sidebarOpen: false });
+
+  async fetchData() {
+    try {
+      const ctrl = new AbortController();
+      const tid = setTimeout(() => ctrl.abort(), 6000);
+      const hdrs = {}; if (this.state.apiKey) hdrs['X-API-Key'] = this.state.apiKey;
+      const r = await fetch(this.state.apiBase + '/trades?limit=200', { signal: ctrl.signal, headers: hdrs });
+      clearTimeout(tid);
+      if (!r.ok) throw new Error('http ' + r.status);
+      const data = await r.json();
+      if (!data || !Array.isArray(data.trades)) throw new Error('bad payload');
+      this.setState({ trades: data.trades, usingDemo: false, apiOnline: true });
+    } catch (e) {
+      this.setState({
+        trades: demoTrades(), usingDemo: true, apiOnline: false,
+        demoMessage: this.state.apiKey ? 'Tidak bisa menyambung ke bot. Menampilkan data contoh.' : 'API Key belum diset (atur di Gate Scanner → Settings). Menampilkan data contoh.',
+      });
+    }
+  }
+
+  retryFetch = () => this.fetchData();
+  setFilter(f) { this.setState({ filter: f }); }
+  onSymFilterInput = (e) => this.setState({ symFilter: e.target.value.toLowerCase(), symFilterInput: e.target.value });
+
+  renderVals() {
+    const isMobile = !!this.state.isMobile;
+    const navItems = [
+      { icon: '⬛', label: 'Dashboard', href: 'Dashboard.dc.html' },
+      { icon: '👁', label: 'Watchlist', href: 'Watchlist.dc.html' },
+      { icon: '📌', label: 'Positions', href: 'Positions.dc.html' },
+      { icon: '🎯', label: 'Gate', href: 'Gate Scanner.dc.html' },
+    ];
+
+    let trades = [...this.state.trades];
+    if (this.state.filter === 'wins') trades = trades.filter(t => (t.realized_pnl || 0) > 0);
+    if (this.state.filter === 'losses') trades = trades.filter(t => (t.realized_pnl || 0) < 0);
+    if (this.state.filter === 'buy') trades = trades.filter(t => t.side === 'buy');
+    if (this.state.filter === 'sell') trades = trades.filter(t => t.side === 'sell');
+    if (this.state.symFilter) trades = trades.filter(t => (t.symbol || '').toLowerCase().includes(this.state.symFilter));
+    trades.sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
+
+    const closed = this.state.trades.filter(t => t.realized_pnl !== null && t.realized_pnl !== undefined);
+    const wins = closed.filter(t => t.realized_pnl > 0);
+    const losses = closed.filter(t => t.realized_pnl < 0);
+    const grossP = wins.reduce((a, t) => a + t.realized_pnl, 0);
+    const grossL = losses.reduce((a, t) => a + t.realized_pnl, 0);
+    const netPnl = grossP + grossL;
+    const fees = this.state.trades.reduce((a, t) => a + (t.fee_cost || 0), 0);
+    const slipArr = this.state.trades.filter(t => t.slippage_pct != null);
+    const avgSlip = slipArr.length ? slipArr.reduce((a, t) => a + (t.slippage_pct || 0), 0) / slipArr.length : 0;
+    const winRate = closed.length ? (wins.length / closed.length * 100).toFixed(1) : '0';
+
+    const rows = trades.map(t => {
+      const pnl = t.realized_pnl;
+      const hasPnl = pnl !== null && pnl !== undefined;
+      const origin = t.signal_origin || '—';
+      return {
+        time: new Date(t.timestamp).toLocaleString('id-ID', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' }),
+        symbol: t.symbol,
+        side: (t.side || '').toUpperCase(),
+        sideBg: t.side === 'buy' ? 'rgba(0,214,143,0.08)' : 'rgba(240,69,90,0.08)',
+        sideColor: t.side === 'buy' ? '#00d68f' : '#f0455a',
+        price: fmtUSD(t.executed_price), cost: fmtUSD(t.cost, 2), fee: fmtUSD(t.fee_cost, 5),
+        slip: (t.slippage_pct || 0).toFixed(4) + '%', slipColor: (t.slippage_pct || 0) > 0.1 ? '#f0455a' : '#4a5878',
+        pnl: hasPnl ? signUSD(pnl) : 'open', pnlColor: hasPnl ? (pnl >= 0 ? '#00d68f' : '#f0455a') : '#4a5878',
+        origin: origin.length > 40 ? origin.slice(0, 40) + '…' : origin, originFull: origin,
+      };
+    });
+
+    const filterOpts = [
+      ['all', 'All', '#8a9bba', '#1e2d45'], ['wins', '✅ Wins', '#00d68f', '#00d68f'],
+      ['losses', '❌ Losses', '#f0455a', '#f0455a'], ['buy', 'BUY', '#8a9bba', '#1e2d45'], ['sell', 'SELL', '#8a9bba', '#1e2d45'],
+    ];
+    const tradeFilters = filterOpts.map(([val, label, activeColor, activeBorder]) => {
+      const active = this.state.filter === val;
+      return { label, onClick: () => this.setFilter(val), color: active ? activeColor : '#8a9bba', border: active ? activeBorder : '#1e2d45', bg: active ? activeColor + '18' : 'transparent' };
+    });
+
+    const sidebarStyle = isMobile
+      ? 'width:220px;flex-shrink:0;background:#111722;padding:12px 6px;display:flex;flex-direction:column;gap:2px;position:fixed;top:56px;bottom:0;left:0;z-index:120;transform:translateX(' + (this.state.sidebarOpen ? '0' : '-100%') + ');transition:transform .25s ease;box-shadow:0 0 40px rgba(0,0,0,0.6);overflow-y:auto'
+      : 'width:220px;flex-shrink:0;background:#111722;border-right:1px solid #1e2d45;padding:12px 6px;display:flex;flex-direction:column;gap:2px';
+
+    return {
+      isMobile, showSidebar: !isMobile, showBackdrop: isMobile && !!this.state.sidebarOpen, sidebarStyle,
+      toggleSidebar: this.toggleSidebar, closeSidebar: this.closeSidebar, mainPadding: isMobile ? '12px' : '20px', navItems,
+      kpiCols: isMobile ? 'repeat(2,1fr)' : 'repeat(4,1fr)',
+      wsColor: this.state.apiOnline ? '#00d68f' : '#f0455a',
+      wsAnim: this.state.apiOnline ? 'pulse 2s infinite' : 'none',
+      wsLabel: this.state.apiOnline ? 'LIVE' : 'OFFLINE',
+      retryFetch: this.retryFetch,
+      usingDemo: this.state.usingDemo, demoMessage: this.state.demoMessage,
+      subtitle: closed.length + ' closed · Win Rate: ' + winRate + '%',
+      wins: wins.length, losses: losses.length,
+      grossProfit: fmtUSD(grossP, 4), grossLoss: fmtUSD(grossL, 4),
+      netPnl: signUSD(netPnl), netPnlColor: netPnl >= 0 ? '#00d68f' : '#f0455a',
+      afterFees: signUSD(netPnl - fees), fees: fmtUSD(fees, 4), avgSlip: avgSlip.toFixed(4) + '%',
+      tradeFilters, symFilterInput: this.state.symFilterInput, onSymFilterInput: this.onSymFilterInput,
+      countLabel: trades.length + ' trades ditampilkan',
+      hasTrades: rows.length > 0, hasNoTrades: rows.length === 0,
+      rows,
+    };
+  }
+}
+
+</script>
+</body>
+</html>

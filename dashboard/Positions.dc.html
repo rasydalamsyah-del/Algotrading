@@ -1,0 +1,416 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+
+<helmet>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <style>
+    @keyframes pulse{0%,100%{opacity:1}50%{opacity:.3}}
+    @keyframes shimmer{0%{background-position:-300px 0}100%{background-position:300px 0}}
+    .skel{background:linear-gradient(90deg,#111722 25%,#1a2235 37%,#111722 63%);background-size:400px 100%;animation:shimmer 1.4s ease infinite;border-radius:6px}
+    body{margin:0;background:#0b0e11;-webkit-font-smoothing:antialiased}
+    a{color:#4589ff}
+    a:hover{color:#6ea3ff}
+    ::-webkit-scrollbar{width:5px;height:5px}
+    ::-webkit-scrollbar-thumb{background:#253550;border-radius:3px}
+  </style>
+</helmet>
+
+<div style="min-height:100vh;background:#0b0e11;color:#e6eaf2;font-family:'Inter',system-ui,sans-serif;font-size:13px;line-height:1.5">
+
+  <!-- TOASTS -->
+  <div style="position:fixed;bottom:16px;right:16px;z-index:300;display:flex;flex-direction:column;gap:7px;max-width:calc(100vw - 32px)">
+    <sc-for list="{{ toasts }}" as="t" hint-placeholder-count="0">
+      <div style="background:#161e2e;border:1px solid #1e2d45;border-left:3px solid {{ t.accent }};border-radius:6px;padding:10px 14px;display:flex;align-items:flex-start;gap:9px;box-shadow:0 4px 24px rgba(0,0,0,0.5);min-width:260px">
+        <span style="font-size:15px;flex-shrink:0">{{ t.icon }}</span>
+        <div style="flex:1">
+          <div style="font-size:11.5px;font-weight:700">{{ t.title }}</div>
+          <div style="font-size:10px;color:#4a5878;margin-top:1px">{{ t.msg }}</div>
+        </div>
+        <span onclick="{{ t.onClose }}" style="cursor:pointer;color:#4a5878;font-size:13px;flex-shrink:0">✕</span>
+      </div>
+    </sc-for>
+  </div>
+
+  <!-- CONFIRM MODAL -->
+  <sc-if value="{{ showConfirm }}" hint-placeholder-val="{{ false }}">
+    <div style="position:fixed;inset:0;z-index:250;background:rgba(0,0,0,0.75);backdrop-filter:blur(4px);display:flex;align-items:center;justify-content:center;padding:16px">
+      <div style="background:#111722;border:1px solid #1e2d45;border-radius:10px;padding:22px;width:100%;max-width:420px;box-shadow:0 20px 60px rgba(0,0,0,0.7)">
+        <div style="font-size:15px;font-weight:700;margin-bottom:10px">{{ confirmTitle }}</div>
+        <div style="color:#8a9bba;font-size:12px;line-height:1.6;margin-bottom:18px;white-space:pre-line">{{ confirmMsg }}</div>
+        <div style="display:flex;gap:8px;justify-content:flex-end;flex-wrap:wrap">
+          <button onclick="{{ confirmCancel }}" style="background:none;border:1px solid #1e2d45;border-radius:6px;padding:8px 16px;font-size:11.5px;color:#8a9bba;cursor:pointer;font-family:inherit">Batal</button>
+          <button onclick="{{ confirmYes }}" style="background:#f0455a;border:none;border-radius:6px;padding:8px 16px;font-size:11.5px;color:#fff;font-weight:700;cursor:pointer;font-family:inherit">{{ confirmActionLabel }}</button>
+        </div>
+      </div>
+    </div>
+  </sc-if>
+
+  <nav style="position:sticky;top:0;z-index:80;height:56px;background:rgba(11,14,17,0.95);backdrop-filter:blur(20px);border-bottom:1px solid #1e2d45;display:flex;align-items:center;padding:0 20px;gap:14px">
+    <sc-if value="{{ isMobile }}" hint-placeholder-val="{{ false }}">
+      <button onclick="{{ toggleSidebar }}" style="background:none;border:none;color:#8a9bba;font-size:20px;cursor:pointer;padding:4px;flex-shrink:0;line-height:1">☰</button>
+    </sc-if>
+    <a href="Dashboard.dc.html" style="display:flex;align-items:center;gap:9px;font-weight:700;font-size:14px;flex-shrink:0;text-decoration:none;color:#e6eaf2">
+      <div style="width:30px;height:30px;border-radius:8px;background:linear-gradient(135deg,#4589ff,#00d68f);display:flex;align-items:center;justify-content:center;font-size:15px">📈</div>
+      AlgoTrader <span style="color:#4589ff;margin-left:2px">Pro</span> <span style="font-size:10px;color:#4a5878;font-weight:400">v7.0</span>
+    </a>
+    <div style="flex:1"></div>
+    <div style="display:flex;align-items:center;gap:5px;font-size:10px;color:#4a5878;font-family:'JetBrains Mono',monospace">
+      <div style="width:7px;height:7px;border-radius:50%;background:{{ wsColor }};animation:{{ wsAnim }}"></div>
+      {{ wsLabel }}
+    </div>
+  </nav>
+
+  <div style="display:flex;min-height:calc(100vh - 56px)">
+    <sc-if value="{{ showBackdrop }}" hint-placeholder-val="{{ false }}">
+      <div onclick="{{ closeSidebar }}" style="position:fixed;inset:0;top:56px;background:rgba(0,0,0,0.6);z-index:110"></div>
+    </sc-if>
+    <aside style="{{ sidebarStyle }}">
+      <div style="padding:6px 10px 3px;font-size:9px;font-weight:700;color:#4a5878;letter-spacing:1.2px;text-transform:uppercase">Overview</div>
+      <a href="Dashboard.dc.html" style="display:flex;align-items:center;gap:9px;padding:8px 10px;border-radius:6px;color:#8a9bba;font-size:12px;font-weight:500;cursor:pointer;text-decoration:none" style-hover="color:#e6eaf2;background:#1a2235">
+        <span style="font-size:13px">⬛</span> Dashboard
+      </a>
+      <a href="Watchlist.dc.html" style="display:flex;align-items:center;gap:9px;padding:8px 10px;border-radius:6px;color:#8a9bba;font-size:12px;font-weight:500;cursor:pointer;text-decoration:none" style-hover="color:#e6eaf2;background:#1a2235">
+        <span style="font-size:13px">👁</span> Watchlist
+      </a>
+      <div style="height:1px;background:#1e2d45;margin:6px 0"></div>
+      <div style="padding:6px 10px 3px;font-size:9px;font-weight:700;color:#4a5878;letter-spacing:1.2px;text-transform:uppercase">Trading</div>
+      <div style="display:flex;align-items:center;gap:9px;padding:8px 10px;border-radius:6px;color:#f0455a;background:rgba(240,69,90,0.08);border:1px solid rgba(240,69,90,0.2);font-size:12px;font-weight:500;cursor:pointer">
+        <span style="font-size:13px">📌</span> Open Positions
+        <span style="margin-left:auto;font-size:10px;font-weight:700;padding:1px 5px;border-radius:8px;background:rgba(240,69,90,0.08);color:#f0455a">{{ posCount }}</span>
+      </div>
+      <a href="Trade History.dc.html" style="display:flex;align-items:center;gap:9px;padding:8px 10px;border-radius:6px;color:#8a9bba;font-size:12px;font-weight:500;cursor:pointer;text-decoration:none" style-hover="color:#e6eaf2;background:#1a2235"
+        <span style="font-size:13px">📋</span> Trade History
+      </a>
+      <div style="height:1px;background:#1e2d45;margin:6px 0"></div>
+      <div style="padding:6px 10px 3px;font-size:9px;font-weight:700;color:#4a5878;letter-spacing:1.2px;text-transform:uppercase">Analysis</div>
+      <a href="Analytics.dc.html" style="display:flex;align-items:center;gap:9px;padding:8px 10px;border-radius:6px;color:#8a9bba;font-size:12px;font-weight:500;cursor:pointer;text-decoration:none" style-hover="color:#e6eaf2;background:#1a2235"
+        <span style="font-size:13px">📊</span> Analytics &amp; PnL
+      </a>
+      <a href="Diagnosa.dc.html" style="display:flex;align-items:center;gap:9px;padding:8px 10px;border-radius:6px;color:#8a9bba;font-size:12px;font-weight:500;cursor:pointer;text-decoration:none" style-hover="color:#e6eaf2;background:#1a2235">
+        <span style="font-size:13px">🔍</span> Diagnosa Sinyal
+      </a>
+      <a href="Risk Monitor.dc.html" style="display:flex;align-items:center;gap:9px;padding:8px 10px;border-radius:6px;color:#8a9bba;font-size:12px;font-weight:500;cursor:pointer;text-decoration:none" style-hover="color:#e6eaf2;background:#1a2235">
+        <span style="font-size:13px">🛡</span> Risk Monitor
+      </a>
+      <div style="height:1px;background:#1e2d45;margin:6px 0"></div>
+      <div style="padding:6px 10px 3px;font-size:9px;font-weight:700;color:#4a5878;letter-spacing:1.2px;text-transform:uppercase">System</div>
+      <a href="AI Learner.dc.html" style="display:flex;align-items:center;gap:9px;padding:8px 10px;border-radius:6px;color:#8a9bba;font-size:12px;font-weight:500;cursor:pointer;text-decoration:none" style-hover="color:#e6eaf2;background:#1a2235">
+        <span style="font-size:13px">🧠</span> AI Learner
+      </a>
+      <a href="Gate Scanner.dc.html" style="display:flex;align-items:center;gap:9px;padding:8px 10px;border-radius:6px;color:#f0b429;font-size:12px;font-weight:700;cursor:pointer;text-decoration:none;background:linear-gradient(135deg,rgba(168,85,247,.12),rgba(245,158,11,.12));border:1px solid rgba(245,158,11,.25);margin-top:4px">
+        <span style="font-size:13px">🎯</span> Gate Scanner
+      </a>
+      <a href="Settings.dc.html" style="display:flex;align-items:center;gap:9px;padding:8px 10px;border-radius:6px;color:#8a9bba;font-size:12px;font-weight:500;cursor:pointer;text-decoration:none" style-hover="color:#e6eaf2;background:#1a2235">
+        <span style="font-size:13px">⚙️</span> Settings
+      </a>
+    </aside>
+
+    <main style="flex:1;padding:{{ mainPadding }};min-width:0">
+
+      <sc-if value="{{ isInitialLoading }}" hint-placeholder-val="{{ true }}">
+        <div style="margin-bottom:14px"><div class="skel" style="height:20px;width:150px;margin-bottom:6px"></div><div class="skel" style="height:12px;width:220px"></div></div>
+        <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-bottom:16px">
+          <div class="skel" style="height:80px"></div><div class="skel" style="height:80px"></div><div class="skel" style="height:80px"></div><div class="skel" style="height:80px"></div>
+        </div>
+        <div class="skel" style="height:200px"></div>
+      </sc-if>
+      <sc-if value="{{ showContent }}" hint-placeholder-val="{{ false }}">
+
+      <sc-if value="{{ isMobile }}" hint-placeholder-val="{{ false }}">
+        <div style="display:flex;gap:6px;overflow-x:auto;margin-bottom:14px;padding-bottom:2px">
+          <sc-for list="{{ navItems }}" as="n" hint-placeholder-count="4">
+            <a href="{{ n.href }}" style="display:flex;align-items:center;gap:5px;padding:7px 12px;border-radius:20px;font-size:11px;font-weight:600;white-space:nowrap;flex-shrink:0;text-decoration:none;background:rgba(69,137,255,0.08);color:#4589ff;border:1px solid rgba(69,137,255,0.2)">
+              <span>{{ n.icon }}</span>{{ n.label }}
+            </a>
+          </sc-for>
+        </div>
+      </sc-if>
+
+      <sc-if value="{{ usingDemo }}" hint-placeholder-val="{{ false }}">
+        <div style="display:flex;align-items:center;gap:10px;background:rgba(240,180,41,0.08);border:1px solid rgba(240,180,41,0.3);border-radius:10px;padding:10px 16px;margin-bottom:16px;font-size:11.5px;color:#f0b429">
+          <span>⚠</span><span>{{ demoMessage }}</span>
+          <button onclick="{{ retryFetch }}" style="margin-left:auto;background:none;border:1px solid rgba(240,180,41,0.4);border-radius:6px;padding:5px 12px;color:#f0b429;font-size:11px;cursor:pointer;font-family:inherit;white-space:nowrap;flex-shrink:0">Coba sambungkan ulang</button>
+        </div>
+      </sc-if>
+
+      <div style="display:flex;align-items:flex-start;justify-content:space-between;margin-bottom:16px;gap:10px;flex-wrap:wrap">
+        <div>
+          <div style="font-size:17px;font-weight:700">Open Positions</div>
+          <div style="font-size:11px;color:#4a5878;margin-top:2px">{{ subtitle }}</div>
+        </div>
+        <div style="display:flex;gap:8px">
+          <button onclick="{{ retryFetch }}" style="background:none;border:1px solid #1e2d45;border-radius:6px;padding:6px 12px;font-size:11px;color:#8a9bba;cursor:pointer;font-family:inherit">↻ Refresh</button>
+          <button onclick="{{ panicAll }}" style="background:#f0455a;border:none;border-radius:6px;padding:6px 12px;font-size:11px;color:#fff;font-weight:700;cursor:pointer;font-family:inherit">🆘 Close All</button>
+        </div>
+      </div>
+
+      <div style="display:grid;grid-template-columns:{{ kpiCols }};gap:10px;margin-bottom:16px">
+        <div style="background:#111722;border:1px solid #1e2d45;border-radius:10px;padding:14px 16px;position:relative;overflow:hidden">
+          <div style="position:absolute;top:0;left:0;right:0;height:2px;background:#4589ff;opacity:.8"></div>
+          <div style="font-size:10px;font-weight:600;color:#4a5878;text-transform:uppercase;letter-spacing:.6px;margin-bottom:7px">Open Positions</div>
+          <div style="font-size:20px;font-weight:700;font-family:'JetBrains Mono',monospace;color:#4589ff">{{ posCount }}</div>
+        </div>
+        <div style="background:#111722;border:1px solid #1e2d45;border-radius:10px;padding:14px 16px;position:relative;overflow:hidden">
+          <div style="position:absolute;top:0;left:0;right:0;height:2px;background:{{ openPnlColor }};opacity:.8"></div>
+          <div style="font-size:10px;font-weight:600;color:#4a5878;text-transform:uppercase;letter-spacing:.6px;margin-bottom:7px">Total Open PnL</div>
+          <div style="font-size:20px;font-weight:700;font-family:'JetBrains Mono',monospace;color:{{ openPnlColor }}">{{ openPnl }}</div>
+        </div>
+        <div style="background:#111722;border:1px solid #1e2d45;border-radius:10px;padding:14px 16px;position:relative;overflow:hidden">
+          <div style="position:absolute;top:0;left:0;right:0;height:2px;background:#f0b429;opacity:.8"></div>
+          <div style="font-size:10px;font-weight:600;color:#4a5878;text-transform:uppercase;letter-spacing:.6px;margin-bottom:7px">Total Exposure</div>
+          <div style="font-size:20px;font-weight:700;font-family:'JetBrains Mono',monospace;color:#f0b429">{{ exposure }}</div>
+        </div>
+        <div style="background:#111722;border:1px solid #1e2d45;border-radius:10px;padding:14px 16px;position:relative;overflow:hidden">
+          <div style="position:absolute;top:0;left:0;right:0;height:2px;background:#a78bfa;opacity:.8"></div>
+          <div style="font-size:10px;font-weight:600;color:#4a5878;text-transform:uppercase;letter-spacing:.6px;margin-bottom:7px">Avg Hold Time</div>
+          <div style="font-size:16px;font-weight:700;font-family:'JetBrains Mono',monospace">{{ avgHold }}</div>
+        </div>
+      </div>
+
+      <div style="background:#111722;border:1px solid #1e2d45;border-radius:10px;overflow:hidden">
+        <div style="padding:12px 14px;border-bottom:1px solid #1e2d45;display:flex;align-items:center;justify-content:space-between">
+          <div style="font-size:11px;font-weight:600;color:#8a9bba;text-transform:uppercase;letter-spacing:.5px">All Open Positions</div>
+          <div style="font-size:10.5px;color:#4a5878">Auto-refresh 20s</div>
+        </div>
+        <div style="overflow-x:auto">
+          <table style="width:100%;border-collapse:collapse;font-size:11px;min-width:900px">
+            <thead>
+              <tr>
+                <th style="padding:9px 10px;text-align:left;font-size:9.5px;font-weight:600;color:#4a5878;text-transform:uppercase;letter-spacing:.5px;border-bottom:1px solid #1e2d45;background:#0b0e11;white-space:nowrap">Symbol</th>
+                <th style="padding:9px 10px;text-align:left;font-size:9.5px;font-weight:600;color:#4a5878;text-transform:uppercase;letter-spacing:.5px;border-bottom:1px solid #1e2d45;background:#0b0e11;white-space:nowrap">Profile</th>
+                <th style="padding:9px 10px;text-align:left;font-size:9.5px;font-weight:600;color:#4a5878;text-transform:uppercase;letter-spacing:.5px;border-bottom:1px solid #1e2d45;background:#0b0e11;white-space:nowrap">Side</th>
+                <th style="padding:9px 10px;text-align:right;font-size:9.5px;font-weight:600;color:#4a5878;text-transform:uppercase;letter-spacing:.5px;border-bottom:1px solid #1e2d45;background:#0b0e11;white-space:nowrap">Entry</th>
+                <th style="padding:9px 10px;text-align:right;font-size:9.5px;font-weight:600;color:#4a5878;text-transform:uppercase;letter-spacing:.5px;border-bottom:1px solid #1e2d45;background:#0b0e11;white-space:nowrap">Now</th>
+                <th style="padding:9px 10px;text-align:right;font-size:9.5px;font-weight:600;color:#4a5878;text-transform:uppercase;letter-spacing:.5px;border-bottom:1px solid #1e2d45;background:#0b0e11;white-space:nowrap">PnL</th>
+                <th style="padding:9px 10px;text-align:left;font-size:9.5px;font-weight:600;color:#4a5878;text-transform:uppercase;letter-spacing:.5px;border-bottom:1px solid #1e2d45;background:#0b0e11;white-space:nowrap">SL / TP</th>
+                <th style="padding:9px 10px;text-align:left;font-size:9.5px;font-weight:600;color:#4a5878;text-transform:uppercase;letter-spacing:.5px;border-bottom:1px solid #1e2d45;background:#0b0e11;white-space:nowrap">Duration</th>
+                <th style="padding:9px 10px;text-align:left;font-size:9.5px;font-weight:600;color:#4a5878;text-transform:uppercase;letter-spacing:.5px;border-bottom:1px solid #1e2d45;background:#0b0e11;white-space:nowrap">Status</th>
+                <th style="padding:9px 10px;text-align:center;font-size:9.5px;font-weight:600;color:#4a5878;text-transform:uppercase;letter-spacing:.5px;border-bottom:1px solid #1e2d45;background:#0b0e11;white-space:nowrap">Action</th>
+              </tr>
+            </thead>
+            <tbody>
+              <sc-if value="{{ hasPositions }}" hint-placeholder-val="{{ true }}">
+                <sc-for list="{{ rows }}" as="p" hint-placeholder-count="2">
+                  <tr>
+                    <td style="padding:10px;border-bottom:1px solid rgba(30,45,69,0.5);font-weight:700;white-space:nowrap"><a href="{{ p.detailHref }}" style="color:#e6eaf2;text-decoration:none" style-hover="color:#4589ff">{{ p.symbol }}</a></td>
+                    <td style="padding:10px;border-bottom:1px solid rgba(30,45,69,0.5);white-space:nowrap"><span style="display:inline-flex;padding:2px 7px;border-radius:10px;font-size:9.5px;background:rgba(167,139,250,0.08);color:#a78bfa;font-weight:500">{{ p.profile }}</span></td>
+                    <td style="padding:10px;border-bottom:1px solid rgba(30,45,69,0.5);white-space:nowrap"><span style="display:inline-block;padding:2px 7px;border-radius:4px;font-size:9.5px;font-weight:700;letter-spacing:.4px;background:{{ p.sideBg }};color:{{ p.sideColor }}">{{ p.side }}</span></td>
+                    <td style="padding:10px;text-align:right;border-bottom:1px solid rgba(30,45,69,0.5);font-family:'JetBrains Mono',monospace;color:#8a9bba;white-space:nowrap">{{ p.entry }}</td>
+                    <td style="padding:10px;text-align:right;border-bottom:1px solid rgba(30,45,69,0.5);font-family:'JetBrains Mono',monospace;color:#8a9bba;white-space:nowrap">{{ p.now }}</td>
+                    <td style="padding:10px;text-align:right;border-bottom:1px solid rgba(30,45,69,0.5);font-family:'JetBrains Mono',monospace;font-weight:600;color:{{ p.pnlColor }};white-space:nowrap">{{ p.pnl }}<br/><small>{{ p.pnlPct }}</small></td>
+                    <td style="padding:10px;border-bottom:1px solid rgba(30,45,69,0.5);font-family:'JetBrains Mono',monospace;font-size:10px;white-space:nowrap"><span style="color:#f0455a">{{ p.sl }}</span> / <span style="color:#00d68f">{{ p.tp }}</span></td>
+                    <td style="padding:10px;border-bottom:1px solid rgba(30,45,69,0.5);color:#4a5878;font-size:10px;white-space:nowrap">{{ p.duration }}</td>
+                    <td style="padding:10px;border-bottom:1px solid rgba(30,45,69,0.5);white-space:nowrap"><span style="display:inline-block;padding:2px 7px;border-radius:4px;font-size:9.5px;font-weight:600;background:{{ p.statusBg }};color:{{ p.statusColor }}">{{ p.statusLabel }}</span></td>
+                    <td style="padding:10px;text-align:center;border-bottom:1px solid rgba(30,45,69,0.5);white-space:nowrap"><button onclick="{{ p.onClose }}" style="padding:3px 9px;border-radius:4px;font-size:10px;font-weight:600;cursor:pointer;border:1px solid #1e2d45;background:none;color:#f0455a;font-family:inherit">Close</button></td>
+                  </tr>
+                </sc-for>
+              </sc-if>
+              <sc-if value="{{ hasNoPositions }}" hint-placeholder-val="{{ false }}">
+                <tr><td colspan="10" style="text-align:center;padding:32px;color:#4a5878">📭 No open positions</td></tr>
+              </sc-if>
+            </tbody>
+          </table>
+        </div>
+      </div>
+      </sc-if>
+    </main>
+  </div>
+</div>
+
+</x-dc>
+<script type="text/x-dc" data-dc-script>
+
+function fmtUSD(v, d = 2) { if (v == null) return '—'; return '$' + Number(v).toLocaleString('en-US', { minimumFractionDigits: d, maximumFractionDigits: d }); }
+function signUSD(v) { if (v == null) return '—'; return (v >= 0 ? '+' : '') + fmtUSD(v); }
+function signPct(v) { if (v == null) return '—'; return (v >= 0 ? '+' : '') + Number(v).toFixed(2) + '%'; }
+function calcDuration(entryTime) {
+  if (!entryTime) return '—';
+  const d = (Date.now() - new Date(entryTime).getTime()) / 1000;
+  const h = Math.floor(d / 3600), m = Math.floor((d % 3600) / 60), s = Math.floor(d % 60);
+  return h.toString().padStart(2, '0') + ':' + m.toString().padStart(2, '0') + ':' + s.toString().padStart(2, '0');
+}
+
+function demoPositions() {
+  const now = Date.now();
+  return [
+    { symbol: 'ALT/USDT', side: 'long', entry_price: 0.402, current_price: 0.412, amount: 1200, unrealized_pnl: 22.4, unrealized_pnl_pct: 2.49, stop_loss_price: 0.394, take_profit_price: 0.44, entry_time: new Date(now - 3600e3 * 1.4).toISOString(), signal_origin: 'scalp_volatile|RIDE_WAVE', is_closing: false },
+    { symbol: 'SUI/USDT', side: 'long', entry_price: 4.21, current_price: 4.31, amount: 65, unrealized_pnl: 16.5, unrealized_pnl_pct: 2.37, stop_loss_price: 4.05, take_profit_price: 4.55, entry_time: new Date(now - 3600e3 * 0.6).toISOString(), signal_origin: 'breakout_swift|QUICK_EXIT', is_closing: false },
+  ];
+}
+
+let toastSeq = 0;
+
+class Component extends DCLogic {
+  state = {
+    apiBase: 'http://localhost:8000/api', apiKey: '',
+    positions: [], usingDemo: false, demoMessage: '', apiOnline: false,
+    toasts: [], confirm: null,
+    isInitialLoading: true,
+  };
+
+  toast(type, title, msg) {
+    const id = ++toastSeq;
+    const meta = { success: { icon: '✅', accent: '#00d68f' }, error: { icon: '❌', accent: '#f0455a' }, warn: { icon: '⚠️', accent: '#f0b429' }, info: { icon: 'ℹ️', accent: '#4589ff' } }[type] || {};
+    this.setState(s => ({ toasts: [...s.toasts, { id, title, msg, icon: meta.icon, accent: meta.accent }] }));
+    setTimeout(() => this.setState(s => ({ toasts: s.toasts.filter(t => t.id !== id) })), 5000);
+  }
+  closeToast(id) { this.setState(s => ({ toasts: s.toasts.filter(t => t.id !== id) })); }
+  askConfirm(title, msg, actionLabel, onYes) { this.setState({ confirm: { title, msg, actionLabel, onYes } }); }
+  confirmCancel = () => this.setState({ confirm: null });
+  confirmYes = () => { const c = this.state.confirm; this.setState({ confirm: null }); if (c && c.onYes) c.onYes(); };
+
+  componentDidMount() {
+    try {
+      const b = localStorage.getItem('gs_api_base'); if (b) this.state.apiBase = b;
+      const k = localStorage.getItem('gs_api_key'); if (k) this.state.apiKey = k;
+    } catch (e) {}
+    this.state.isMobile = window.innerWidth <= 768;
+    this._onResize = () => this.setState({ isMobile: window.innerWidth <= 768 });
+    window.addEventListener('resize', this._onResize);
+    this.fetchData();
+    this._timer = setInterval(() => this.fetchData(), 15000);
+    this._clock = setInterval(() => this.forceUpdate(), 1000);
+  }
+  componentWillUnmount() {
+    if (this._timer) clearInterval(this._timer);
+    if (this._clock) clearInterval(this._clock);
+    if (this._onResize) window.removeEventListener('resize', this._onResize);
+  }
+
+  toggleSidebar = () => this.setState(s => ({ sidebarOpen: !s.sidebarOpen }));
+  closeSidebar = () => this.setState({ sidebarOpen: false });
+
+  async fetchData() {
+    try {
+      const ctrl = new AbortController();
+      const tid = setTimeout(() => ctrl.abort(), 6000);
+      const hdrs = {}; if (this.state.apiKey) hdrs['X-API-Key'] = this.state.apiKey;
+      const r = await fetch(this.state.apiBase + '/positions', { signal: ctrl.signal, headers: hdrs });
+      clearTimeout(tid);
+      if (!r.ok) throw new Error('http ' + r.status);
+      const data = await r.json();
+      if (!data || !Array.isArray(data.positions)) throw new Error('bad payload');
+      this.setState({ positions: data.positions, usingDemo: false, apiOnline: true, isInitialLoading: false });
+    } catch (e) {
+      this.setState({
+        positions: demoPositions(), usingDemo: true, apiOnline: false, isInitialLoading: false,
+        demoMessage: this.state.apiKey ? 'Tidak bisa menyambung ke bot. Menampilkan data contoh.' : 'API Key belum diset (atur di Gate Scanner → Settings). Menampilkan data contoh.',
+      });
+    }
+  }
+
+  retryFetch = () => this.fetchData();
+
+  async apiPost(path, body, timeout = 15000) {
+    if (!this.state.apiKey) { this.toast('warn', 'API Key Diperlukan', 'Buka Gate Scanner → Settings dulu.'); return null; }
+    try {
+      const ctrl = new AbortController();
+      const tid = setTimeout(() => ctrl.abort(), timeout);
+      const r = await fetch(this.state.apiBase + path, {
+        method: 'POST', signal: ctrl.signal,
+        headers: { 'Content-Type': 'application/json', 'X-API-Key': this.state.apiKey },
+        body: JSON.stringify(body || {}),
+      });
+      clearTimeout(tid);
+      if (!r.ok) { this.toast('error', 'Gagal', 'HTTP ' + r.status); return null; }
+      return await r.json();
+    } catch (e) { this.toast('error', 'Gagal menghubungi bot', e.message || String(e)); return null; }
+  }
+
+  panicAll = () => {
+    this.askConfirm('🆘 Panic Close', 'Tutup SEMUA posisi terbuka sekarang juga?\nBot akan HALTED setelahnya.', 'Ya, Panic Close', async () => {
+      const r = await this.apiPost('/bot/panic', {}, 60000);
+      if (r) { this.toast('success', '🆘 Panic Done', 'Closed ' + (r.closed_count ?? '?') + '/' + (r.positions_found ?? '?') + ' posisi. Bot HALTED.'); this.fetchData(); }
+    });
+  };
+
+  closePosition = (sym, price) => {
+    this.askConfirm('Tutup Posisi', 'Tutup posisi ' + sym + ' @ ' + fmtUSD(price) + '?\nINI AKAN MENUTUP POSISI SECARA MARKET!', 'Ya, Tutup', async () => {
+      const r = await this.apiPost('/positions/' + encodeURIComponent(sym) + '/close', {});
+      if (r) {
+        if (r.success) { this.toast('success', '✅ Posisi Ditutup', sym + ' berhasil ditutup.'); this.fetchData(); }
+        else this.toast('error', '❌ Gagal', r.message || r.error || 'Unknown error');
+      }
+    });
+  };
+
+  renderVals() {
+    const positions = this.state.positions;
+    const totalPnl = positions.reduce((a, p) => a + (p.unrealized_pnl || 0), 0);
+    const totalExp = positions.reduce((a, p) => a + ((p.entry_price || 0) * (p.amount || 0)), 0);
+    let avgHold = '—';
+    if (positions.length) {
+      const avgSecs = positions.reduce((a, p) => p.entry_time ? a + (Date.now() - new Date(p.entry_time).getTime()) / 1000 : a, 0) / positions.length;
+      avgHold = Math.floor(avgSecs / 3600) + 'h ' + Math.floor((avgSecs % 3600) / 60) + 'm';
+    }
+
+    const rows = positions.map(p => {
+      const pnl = p.unrealized_pnl || 0;
+      const [profRaw, mode] = (p.signal_origin || '').split('|');
+      const prof = (profRaw || 'scalp_volatile').replace(/_/g, ' ');
+      const isBE = p.stop_loss_price && p.entry_price && p.stop_loss_price >= p.entry_price;
+      return {
+        symbol: p.symbol, detailHref: 'Coin Detail.dc.html?symbol=' + encodeURIComponent(p.symbol), profile: prof,
+        side: (p.side || 'long').toUpperCase(),
+        sideBg: (p.side || 'long') === 'long' ? 'rgba(0,214,143,0.08)' : 'rgba(240,69,90,0.08)',
+        sideColor: (p.side || 'long') === 'long' ? '#00d68f' : '#f0455a',
+        entry: fmtUSD(p.entry_price), now: fmtUSD(p.current_price),
+        pnl: signUSD(pnl), pnlPct: signPct(p.unrealized_pnl_pct), pnlColor: pnl >= 0 ? '#00d68f' : '#f0455a',
+        sl: fmtUSD(p.stop_loss_price) + (isBE ? ' ✅BE' : ''), tp: fmtUSD(p.take_profit_price),
+        duration: p.duration_display || calcDuration(p.entry_time),
+        statusLabel: p.is_closing ? 'CLOSING' : 'OPEN',
+        statusBg: p.is_closing ? 'rgba(240,180,41,0.08)' : 'rgba(0,214,143,0.08)',
+        statusColor: p.is_closing ? '#f0b429' : '#00d68f',
+        onClose: () => this.closePosition(p.symbol, p.current_price || 0),
+      };
+    });
+
+    const isMobile = !!this.state.isMobile;
+    const navItems = [
+      { icon: '⬛', label: 'Dashboard', href: 'Dashboard.dc.html' },
+      { icon: '👁', label: 'Watchlist', href: 'Watchlist.dc.html' },
+      { icon: '📌', label: 'Positions', href: 'Positions.dc.html' },
+      { icon: '🎯', label: 'Gate', href: 'Gate Scanner.dc.html' },
+    ];
+
+    const toasts = this.state.toasts.map(t => ({ ...t, onClose: () => this.closeToast(t.id) }));
+    const c = this.state.confirm;
+
+    const sidebarStyle = isMobile
+      ? 'width:220px;flex-shrink:0;background:#111722;padding:12px 6px;display:flex;flex-direction:column;gap:2px;position:fixed;top:56px;bottom:0;left:0;z-index:120;transform:translateX(' + (this.state.sidebarOpen ? '0' : '-100%') + ');transition:transform .25s ease;box-shadow:0 0 40px rgba(0,0,0,0.6);overflow-y:auto'
+      : 'width:220px;flex-shrink:0;background:#111722;border-right:1px solid #1e2d45;padding:12px 6px;display:flex;flex-direction:column;gap:2px';
+
+    return {
+      isMobile, showSidebar: !isMobile, showBackdrop: isMobile && !!this.state.sidebarOpen, sidebarStyle,
+      toggleSidebar: this.toggleSidebar, closeSidebar: this.closeSidebar, mainPadding: isMobile ? '12px' : '20px', navItems,
+      isInitialLoading: this.state.isInitialLoading, showContent: !this.state.isInitialLoading,
+      kpiCols: isMobile ? 'repeat(2,1fr)' : 'repeat(4,1fr)',
+      toasts,
+      showConfirm: !!c, confirmTitle: c ? c.title : '', confirmMsg: c ? c.msg : '',
+      confirmActionLabel: c ? c.actionLabel : 'Ya', confirmCancel: this.confirmCancel, confirmYes: this.confirmYes,
+      wsColor: this.state.apiOnline ? '#00d68f' : '#f0455a',
+      wsAnim: this.state.apiOnline ? 'pulse 2s infinite' : 'none',
+      wsLabel: this.state.apiOnline ? 'LIVE' : 'OFFLINE',
+      retryFetch: this.retryFetch, panicAll: this.panicAll,
+      usingDemo: this.state.usingDemo, demoMessage: this.state.demoMessage,
+      posCount: positions.length,
+      subtitle: positions.length + ' posisi terbuka · Auto-refresh 15s',
+      openPnl: signUSD(totalPnl), openPnlColor: totalPnl >= 0 ? '#00d68f' : '#f0455a',
+      exposure: fmtUSD(totalExp), avgHold,
+      hasPositions: positions.length > 0, hasNoPositions: positions.length === 0,
+      rows,
+    };
+  }
+}
+
+</script>
+</body>
+</html>

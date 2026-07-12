@@ -1,0 +1,277 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+
+<helmet>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <style>
+    @keyframes pulse{0%,100%{opacity:1}50%{opacity:.3}}
+    @keyframes spin{to{transform:rotate(360deg)}}
+    body{margin:0;background:#0b0e11;-webkit-font-smoothing:antialiased}
+    a{color:#4589ff}
+    a:hover{color:#6ea3ff}
+    ::-webkit-scrollbar{width:5px;height:5px}
+    ::-webkit-scrollbar-thumb{background:#253550;border-radius:3px}
+  </style>
+</helmet>
+
+<div style="min-height:100vh;background:#0b0e11;color:#e6eaf2;font-family:'Inter',system-ui,sans-serif;font-size:13px;line-height:1.5">
+
+  <nav style="position:sticky;top:0;z-index:80;height:56px;background:rgba(11,14,17,0.95);backdrop-filter:blur(20px);border-bottom:1px solid #1e2d45;display:flex;align-items:center;padding:0 20px;gap:14px">
+    <sc-if value="{{ isMobile }}" hint-placeholder-val="{{ false }}">
+      <button onclick="{{ toggleSidebar }}" style="background:none;border:none;color:#8a9bba;font-size:20px;cursor:pointer;padding:4px;flex-shrink:0;line-height:1">☰</button>
+    </sc-if>
+    <a href="Dashboard.dc.html" style="display:flex;align-items:center;gap:9px;font-weight:700;font-size:14px;flex-shrink:0;text-decoration:none;color:#e6eaf2">
+      <div style="width:30px;height:30px;border-radius:8px;background:linear-gradient(135deg,#4589ff,#00d68f);display:flex;align-items:center;justify-content:center;font-size:15px">📈</div>
+      AlgoTrader <span style="color:#4589ff;margin-left:2px">Pro</span> <span style="font-size:10px;color:#4a5878;font-weight:400">v7.0</span>
+    </a>
+    <div style="flex:1"></div>
+    <div style="display:flex;align-items:center;gap:5px;font-size:10px;color:#4a5878;font-family:'JetBrains Mono',monospace">
+      <div style="width:7px;height:7px;border-radius:50%;background:{{ wsColor }};animation:{{ wsAnim }}"></div>
+      {{ wsLabel }}
+    </div>
+  </nav>
+
+  <div style="display:flex;min-height:calc(100vh - 56px)">
+    <sc-if value="{{ showBackdrop }}" hint-placeholder-val="{{ false }}">
+      <div onclick="{{ closeSidebar }}" style="position:fixed;inset:0;top:56px;background:rgba(0,0,0,0.6);z-index:110"></div>
+    </sc-if>
+    <aside style="{{ sidebarStyle }}">
+      <div style="padding:6px 10px 3px;font-size:9px;font-weight:700;color:#4a5878;letter-spacing:1.2px;text-transform:uppercase">Overview</div>
+      <a href="Dashboard.dc.html" style="display:flex;align-items:center;gap:9px;padding:8px 10px;border-radius:6px;color:#8a9bba;font-size:12px;font-weight:500;cursor:pointer;text-decoration:none" style-hover="color:#e6eaf2;background:#1a2235"><span style="font-size:13px">⬛</span> Dashboard</a>
+      <a href="Watchlist.dc.html" style="display:flex;align-items:center;gap:9px;padding:8px 10px;border-radius:6px;color:#8a9bba;font-size:12px;font-weight:500;cursor:pointer;text-decoration:none" style-hover="color:#e6eaf2;background:#1a2235"><span style="font-size:13px">👁</span> Watchlist</a>
+      <div style="height:1px;background:#1e2d45;margin:6px 0"></div>
+      <div style="padding:6px 10px 3px;font-size:9px;font-weight:700;color:#4a5878;letter-spacing:1.2px;text-transform:uppercase">Trading</div>
+      <a href="Positions.dc.html" style="display:flex;align-items:center;gap:9px;padding:8px 10px;border-radius:6px;color:#8a9bba;font-size:12px;font-weight:500;cursor:pointer;text-decoration:none" style-hover="color:#e6eaf2;background:#1a2235"><span style="font-size:13px">📌</span> Open Positions</a>
+      <a href="Trade History.dc.html" style="display:flex;align-items:center;gap:9px;padding:8px 10px;border-radius:6px;color:#8a9bba;font-size:12px;font-weight:500;cursor:pointer;text-decoration:none" style-hover="color:#e6eaf2;background:#1a2235"><span style="font-size:13px">📋</span> Trade History</a>
+      <div style="height:1px;background:#1e2d45;margin:6px 0"></div>
+      <div style="padding:6px 10px 3px;font-size:9px;font-weight:700;color:#4a5878;letter-spacing:1.2px;text-transform:uppercase">Analysis</div>
+      <a href="Analytics.dc.html" style="display:flex;align-items:center;gap:9px;padding:8px 10px;border-radius:6px;color:#8a9bba;font-size:12px;font-weight:500;cursor:pointer;text-decoration:none" style-hover="color:#e6eaf2;background:#1a2235"><span style="font-size:13px">📊</span> Analytics &amp; PnL</a>
+      <div style="display:flex;align-items:center;gap:9px;padding:8px 10px;border-radius:6px;color:#4589ff;background:rgba(69,137,255,0.08);border:1px solid rgba(69,137,255,0.2);font-size:12px;font-weight:500;cursor:pointer"><span style="font-size:13px">🔍</span> Diagnosa Sinyal</div>
+      <a href="Risk Monitor.dc.html" style="display:flex;align-items:center;gap:9px;padding:8px 10px;border-radius:6px;color:#8a9bba;font-size:12px;font-weight:500;cursor:pointer;text-decoration:none" style-hover="color:#e6eaf2;background:#1a2235"><span style="font-size:13px">🛡</span> Risk Monitor</a>
+      <div style="height:1px;background:#1e2d45;margin:6px 0"></div>
+      <div style="padding:6px 10px 3px;font-size:9px;font-weight:700;color:#4a5878;letter-spacing:1.2px;text-transform:uppercase">System</div>
+      <a href="AI Learner.dc.html" style="display:flex;align-items:center;gap:9px;padding:8px 10px;border-radius:6px;color:#8a9bba;font-size:12px;font-weight:500;cursor:pointer;text-decoration:none" style-hover="color:#e6eaf2;background:#1a2235"><span style="font-size:13px">🧠</span> AI Learner</a>
+      <a href="Gate Scanner.dc.html" style="display:flex;align-items:center;gap:9px;padding:8px 10px;border-radius:6px;color:#f0b429;font-size:12px;font-weight:700;cursor:pointer;text-decoration:none;background:linear-gradient(135deg,rgba(168,85,247,.12),rgba(245,158,11,.12));border:1px solid rgba(245,158,11,.25);margin-top:4px"><span style="font-size:13px">🎯</span> Gate Scanner</a>
+      <a href="Settings.dc.html" style="display:flex;align-items:center;gap:9px;padding:8px 10px;border-radius:6px;color:#8a9bba;font-size:12px;font-weight:500;cursor:pointer;text-decoration:none" style-hover="color:#e6eaf2;background:#1a2235"><span style="font-size:13px">⚙️</span> Settings</a>
+    </aside>
+
+    <main style="flex:1;padding:{{ mainPadding }};min-width:0">
+
+      <sc-if value="{{ isMobile }}" hint-placeholder-val="{{ false }}">
+        <div style="display:flex;gap:6px;overflow-x:auto;margin-bottom:14px;padding-bottom:2px">
+          <sc-for list="{{ navItems }}" as="n" hint-placeholder-count="4">
+            <a href="{{ n.href }}" style="display:flex;align-items:center;gap:5px;padding:7px 12px;border-radius:20px;font-size:11px;font-weight:600;white-space:nowrap;flex-shrink:0;text-decoration:none;background:rgba(69,137,255,0.08);color:#4589ff;border:1px solid rgba(69,137,255,0.2)">
+              <span>{{ n.icon }}</span>{{ n.label }}
+            </a>
+          </sc-for>
+        </div>
+      </sc-if>
+
+      <sc-if value="{{ usingDemo }}" hint-placeholder-val="{{ false }}">
+        <div style="display:flex;align-items:center;gap:10px;background:rgba(240,180,41,0.08);border:1px solid rgba(240,180,41,0.3);border-radius:10px;padding:10px 16px;margin-bottom:16px;font-size:11.5px;color:#f0b429">
+          <span>⚠</span><span>{{ demoMessage }}</span>
+        </div>
+      </sc-if>
+
+      <div style="display:flex;align-items:flex-start;justify-content:space-between;margin-bottom:16px;gap:10px;flex-wrap:wrap">
+        <div>
+          <div style="font-size:17px;font-weight:700">Diagnosa Sinyal</div>
+          <div style="font-size:11px;color:#4a5878;margin-top:2px">Analisis real-time semua coin di watchlist · VolumetricBreakout v7.0</div>
+        </div>
+        <button onclick="{{ runDiagnosa }}" disabled="{{ isLoading }}" style="background:#4589ff;border:none;border-radius:6px;padding:7px 16px;font-size:11px;color:#fff;font-weight:700;cursor:pointer;font-family:inherit;white-space:nowrap">{{ btnLabel }}</button>
+      </div>
+
+      <sc-if value="{{ showSummary }}" hint-placeholder-val="{{ false }}">
+        <div style="display:grid;grid-template-columns:{{ summaryCols }};gap:10px;margin-bottom:16px">
+          <div style="background:#111722;border:1px solid #1e2d45;border-radius:10px;padding:14px 16px;position:relative;overflow:hidden">
+            <div style="position:absolute;top:0;left:0;right:0;height:2px;background:#00d68f;opacity:.8"></div>
+            <div style="font-size:10px;font-weight:600;color:#4a5878;text-transform:uppercase;letter-spacing:.6px;margin-bottom:7px">BUY Signals</div>
+            <div style="font-size:20px;font-weight:700;font-family:'JetBrains Mono',monospace;color:#00d68f">{{ buyCount }}</div>
+          </div>
+          <div style="background:#111722;border:1px solid #1e2d45;border-radius:10px;padding:14px 16px;position:relative;overflow:hidden">
+            <div style="position:absolute;top:0;left:0;right:0;height:2px;background:#f0b429;opacity:.8"></div>
+            <div style="font-size:10px;font-weight:600;color:#4a5878;text-transform:uppercase;letter-spacing:.6px;margin-bottom:7px">Monitoring</div>
+            <div style="font-size:20px;font-weight:700;font-family:'JetBrains Mono',monospace;color:#f0b429">{{ watchCount }}</div>
+          </div>
+          <div style="background:#111722;border:1px solid #1e2d45;border-radius:10px;padding:14px 16px;position:relative;overflow:hidden">
+            <div style="position:absolute;top:0;left:0;right:0;height:2px;background:#4a5878;opacity:.8"></div>
+            <div style="font-size:10px;font-weight:600;color:#4a5878;text-transform:uppercase;letter-spacing:.6px;margin-bottom:7px">No Signal</div>
+            <div style="font-size:20px;font-weight:700;font-family:'JetBrains Mono',monospace">{{ noneCount }}</div>
+          </div>
+        </div>
+      </sc-if>
+
+      <sc-if value="{{ isLoading }}" hint-placeholder-val="{{ false }}">
+        <div style="text-align:center;padding:40px">
+          <div style="width:24px;height:24px;margin:0 auto 12px;border:3px solid #1e2d45;border-top-color:#4589ff;border-radius:50%;animation:spin 0.7s linear infinite"></div>
+          <div style="color:#4a5878;font-size:12px">Menganalisis semua coin...</div>
+        </div>
+      </sc-if>
+
+      <sc-if value="{{ showResults }}" hint-placeholder-val="{{ false }}">
+        <div style="display:flex;flex-direction:column;gap:8px">
+          <sc-for list="{{ results }}" as="r" hint-placeholder-count="4">
+            <a href="{{ r.detailHref }}" style="display:block;text-decoration:none;color:inherit;background:#111722;border:1px solid {{ r.borderColor }};border-radius:10px;padding:12px;{{ r.bgTint }};cursor:pointer">
+              <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:6px">
+                <span style="font-size:14px;font-weight:700">{{ r.icon }} {{ r.symbol }}</span>
+                <sc-if value="{{ r.isBuy }}" hint-placeholder-val="{{ false }}">
+                  <span style="display:inline-block;padding:2px 7px;border-radius:4px;font-size:9.5px;font-weight:600;background:rgba(0,214,143,0.08);color:#00d68f;white-space:nowrap;flex-shrink:0">BUY SIGNAL</span>
+                </sc-if>
+                <div style="margin-left:auto;display:flex;align-items:center;gap:8px;flex-shrink:0">
+                  <span style="font-family:'JetBrains Mono',monospace;font-size:11px;font-weight:700;white-space:nowrap">{{ r.price }}</span>
+                  <span style="font-size:11px;font-weight:800;font-family:'JetBrains Mono',monospace;color:{{ r.scoreColor }};white-space:nowrap">{{ r.score }}</span>
+                  <span style="font-size:8px;padding:2px 6px;border-radius:10px;background:rgba(255,255,255,0.05);color:#8a9bba;white-space:nowrap">{{ r.regime }}</span>
+                </div>
+              </div>
+              <sc-for list="{{ r.details }}" as="d" hint-placeholder-count="3">
+                <div style="font-size:11px;color:#8a9bba;padding:1px 0">{{ d }}</div>
+              </sc-for>
+            </a>
+          </sc-for>
+        </div>
+      </sc-if>
+
+      <sc-if value="{{ showEmpty }}" hint-placeholder-val="{{ true }}">
+        <div style="text-align:center;padding:60px;color:#4a5878">
+          <div style="font-size:40px;margin-bottom:12px;opacity:0.3">🔍</div>
+          <div style="font-size:14px;font-weight:600;color:#8a9bba">Klik "Analisis Sekarang" untuk melihat sinyal</div>
+          <div style="font-size:11px;margin-top:6px">Data diambil langsung dari bot API (bisa perlu waktu ~1 menit)</div>
+        </div>
+      </sc-if>
+    </main>
+  </div>
+</div>
+
+</x-dc>
+<script type="text/x-dc" data-dc-script>
+
+function demoDiagnosa() {
+  return {
+    results: [
+      { symbol: 'ALT/USDT', trigger_met: true, total_score: 91.4, regime: 'volatile_expansion', price: 0.412, profile: 'scalp_volatile', conditions_met: 6, conditions_total: 6, threshold: 52, rsi: 61.2, vol_ratio: 1.8, sl: 0.394, tp: 0.44 },
+      { symbol: 'SUI/USDT', trigger_met: true, total_score: 87.1, regime: 'trending', price: 4.31, profile: 'breakout_swift', conditions_met: 5, conditions_total: 6, threshold: 61, rsi: 58.4, vol_ratio: 1.4, sl: 4.05, tp: 4.55 },
+      { symbol: 'AIGENSYN/USDT', trigger_met: false, total_score: 63.2, regime: 'undefined', price: 0.0562, profile: 'scalp_volatile', conditions_met: 3, conditions_total: 6, threshold: 61, failed_conditions: ['volume ratio', 'RSI band'] },
+      { symbol: 'KAT/USDT', trigger_met: false, total_score: 41.8, regime: 'undefined', price: 0.0231, profile: 'mean_revert', conditions_met: 1, conditions_total: 6, threshold: 61, failed_conditions: ['trend confirmation', 'momentum', 'volume'] },
+    ],
+  };
+}
+
+class Component extends DCLogic {
+  state = {
+    apiBase: 'http://localhost:8000/api', apiKey: '',
+    isLoading: false, hasRun: false, results: null, apiOnline: false, usingDemo: false, demoMessage: '',
+  };
+
+  componentDidMount() {
+    try {
+      const b = localStorage.getItem('gs_api_base'); if (b) this.state.apiBase = b;
+      const k = localStorage.getItem('gs_api_key'); if (k) this.state.apiKey = k;
+      this.state.apiOnline = !!k;
+    } catch (e) {}
+    this.state.isMobile = window.innerWidth <= 768;
+    this._onResize = () => this.setState({ isMobile: window.innerWidth <= 768 });
+    window.addEventListener('resize', this._onResize);
+  }
+  componentWillUnmount() { if (this._onResize) window.removeEventListener('resize', this._onResize); }
+
+  toggleSidebar = () => this.setState(s => ({ sidebarOpen: !s.sidebarOpen }));
+  closeSidebar = () => this.setState({ sidebarOpen: false });
+
+  runDiagnosa = async () => {
+    this.setState({ isLoading: true });
+    try {
+      const hdrs = {}; if (this.state.apiKey) hdrs['X-API-Key'] = this.state.apiKey;
+      const ctrl = new AbortController();
+      const tid = setTimeout(() => ctrl.abort(), 60000);
+      const r = await fetch(this.state.apiBase + '/diagnosa', { signal: ctrl.signal, headers: hdrs });
+      clearTimeout(tid);
+      if (!r.ok) throw new Error('http ' + r.status);
+      const data = await r.json();
+      if (!data || !Array.isArray(data.results)) throw new Error('bad payload');
+      this.setState({ results: data.results, isLoading: false, hasRun: true, usingDemo: false, apiOnline: true });
+    } catch (e) {
+      this.setState({
+        results: demoDiagnosa().results, isLoading: false, hasRun: true, usingDemo: true, apiOnline: false,
+        demoMessage: this.state.apiKey ? 'Tidak bisa menyambung ke bot. Menampilkan data contoh.' : 'API Key belum diset (atur di Gate Scanner → Settings). Menampilkan data contoh.',
+      });
+    }
+  };
+
+  renderVals() {
+    const isMobile = !!this.state.isMobile;
+    const navItems = [
+      { icon: '⬛', label: 'Dashboard', href: 'Dashboard.dc.html' },
+      { icon: '👁', label: 'Watchlist', href: 'Watchlist.dc.html' },
+      { icon: '📌', label: 'Positions', href: 'Positions.dc.html' },
+      { icon: '🎯', label: 'Gate', href: 'Gate Scanner.dc.html' },
+    ];
+
+    const rawResults = this.state.results || [];
+    let buyCount = 0, watchCount = 0, noneCount = 0;
+    rawResults.forEach(r => {
+      if (r.error) { noneCount++; return; }
+      if (r.trigger_met) buyCount++;
+      else if ((r.conditions_met || 0) >= 2) watchCount++;
+      else noneCount++;
+    });
+
+    const results = rawResults.map(r => {
+      const hasError = !!r.error;
+      const isBuy = !!r.trigger_met;
+      const scVal = r.total_score != null ? Math.round(r.total_score) : null;
+      const scColor = scVal >= 70 ? '#00d68f' : scVal >= 50 ? '#f0b429' : '#f0455a';
+      const details = [];
+      if (hasError) details.push('❌ ' + r.error);
+      if (r.profile) details.push('Profil: ' + r.profile);
+      if (r.conditions_met != null && r.conditions_total != null) details.push(r.conditions_met + '/' + r.conditions_total + ' kondisi terpenuhi');
+      if (r.threshold != null && scVal !== null) details.push('Score ' + scVal + ' · Threshold ' + Math.round(r.threshold));
+      if (r.sl != null) details.push('SL: ' + r.sl + (r.tp != null ? ' · TP: ' + r.tp : ''));
+      if (r.rsi != null) details.push('RSI: ' + r.rsi + (r.vol_ratio != null ? ' · Vol ratio: ' + r.vol_ratio + 'x' : ''));
+      if (Array.isArray(r.failed_conditions) && r.failed_conditions.length) details.push('Belum terpenuhi: ' + r.failed_conditions.join(', '));
+
+      return {
+        symbol: r.symbol || '—', detailHref: 'Coin Detail.dc.html?symbol=' + encodeURIComponent(r.symbol || ''), isBuy,
+        icon: hasError ? '⚠️' : (isBuy ? '🚀' : '⏳'),
+        borderColor: isBuy && !hasError ? 'rgba(0,214,143,0.4)' : '#1e2d45',
+        bgTint: isBuy && !hasError ? 'background:rgba(0,214,143,0.03)' : '',
+        price: r.price != null ? (r.price >= 1 ? '$' + (+r.price).toFixed(2) : '$' + (+r.price).toFixed(6)) : '—',
+        score: scVal !== null ? scVal : '—', scoreColor: scColor,
+        regime: (r.regime || 'undefined').replace(/_/g, ' ').toUpperCase(),
+        details,
+      };
+    });
+
+    const sidebarStyle = isMobile
+      ? 'width:220px;flex-shrink:0;background:#111722;padding:12px 6px;display:flex;flex-direction:column;gap:2px;position:fixed;top:56px;bottom:0;left:0;z-index:120;transform:translateX(' + (this.state.sidebarOpen ? '0' : '-100%') + ');transition:transform .25s ease;box-shadow:0 0 40px rgba(0,0,0,0.6);overflow-y:auto'
+      : 'width:220px;flex-shrink:0;background:#111722;border-right:1px solid #1e2d45;padding:12px 6px;display:flex;flex-direction:column;gap:2px';
+
+    return {
+      isMobile, showSidebar: !isMobile, showBackdrop: isMobile && !!this.state.sidebarOpen, sidebarStyle,
+      toggleSidebar: this.toggleSidebar, closeSidebar: this.closeSidebar, mainPadding: isMobile ? '12px' : '20px', navItems,
+      summaryCols: isMobile ? 'repeat(3,1fr)' : 'repeat(3,1fr)',
+      wsColor: this.state.apiOnline ? '#00d68f' : '#f0455a',
+      wsAnim: this.state.apiOnline ? 'pulse 2s infinite' : 'none',
+      wsLabel: this.state.apiOnline ? 'LIVE' : 'OFFLINE',
+      usingDemo: this.state.usingDemo, demoMessage: this.state.demoMessage,
+      runDiagnosa: this.runDiagnosa, isLoading: this.state.isLoading,
+      btnLabel: this.state.isLoading ? '⏳ Menganalisis...' : '🔍 Analisis Sekarang',
+      showSummary: this.state.hasRun && !this.state.isLoading,
+      buyCount, watchCount, noneCount,
+      showResults: this.state.hasRun && !this.state.isLoading && results.length > 0,
+      showEmpty: !this.state.hasRun && !this.state.isLoading,
+      results,
+    };
+  }
+}
+
+</script>
+</body>
+</html>

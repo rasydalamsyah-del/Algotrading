@@ -1,0 +1,332 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+
+<helmet>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <style>
+    @keyframes pulse{0%,100%{opacity:1}50%{opacity:.3}}
+    body{margin:0;background:#0b0e11;-webkit-font-smoothing:antialiased}
+    a{color:#4589ff}
+    a:hover{color:#6ea3ff}
+    ::-webkit-scrollbar{width:5px;height:5px}
+    ::-webkit-scrollbar-thumb{background:#253550;border-radius:3px}
+  </style>
+</helmet>
+
+<div style="min-height:100vh;background:#0b0e11;color:#e6eaf2;font-family:'Inter',system-ui,sans-serif;font-size:13px;line-height:1.5">
+
+  <nav style="position:sticky;top:0;z-index:80;height:56px;background:rgba(11,14,17,0.95);backdrop-filter:blur(20px);border-bottom:1px solid #1e2d45;display:flex;align-items:center;padding:0 20px;gap:14px">
+    <sc-if value="{{ isMobile }}" hint-placeholder-val="{{ false }}">
+      <button onclick="{{ toggleSidebar }}" style="background:none;border:none;color:#8a9bba;font-size:20px;cursor:pointer;padding:4px;flex-shrink:0;line-height:1">☰</button>
+    </sc-if>
+    <a href="Dashboard.dc.html" style="display:flex;align-items:center;gap:9px;font-weight:700;font-size:14px;flex-shrink:0;text-decoration:none;color:#e6eaf2">
+      <div style="width:30px;height:30px;border-radius:8px;background:linear-gradient(135deg,#4589ff,#00d68f);display:flex;align-items:center;justify-content:center;font-size:15px">📈</div>
+      AlgoTrader <span style="color:#4589ff;margin-left:2px">Pro</span> <span style="font-size:10px;color:#4a5878;font-weight:400">v7.0</span>
+    </a>
+    <div style="flex:1"></div>
+    <div style="display:flex;align-items:center;gap:5px;font-size:10px;color:#4a5878;font-family:'JetBrains Mono',monospace">
+      <div style="width:7px;height:7px;border-radius:50%;background:{{ wsColor }};animation:{{ wsAnim }}"></div>
+      {{ wsLabel }}
+    </div>
+  </nav>
+
+  <div style="display:flex;min-height:calc(100vh - 56px)">
+    <sc-if value="{{ showBackdrop }}" hint-placeholder-val="{{ false }}">
+      <div onclick="{{ closeSidebar }}" style="position:fixed;inset:0;top:56px;background:rgba(0,0,0,0.6);z-index:110"></div>
+    </sc-if>
+    <aside style="{{ sidebarStyle }}">
+      <div style="padding:6px 10px 3px;font-size:9px;font-weight:700;color:#4a5878;letter-spacing:1.2px;text-transform:uppercase">Overview</div>
+      <a href="Dashboard.dc.html" style="display:flex;align-items:center;gap:9px;padding:8px 10px;border-radius:6px;color:#8a9bba;font-size:12px;font-weight:500;cursor:pointer;text-decoration:none" style-hover="color:#e6eaf2;background:#1a2235"><span style="font-size:13px">⬛</span> Dashboard</a>
+      <a href="Watchlist.dc.html" style="display:flex;align-items:center;gap:9px;padding:8px 10px;border-radius:6px;color:#8a9bba;font-size:12px;font-weight:500;cursor:pointer;text-decoration:none" style-hover="color:#e6eaf2;background:#1a2235"><span style="font-size:13px">👁</span> Watchlist</a>
+      <div style="height:1px;background:#1e2d45;margin:6px 0"></div>
+      <div style="padding:6px 10px 3px;font-size:9px;font-weight:700;color:#4a5878;letter-spacing:1.2px;text-transform:uppercase">Trading</div>
+      <a href="Positions.dc.html" style="display:flex;align-items:center;gap:9px;padding:8px 10px;border-radius:6px;color:#8a9bba;font-size:12px;font-weight:500;cursor:pointer;text-decoration:none" style-hover="color:#e6eaf2;background:#1a2235"><span style="font-size:13px">📌</span> Open Positions</a>
+      <a href="Trade History.dc.html" style="display:flex;align-items:center;gap:9px;padding:8px 10px;border-radius:6px;color:#8a9bba;font-size:12px;font-weight:500;cursor:pointer;text-decoration:none" style-hover="color:#e6eaf2;background:#1a2235"><span style="font-size:13px">📋</span> Trade History</a>
+      <div style="height:1px;background:#1e2d45;margin:6px 0"></div>
+      <div style="padding:6px 10px 3px;font-size:9px;font-weight:700;color:#4a5878;letter-spacing:1.2px;text-transform:uppercase">Analysis</div>
+      <div style="display:flex;align-items:center;gap:9px;padding:8px 10px;border-radius:6px;color:#4589ff;background:rgba(69,137,255,0.08);border:1px solid rgba(69,137,255,0.2);font-size:12px;font-weight:500;cursor:pointer"><span style="font-size:13px">📊</span> Analytics &amp; PnL</div>
+      <a href="Diagnosa.dc.html" style="display:flex;align-items:center;gap:9px;padding:8px 10px;border-radius:6px;color:#8a9bba;font-size:12px;font-weight:500;cursor:pointer;text-decoration:none" style-hover="color:#e6eaf2;background:#1a2235"><span style="font-size:13px">🔍</span> Diagnosa Sinyal</a>
+      <a href="Risk Monitor.dc.html" style="display:flex;align-items:center;gap:9px;padding:8px 10px;border-radius:6px;color:#8a9bba;font-size:12px;font-weight:500;cursor:pointer;text-decoration:none" style-hover="color:#e6eaf2;background:#1a2235"><span style="font-size:13px">🛡</span> Risk Monitor</a>
+      <div style="height:1px;background:#1e2d45;margin:6px 0"></div>
+      <div style="padding:6px 10px 3px;font-size:9px;font-weight:700;color:#4a5878;letter-spacing:1.2px;text-transform:uppercase">System</div>
+      <a href="AI Learner.dc.html" style="display:flex;align-items:center;gap:9px;padding:8px 10px;border-radius:6px;color:#8a9bba;font-size:12px;font-weight:500;cursor:pointer;text-decoration:none" style-hover="color:#e6eaf2;background:#1a2235"><span style="font-size:13px">🧠</span> AI Learner</a>
+      <a href="Gate Scanner.dc.html" style="display:flex;align-items:center;gap:9px;padding:8px 10px;border-radius:6px;color:#f0b429;font-size:12px;font-weight:700;cursor:pointer;text-decoration:none;background:linear-gradient(135deg,rgba(168,85,247,.12),rgba(245,158,11,.12));border:1px solid rgba(245,158,11,.25);margin-top:4px"><span style="font-size:13px">🎯</span> Gate Scanner</a>
+      <a href="Settings.dc.html" style="display:flex;align-items:center;gap:9px;padding:8px 10px;border-radius:6px;color:#8a9bba;font-size:12px;font-weight:500;cursor:pointer;text-decoration:none" style-hover="color:#e6eaf2;background:#1a2235"><span style="font-size:13px">⚙️</span> Settings</a>
+    </aside>
+
+    <main style="flex:1;padding:{{ mainPadding }};min-width:0">
+
+      <sc-if value="{{ isMobile }}" hint-placeholder-val="{{ false }}">
+        <div style="display:flex;gap:6px;overflow-x:auto;margin-bottom:14px;padding-bottom:2px">
+          <sc-for list="{{ navItems }}" as="n" hint-placeholder-count="4">
+            <a href="{{ n.href }}" style="display:flex;align-items:center;gap:5px;padding:7px 12px;border-radius:20px;font-size:11px;font-weight:600;white-space:nowrap;flex-shrink:0;text-decoration:none;background:rgba(69,137,255,0.08);color:#4589ff;border:1px solid rgba(69,137,255,0.2)">
+              <span>{{ n.icon }}</span>{{ n.label }}
+            </a>
+          </sc-for>
+        </div>
+      </sc-if>
+
+      <sc-if value="{{ usingDemo }}" hint-placeholder-val="{{ false }}">
+        <div style="display:flex;align-items:center;gap:10px;background:rgba(240,180,41,0.08);border:1px solid rgba(240,180,41,0.3);border-radius:10px;padding:10px 16px;margin-bottom:16px;font-size:11.5px;color:#f0b429">
+          <span>⚠</span><span>{{ demoMessage }}</span>
+          <button onclick="{{ retryFetch }}" style="margin-left:auto;background:none;border:1px solid rgba(240,180,41,0.4);border-radius:6px;padding:5px 12px;color:#f0b429;font-size:11px;cursor:pointer;font-family:inherit;white-space:nowrap;flex-shrink:0">Coba sambungkan ulang</button>
+        </div>
+      </sc-if>
+
+      <div style="margin-bottom:16px">
+        <div style="font-size:17px;font-weight:700">Analytics &amp; PnL</div>
+        <div style="font-size:11px;color:#4a5878;margin-top:2px">Performance analysis · VolumetricBreakout v7.0</div>
+      </div>
+
+      <div style="display:grid;grid-template-columns:{{ metricCols }};gap:10px;margin-bottom:16px">
+        <sc-for list="{{ metrics }}" as="m" hint-placeholder-count="8">
+          <div style="background:#111722;border:1px solid #1e2d45;border-radius:10px;padding:12px 14px;text-align:center">
+            <div style="font-size:9.5px;color:#4a5878;font-weight:600;text-transform:uppercase;letter-spacing:.5px;margin-bottom:7px">{{ m.label }}</div>
+            <div style="font-size:18px;font-weight:700;font-family:'JetBrains Mono',monospace;color:{{ m.color }}">{{ m.value }}</div>
+            <div style="font-size:9.5px;color:#4a5878;margin-top:3px;font-family:'JetBrains Mono',monospace">{{ m.sub }}</div>
+          </div>
+        </sc-for>
+      </div>
+
+      <div style="display:grid;grid-template-columns:{{ chartCols }};gap:10px;margin-bottom:16px">
+        <div style="background:#111722;border:1px solid #1e2d45;border-radius:10px;padding:14px">
+          <div style="font-size:11px;font-weight:600;color:#8a9bba;text-transform:uppercase;letter-spacing:.5px;margin-bottom:12px">PnL Distribution (per trade)</div>
+          <svg viewBox="0 0 400 160" style="width:100%;height:160px;display:block">
+            <sc-for list="{{ pnlBars }}" as="b" hint-placeholder-count="20">
+              <rect x="{{ b.x }}" y="{{ b.y }}" width="{{ b.w }}" height="{{ b.h }}" fill="{{ b.color }}" style="cursor:crosshair">
+                <title>{{ b.label }}</title>
+              </rect>
+            </sc-for>
+            <line x1="0" y1="80" x2="400" y2="80" stroke="rgba(255,255,255,0.12)" stroke-width="1"/>
+          </svg>
+        </div>
+        <div style="background:#111722;border:1px solid #1e2d45;border-radius:10px;padding:14px">
+          <div style="font-size:11px;font-weight:600;color:#8a9bba;text-transform:uppercase;letter-spacing:.5px;margin-bottom:12px">Cumulative PnL</div>
+          <svg viewBox="0 0 400 160" style="width:100%;height:160px;display:block" preserveAspectRatio="none">
+            <polyline points="{{ cumPolyline }}" fill="none" stroke="{{ cumColor }}" stroke-width="2"/>
+            <sc-for list="{{ cumPoints }}" as="pt" hint-placeholder-count="0">
+              <circle cx="{{ pt.x }}" cy="{{ pt.y }}" r="7" fill="transparent" style="cursor:crosshair">
+                <title>{{ pt.label }}</title>
+              </circle>
+            </sc-for>
+          </svg>
+        </div>
+      </div>
+
+      <div style="background:#111722;border:1px solid #1e2d45;border-radius:10px;overflow:hidden">
+        <div style="padding:12px 14px;border-bottom:1px solid #1e2d45;font-size:11px;font-weight:600;color:#8a9bba;text-transform:uppercase;letter-spacing:.5px">Per-Symbol Performance</div>
+        <div style="overflow-x:auto">
+          <table style="width:100%;border-collapse:collapse;font-size:11px;min-width:700px">
+            <thead>
+              <tr>
+                <th style="padding:9px 10px;text-align:left;font-size:9.5px;font-weight:600;color:#4a5878;text-transform:uppercase;letter-spacing:.5px;border-bottom:1px solid #1e2d45;background:#0b0e11;white-space:nowrap">Symbol</th>
+                <th style="padding:9px 10px;text-align:right;font-size:9.5px;font-weight:600;color:#4a5878;text-transform:uppercase;letter-spacing:.5px;border-bottom:1px solid #1e2d45;background:#0b0e11;white-space:nowrap">Trades</th>
+                <th style="padding:9px 10px;text-align:right;font-size:9.5px;font-weight:600;color:#4a5878;text-transform:uppercase;letter-spacing:.5px;border-bottom:1px solid #1e2d45;background:#0b0e11;white-space:nowrap">Wins</th>
+                <th style="padding:9px 10px;text-align:right;font-size:9.5px;font-weight:600;color:#4a5878;text-transform:uppercase;letter-spacing:.5px;border-bottom:1px solid #1e2d45;background:#0b0e11;white-space:nowrap">Win Rate</th>
+                <th style="padding:9px 10px;text-align:right;font-size:9.5px;font-weight:600;color:#4a5878;text-transform:uppercase;letter-spacing:.5px;border-bottom:1px solid #1e2d45;background:#0b0e11;white-space:nowrap">Total PnL</th>
+                <th style="padding:9px 10px;text-align:right;font-size:9.5px;font-weight:600;color:#4a5878;text-transform:uppercase;letter-spacing:.5px;border-bottom:1px solid #1e2d45;background:#0b0e11;white-space:nowrap">Net PnL</th>
+              </tr>
+            </thead>
+            <tbody>
+              <sc-if value="{{ hasRows }}" hint-placeholder-val="{{ true }}">
+                <sc-for list="{{ symbolRows }}" as="s" hint-placeholder-count="5">
+                  <tr>
+                    <td style="padding:10px;border-bottom:1px solid rgba(30,45,69,0.5);font-weight:700;white-space:nowrap">{{ s.symbol }}</td>
+                    <td style="padding:10px;text-align:right;border-bottom:1px solid rgba(30,45,69,0.5);font-family:'JetBrains Mono',monospace;color:#8a9bba">{{ s.trades }}</td>
+                    <td style="padding:10px;text-align:right;border-bottom:1px solid rgba(30,45,69,0.5);font-family:'JetBrains Mono',monospace;color:#8a9bba">{{ s.wins }}</td>
+                    <td style="padding:10px;text-align:right;border-bottom:1px solid rgba(30,45,69,0.5);font-family:'JetBrains Mono',monospace;color:{{ s.wrColor }}">{{ s.winRate }}</td>
+                    <td style="padding:10px;text-align:right;border-bottom:1px solid rgba(30,45,69,0.5);font-family:'JetBrains Mono',monospace;font-weight:600;color:{{ s.pnlColor }}">{{ s.pnl }}</td>
+                    <td style="padding:10px;text-align:right;border-bottom:1px solid rgba(30,45,69,0.5);font-family:'JetBrains Mono',monospace;font-weight:600;color:{{ s.netColor }}">{{ s.net }}</td>
+                  </tr>
+                </sc-for>
+              </sc-if>
+              <sc-if value="{{ hasNoRows }}" hint-placeholder-val="{{ false }}">
+                <tr><td colspan="6" style="text-align:center;padding:32px;color:#4a5878">No trade data</td></tr>
+              </sc-if>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </main>
+  </div>
+</div>
+
+</x-dc>
+<script type="text/x-dc" data-dc-script>
+
+function fmtUSD(v, d = 2) { if (v == null) return '—'; return '$' + Number(v).toLocaleString('en-US', { minimumFractionDigits: d, maximumFractionDigits: d }); }
+function signUSD(v) { if (v == null) return '—'; return (v >= 0 ? '+' : '') + fmtUSD(v); }
+
+function demoTrades() {
+  const now = Date.now();
+  const syms = ['ALT/USDT', 'SUI/USDT', 'PEPE/USDT', 'CRV/USDT', 'KAT/USDT'];
+  return Array.from({ length: 40 }, (_, i) => {
+    const win = (i * 7) % 3 !== 0;
+    return {
+      timestamp: new Date(now - i * 3600e3 * 1.6).toISOString(),
+      symbol: syms[i % syms.length],
+      realized_pnl: win ? 4 + (i % 9) * 2.1 : -(3 + (i % 6) * 1.4),
+      fee_cost: 0.4 + (i % 5) * 0.1,
+    };
+  });
+}
+
+function demoMetrics() {
+  return { win_rate_pct: 58.3, profit_factor: 1.84, expectancy: 6.2, sharpe_ratio: 1.32, sortino_ratio: 1.78, calmar_ratio: 2.05, max_drawdown_pct: 6.4, total_fees: 18.6 };
+}
+
+class Component extends DCLogic {
+  state = {
+    apiBase: 'http://localhost:8000/api', apiKey: '',
+    metrics: {}, trades: [], usingDemo: false, demoMessage: '', apiOnline: false,
+  };
+
+  componentDidMount() {
+    try {
+      const b = localStorage.getItem('gs_api_base'); if (b) this.state.apiBase = b;
+      const k = localStorage.getItem('gs_api_key'); if (k) this.state.apiKey = k;
+    } catch (e) {}
+    this.state.isMobile = window.innerWidth <= 768;
+    this._onResize = () => this.setState({ isMobile: window.innerWidth <= 768 });
+    window.addEventListener('resize', this._onResize);
+    this.fetchData();
+  }
+  componentWillUnmount() { if (this._onResize) window.removeEventListener('resize', this._onResize); }
+
+  toggleSidebar = () => this.setState(s => ({ sidebarOpen: !s.sidebarOpen }));
+  closeSidebar = () => this.setState({ sidebarOpen: false });
+
+  async apiGet(path) {
+    try {
+      const ctrl = new AbortController();
+      const tid = setTimeout(() => ctrl.abort(), 6000);
+      const hdrs = {}; if (this.state.apiKey) hdrs['X-API-Key'] = this.state.apiKey;
+      const r = await fetch(this.state.apiBase + path, { signal: ctrl.signal, headers: hdrs });
+      clearTimeout(tid);
+      if (!r.ok) return null;
+      return await r.json();
+    } catch (e) { return null; }
+  }
+
+  async fetchData() {
+    const m = await this.apiGet('/metrics');
+    const t = await this.apiGet('/trades?limit=200');
+    if (m && t && Array.isArray(t.trades)) {
+      this.setState({ metrics: m, trades: t.trades, usingDemo: false, apiOnline: true });
+    } else {
+      this.setState({
+        metrics: demoMetrics(), trades: demoTrades(), usingDemo: true, apiOnline: false,
+        demoMessage: this.state.apiKey ? 'Tidak bisa menyambung ke bot. Menampilkan data contoh.' : 'API Key belum diset (atur di Gate Scanner → Settings). Menampilkan data contoh.',
+      });
+    }
+  }
+
+  retryFetch = () => this.fetchData();
+
+  renderVals() {
+    const isMobile = !!this.state.isMobile;
+    const navItems = [
+      { icon: '⬛', label: 'Dashboard', href: 'Dashboard.dc.html' },
+      { icon: '👁', label: 'Watchlist', href: 'Watchlist.dc.html' },
+      { icon: '📌', label: 'Positions', href: 'Positions.dc.html' },
+      { icon: '🎯', label: 'Gate', href: 'Gate Scanner.dc.html' },
+    ];
+
+    const m = this.state.metrics || {};
+    const trades = this.state.trades || [];
+    const closed = trades.filter(t => t.realized_pnl != null);
+    const wins = closed.filter(t => t.realized_pnl > 0);
+
+    const metrics = [
+      { label: 'Win Rate', value: (m.win_rate_pct || 0).toFixed(1) + '%', color: '#00d68f', sub: wins.length + ' wins / ' + closed.length + ' total' },
+      { label: 'Profit Factor', value: m.profit_factor === Infinity ? '∞' : (m.profit_factor || 0).toFixed(3), color: '#4589ff', sub: 'Gross Profit / Loss' },
+      { label: 'Expectancy', value: signUSD(m.expectancy), color: (m.expectancy || 0) >= 0 ? '#00d68f' : '#f0455a', sub: 'Avg PnL per trade' },
+      { label: 'Sharpe Ratio', value: (m.sharpe_ratio || 0).toFixed(4), color: (m.sharpe_ratio || 0) >= 1 ? '#00d68f' : (m.sharpe_ratio || 0) >= 0 ? '#f0b429' : '#f0455a', sub: 'Risk-adjusted return' },
+      { label: 'Sortino Ratio', value: (m.sortino_ratio || 0).toFixed(4), color: '#e6eaf2', sub: 'Downside deviation' },
+      { label: 'Calmar Ratio', value: (m.calmar_ratio || 0).toFixed(4), color: '#e6eaf2', sub: 'Return / MaxDD' },
+      { label: 'Max Drawdown', value: (m.max_drawdown_pct || 0).toFixed(2) + '%', color: '#f0b429', sub: 'Peak-to-trough' },
+      { label: 'Total Fees', value: fmtUSD(m.total_fees, 4), color: '#f0455a', sub: 'Exchange fees paid' },
+    ];
+
+    // PnL distribution bars
+    const pnls = closed.map(t => t.realized_pnl);
+    const maxAbs = Math.max(1, ...pnls.map(v => Math.abs(v)));
+    const barW = pnls.length ? Math.max(2, 380 / pnls.length - 2) : 0;
+    const pnlBars = pnls.map((v, i) => {
+      const h = Math.min(70, (Math.abs(v) / maxAbs) * 70);
+      const x = 10 + i * (barW + 2);
+      const y = v >= 0 ? 80 - h : 80;
+      return { x: x.toFixed(1), y: y.toFixed(1), w: barW.toFixed(1), h: h.toFixed(1), color: v >= 0 ? '#00d68f' : '#f0455a', label: 'Trade #' + (i + 1) + ': ' + signUSD(v) };
+    });
+
+    // cumulative
+    let running = 0;
+    const cumVals = closed.map(t => (running += t.realized_pnl));
+    let cumPolyline = '', cumPoints = [];
+    if (cumVals.length > 1) {
+      const mn = Math.min(0, ...cumVals), mx = Math.max(0, ...cumVals);
+      const range = mx - mn || 1;
+      const rawPts = cumVals.map((v, i) => {
+        const x = (i / (cumVals.length - 1)) * 380 + 10;
+        const y = 150 - ((v - mn) / range) * 140;
+        return { x, y, v };
+      });
+      cumPolyline = rawPts.map(p => p.x.toFixed(1) + ',' + p.y.toFixed(1)).join(' ');
+      const step = Math.max(1, Math.floor(rawPts.length / 20));
+      cumPoints = rawPts.filter((_, i) => i % step === 0).map((p, idx) => ({
+        x: p.x.toFixed(1), y: p.y.toFixed(1), label: 'Trade #' + (idx * step + 1) + ' — Kumulatif: ' + signUSD(p.v),
+      }));
+    }
+    const cumColor = (cumVals[cumVals.length - 1] || 0) >= 0 ? '#00d68f' : '#f0455a';
+
+    const bySymbol = {};
+    trades.forEach(t => {
+      if (!bySymbol[t.symbol]) bySymbol[t.symbol] = { trades: 0, wins: 0, pnl: 0, fees: 0 };
+      bySymbol[t.symbol].trades++;
+      if ((t.realized_pnl || 0) > 0) bySymbol[t.symbol].wins++;
+      bySymbol[t.symbol].pnl += (t.realized_pnl || 0);
+      bySymbol[t.symbol].fees += (t.fee_cost || 0);
+    });
+    const symbolRows = Object.entries(bySymbol).sort((a, b) => b[1].pnl - a[1].pnl).map(([sym, d]) => {
+      const wr = d.trades ? (d.wins / d.trades * 100) : 0;
+      const net = d.pnl - d.fees;
+      return {
+        symbol: sym, trades: d.trades, wins: d.wins,
+        winRate: wr.toFixed(1) + '%', wrColor: wr >= 50 ? '#00d68f' : '#f0455a',
+        pnl: signUSD(d.pnl), pnlColor: d.pnl >= 0 ? '#00d68f' : '#f0455a',
+        net: signUSD(net), netColor: net >= 0 ? '#00d68f' : '#f0455a',
+      };
+    });
+
+    const sidebarStyle = isMobile
+      ? 'width:220px;flex-shrink:0;background:#111722;padding:12px 6px;display:flex;flex-direction:column;gap:2px;position:fixed;top:56px;bottom:0;left:0;z-index:120;transform:translateX(' + (this.state.sidebarOpen ? '0' : '-100%') + ');transition:transform .25s ease;box-shadow:0 0 40px rgba(0,0,0,0.6);overflow-y:auto'
+      : 'width:220px;flex-shrink:0;background:#111722;border-right:1px solid #1e2d45;padding:12px 6px;display:flex;flex-direction:column;gap:2px';
+
+    return {
+      isMobile, showSidebar: !isMobile, showBackdrop: isMobile && !!this.state.sidebarOpen, sidebarStyle,
+      toggleSidebar: this.toggleSidebar, closeSidebar: this.closeSidebar, mainPadding: isMobile ? '12px' : '20px', navItems,
+      metricCols: isMobile ? 'repeat(2,1fr)' : 'repeat(4,1fr)',
+      chartCols: isMobile ? '1fr' : '1fr 1fr',
+      wsColor: this.state.apiOnline ? '#00d68f' : '#f0455a',
+      wsAnim: this.state.apiOnline ? 'pulse 2s infinite' : 'none',
+      wsLabel: this.state.apiOnline ? 'LIVE' : 'OFFLINE',
+      retryFetch: this.retryFetch,
+      usingDemo: this.state.usingDemo, demoMessage: this.state.demoMessage,
+      metrics, pnlBars, cumPolyline, cumPoints, cumColor,
+      hasRows: symbolRows.length > 0, hasNoRows: symbolRows.length === 0,
+      symbolRows,
+    };
+  }
+}
+
+</script>
+</body>
+</html>

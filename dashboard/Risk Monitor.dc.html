@@ -1,0 +1,399 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+
+<helmet>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <style>
+    @keyframes pulse{0%,100%{opacity:1}50%{opacity:.3}}
+    body{margin:0;background:#0b0e11;-webkit-font-smoothing:antialiased}
+    a{color:#4589ff}
+    a:hover{color:#6ea3ff}
+    ::-webkit-scrollbar{width:5px;height:5px}
+    ::-webkit-scrollbar-thumb{background:#253550;border-radius:3px}
+  </style>
+</helmet>
+
+<div style="min-height:100vh;background:#0b0e11;color:#e6eaf2;font-family:'Inter',system-ui,sans-serif;font-size:13px;line-height:1.5">
+
+  <!-- TOASTS -->
+  <div style="position:fixed;bottom:16px;right:16px;z-index:300;display:flex;flex-direction:column;gap:7px;max-width:calc(100vw - 32px)">
+    <sc-for list="{{ toasts }}" as="t" hint-placeholder-count="0">
+      <div style="background:#161e2e;border:1px solid #1e2d45;border-left:3px solid {{ t.accent }};border-radius:6px;padding:10px 14px;display:flex;align-items:flex-start;gap:9px;box-shadow:0 4px 24px rgba(0,0,0,0.5);min-width:260px">
+        <span style="font-size:15px;flex-shrink:0">{{ t.icon }}</span>
+        <div style="flex:1">
+          <div style="font-size:11.5px;font-weight:700">{{ t.title }}</div>
+          <div style="font-size:10px;color:#4a5878;margin-top:1px">{{ t.msg }}</div>
+        </div>
+        <span onclick="{{ t.onClose }}" style="cursor:pointer;color:#4a5878;font-size:13px;flex-shrink:0">✕</span>
+      </div>
+    </sc-for>
+  </div>
+
+  <!-- CONFIRM MODAL -->
+  <sc-if value="{{ showConfirm }}" hint-placeholder-val="{{ false }}">
+    <div style="position:fixed;inset:0;z-index:250;background:rgba(0,0,0,0.75);backdrop-filter:blur(4px);display:flex;align-items:center;justify-content:center;padding:16px">
+      <div style="background:#111722;border:1px solid #1e2d45;border-radius:10px;padding:22px;width:100%;max-width:420px;box-shadow:0 20px 60px rgba(0,0,0,0.7)">
+        <div style="font-size:15px;font-weight:700;margin-bottom:10px">{{ confirmTitle }}</div>
+        <div style="color:#8a9bba;font-size:12px;line-height:1.6;margin-bottom:18px;white-space:pre-line">{{ confirmMsg }}</div>
+        <div style="display:flex;gap:8px;justify-content:flex-end;flex-wrap:wrap">
+          <button onclick="{{ confirmCancel }}" style="background:none;border:1px solid #1e2d45;border-radius:6px;padding:8px 16px;font-size:11.5px;color:#8a9bba;cursor:pointer;font-family:inherit">Batal</button>
+          <button onclick="{{ confirmYes }}" style="background:#f0455a;border:none;border-radius:6px;padding:8px 16px;font-size:11.5px;color:#fff;font-weight:700;cursor:pointer;font-family:inherit">{{ confirmActionLabel }}</button>
+        </div>
+      </div>
+    </div>
+  </sc-if>
+
+  <nav style="position:sticky;top:0;z-index:80;height:56px;background:rgba(11,14,17,0.95);backdrop-filter:blur(20px);border-bottom:1px solid #1e2d45;display:flex;align-items:center;padding:0 20px;gap:14px">
+    <sc-if value="{{ isMobile }}" hint-placeholder-val="{{ false }}">
+      <button onclick="{{ toggleSidebar }}" style="background:none;border:none;color:#8a9bba;font-size:20px;cursor:pointer;padding:4px;flex-shrink:0;line-height:1">☰</button>
+    </sc-if>
+    <a href="Dashboard.dc.html" style="display:flex;align-items:center;gap:9px;font-weight:700;font-size:14px;flex-shrink:0;text-decoration:none;color:#e6eaf2">
+      <div style="width:30px;height:30px;border-radius:8px;background:linear-gradient(135deg,#4589ff,#00d68f);display:flex;align-items:center;justify-content:center;font-size:15px">📈</div>
+      AlgoTrader <span style="color:#4589ff;margin-left:2px">Pro</span> <span style="font-size:10px;color:#4a5878;font-weight:400">v7.0</span>
+    </a>
+    <div style="flex:1"></div>
+    <div style="display:flex;align-items:center;gap:5px;font-size:10px;color:#4a5878;font-family:'JetBrains Mono',monospace">
+      <div style="width:7px;height:7px;border-radius:50%;background:{{ wsColor }};animation:{{ wsAnim }}"></div>
+      {{ wsLabel }}
+    </div>
+  </nav>
+
+  <div style="display:flex;min-height:calc(100vh - 56px)">
+    <sc-if value="{{ showBackdrop }}" hint-placeholder-val="{{ false }}">
+      <div onclick="{{ closeSidebar }}" style="position:fixed;inset:0;top:56px;background:rgba(0,0,0,0.6);z-index:110"></div>
+    </sc-if>
+    <aside style="{{ sidebarStyle }}">
+      <div style="padding:6px 10px 3px;font-size:9px;font-weight:700;color:#4a5878;letter-spacing:1.2px;text-transform:uppercase">Overview</div>
+      <a href="Dashboard.dc.html" style="display:flex;align-items:center;gap:9px;padding:8px 10px;border-radius:6px;color:#8a9bba;font-size:12px;font-weight:500;cursor:pointer;text-decoration:none" style-hover="color:#e6eaf2;background:#1a2235"><span style="font-size:13px">⬛</span> Dashboard</a>
+      <a href="Watchlist.dc.html" style="display:flex;align-items:center;gap:9px;padding:8px 10px;border-radius:6px;color:#8a9bba;font-size:12px;font-weight:500;cursor:pointer;text-decoration:none" style-hover="color:#e6eaf2;background:#1a2235"><span style="font-size:13px">👁</span> Watchlist</a>
+      <div style="height:1px;background:#1e2d45;margin:6px 0"></div>
+      <div style="padding:6px 10px 3px;font-size:9px;font-weight:700;color:#4a5878;letter-spacing:1.2px;text-transform:uppercase">Trading</div>
+      <a href="Positions.dc.html" style="display:flex;align-items:center;gap:9px;padding:8px 10px;border-radius:6px;color:#8a9bba;font-size:12px;font-weight:500;cursor:pointer;text-decoration:none" style-hover="color:#e6eaf2;background:#1a2235"><span style="font-size:13px">📌</span> Open Positions</a>
+      <a href="Trade History.dc.html" style="display:flex;align-items:center;gap:9px;padding:8px 10px;border-radius:6px;color:#8a9bba;font-size:12px;font-weight:500;cursor:pointer;text-decoration:none" style-hover="color:#e6eaf2;background:#1a2235"><span style="font-size:13px">📋</span> Trade History</a>
+      <div style="height:1px;background:#1e2d45;margin:6px 0"></div>
+      <div style="padding:6px 10px 3px;font-size:9px;font-weight:700;color:#4a5878;letter-spacing:1.2px;text-transform:uppercase">Analysis</div>
+      <a href="Analytics.dc.html" style="display:flex;align-items:center;gap:9px;padding:8px 10px;border-radius:6px;color:#8a9bba;font-size:12px;font-weight:500;cursor:pointer;text-decoration:none" style-hover="color:#e6eaf2;background:#1a2235"><span style="font-size:13px">📊</span> Analytics &amp; PnL</a>
+      <a href="Diagnosa.dc.html" style="display:flex;align-items:center;gap:9px;padding:8px 10px;border-radius:6px;color:#8a9bba;font-size:12px;font-weight:500;cursor:pointer;text-decoration:none" style-hover="color:#e6eaf2;background:#1a2235"><span style="font-size:13px">🔍</span> Diagnosa Sinyal</a>
+      <div style="display:flex;align-items:center;gap:9px;padding:8px 10px;border-radius:6px;color:#4589ff;background:rgba(69,137,255,0.08);border:1px solid rgba(69,137,255,0.2);font-size:12px;font-weight:500;cursor:pointer"><span style="font-size:13px">🛡</span> Risk Monitor</div>
+      <div style="height:1px;background:#1e2d45;margin:6px 0"></div>
+      <div style="padding:6px 10px 3px;font-size:9px;font-weight:700;color:#4a5878;letter-spacing:1.2px;text-transform:uppercase">System</div>
+      <a href="AI Learner.dc.html" style="display:flex;align-items:center;gap:9px;padding:8px 10px;border-radius:6px;color:#8a9bba;font-size:12px;font-weight:500;cursor:pointer;text-decoration:none" style-hover="color:#e6eaf2;background:#1a2235"><span style="font-size:13px">🧠</span> AI Learner</a>
+      <a href="Gate Scanner.dc.html" style="display:flex;align-items:center;gap:9px;padding:8px 10px;border-radius:6px;color:#f0b429;font-size:12px;font-weight:700;cursor:pointer;text-decoration:none;background:linear-gradient(135deg,rgba(168,85,247,.12),rgba(245,158,11,.12));border:1px solid rgba(245,158,11,.25);margin-top:4px"><span style="font-size:13px">🎯</span> Gate Scanner</a>
+      <a href="Settings.dc.html" style="display:flex;align-items:center;gap:9px;padding:8px 10px;border-radius:6px;color:#8a9bba;font-size:12px;font-weight:500;cursor:pointer;text-decoration:none" style-hover="color:#e6eaf2;background:#1a2235"><span style="font-size:13px">⚙️</span> Settings</a>
+    </aside>
+
+    <main style="flex:1;padding:{{ mainPadding }};min-width:0">
+
+      <sc-if value="{{ isMobile }}" hint-placeholder-val="{{ false }}">
+        <div style="display:flex;gap:6px;overflow-x:auto;margin-bottom:14px;padding-bottom:2px">
+          <sc-for list="{{ navItems }}" as="n" hint-placeholder-count="4">
+            <a href="{{ n.href }}" style="display:flex;align-items:center;gap:5px;padding:7px 12px;border-radius:20px;font-size:11px;font-weight:600;white-space:nowrap;flex-shrink:0;text-decoration:none;background:rgba(69,137,255,0.08);color:#4589ff;border:1px solid rgba(69,137,255,0.2)">
+              <span>{{ n.icon }}</span>{{ n.label }}
+            </a>
+          </sc-for>
+        </div>
+      </sc-if>
+
+      <sc-if value="{{ usingDemo }}" hint-placeholder-val="{{ false }}">
+        <div style="display:flex;align-items:center;gap:10px;background:rgba(240,180,41,0.08);border:1px solid rgba(240,180,41,0.3);border-radius:10px;padding:10px 16px;margin-bottom:16px;font-size:11.5px;color:#f0b429">
+          <span>⚠</span><span>{{ demoMessage }}</span>
+          <button onclick="{{ retryFetch }}" style="margin-left:auto;background:none;border:1px solid rgba(240,180,41,0.4);border-radius:6px;padding:5px 12px;color:#f0b429;font-size:11px;cursor:pointer;font-family:inherit;white-space:nowrap;flex-shrink:0">Coba sambungkan ulang</button>
+        </div>
+      </sc-if>
+
+      <div style="display:flex;align-items:flex-start;justify-content:space-between;margin-bottom:16px;gap:10px;flex-wrap:wrap">
+        <div>
+          <div style="font-size:17px;font-weight:700">Risk Monitor</div>
+          <div style="font-size:11px;color:#4a5878;margin-top:2px">Live risk state · RiskManager v7.0</div>
+        </div>
+        <div style="display:flex;gap:8px">
+          <button onclick="{{ resumeBot }}" style="background:none;border:1px solid #1e2d45;border-radius:6px;padding:6px 12px;font-size:11px;color:#8a9bba;cursor:pointer;font-family:inherit">▶ Resume</button>
+          <button onclick="{{ haltBot }}" style="background:#f0455a;border:none;border-radius:6px;padding:6px 12px;font-size:11px;color:#fff;font-weight:700;cursor:pointer;font-family:inherit">⏸ Halt</button>
+        </div>
+      </div>
+
+      <div style="display:grid;grid-template-columns:{{ statCols }};gap:10px;margin-bottom:16px">
+        <div style="background:#111722;border:1px solid #1e2d45;border-radius:10px;padding:14px 16px;position:relative;overflow:hidden">
+          <div style="position:absolute;top:0;left:0;right:0;height:2px;background:#f0455a;opacity:.8"></div>
+          <div style="font-size:10px;font-weight:600;color:#4a5878;text-transform:uppercase;letter-spacing:.6px;margin-bottom:7px">Current Drawdown</div>
+          <div style="font-size:20px;font-weight:700;font-family:'JetBrains Mono',monospace">{{ curDD }}</div>
+          <div style="font-size:10px;color:#4a5878;margin-top:5px">Limit: {{ ddLimit }}</div>
+        </div>
+        <div style="background:#111722;border:1px solid #1e2d45;border-radius:10px;padding:14px 16px;position:relative;overflow:hidden">
+          <div style="position:absolute;top:0;left:0;right:0;height:2px;background:#f0b429;opacity:.8"></div>
+          <div style="font-size:10px;font-weight:600;color:#4a5878;text-transform:uppercase;letter-spacing:.6px;margin-bottom:7px">Daily Loss</div>
+          <div style="font-size:20px;font-weight:700;font-family:'JetBrains Mono',monospace">{{ dailyLoss }}</div>
+          <div style="font-size:10px;color:#4a5878;margin-top:5px">Limit: {{ dailyLimit }}</div>
+        </div>
+        <div style="background:#111722;border:1px solid #1e2d45;border-radius:10px;padding:14px 16px;position:relative;overflow:hidden">
+          <div style="position:absolute;top:0;left:0;right:0;height:2px;background:#4589ff;opacity:.8"></div>
+          <div style="font-size:10px;font-weight:600;color:#4a5878;text-transform:uppercase;letter-spacing:.6px;margin-bottom:7px">Open Positions</div>
+          <div style="font-size:20px;font-weight:700;font-family:'JetBrains Mono',monospace;color:#4589ff">{{ openPos }}</div>
+          <div style="font-size:10px;color:#4a5878;margin-top:5px">Max: {{ maxOpen }}</div>
+        </div>
+        <div style="background:#111722;border:1px solid #1e2d45;border-radius:10px;padding:14px 16px;position:relative;overflow:hidden">
+          <div style="position:absolute;top:0;left:0;right:0;height:2px;background:#a78bfa;opacity:.8"></div>
+          <div style="font-size:10px;font-weight:600;color:#4a5878;text-transform:uppercase;letter-spacing:.6px;margin-bottom:7px">Trailing Stop</div>
+          <div style="font-size:20px;font-weight:700;font-family:'JetBrains Mono',monospace">{{ trailingStatus }}</div>
+          <div style="font-size:10px;color:#4a5878;margin-top:5px">ATR Mult: {{ trailMult }}</div>
+        </div>
+      </div>
+
+      <div style="display:grid;grid-template-columns:{{ mainCols }};gap:10px;margin-bottom:16px">
+        <div style="background:#111722;border:1px solid #1e2d45;border-radius:10px;padding:14px">
+          <div style="font-size:11px;font-weight:600;color:#8a9bba;text-transform:uppercase;letter-spacing:.5px;margin-bottom:10px">Risk Parameters</div>
+          <sc-for list="{{ paramRows }}" as="p" hint-placeholder-count="10">
+            <div style="display:flex;align-items:center;justify-content:space-between;padding:7px 0;border-bottom:1px solid #1e2d45;font-size:11px">
+              <span style="color:#4a5878">{{ p.label }}</span>
+              <span style="font-family:'JetBrains Mono',monospace;font-weight:600;color:{{ p.color }}">{{ p.value }}</span>
+            </div>
+          </sc-for>
+        </div>
+        <div style="background:#111722;border:1px solid #1e2d45;border-radius:10px;padding:14px">
+          <div style="font-size:11px;font-weight:600;color:#8a9bba;text-transform:uppercase;letter-spacing:.5px;margin-bottom:10px">Drawdown Gauge</div>
+          <svg viewBox="0 0 200 120" style="width:100%;max-width:220px;display:block;margin:0 auto">
+            <defs><linearGradient id="arcGrad" x1="0%" y1="0%" x2="100%" y2="0%"><stop offset="0%" stop-color="#00d68f"/><stop offset="50%" stop-color="#f0b429"/><stop offset="100%" stop-color="#f0455a"/></linearGradient></defs>
+            <path d="M 20 100 A 80 80 0 0 1 180 100" fill="none" stroke="#1e2d45" stroke-width="12" stroke-linecap="round"/>
+            <path d="M 20 100 A 80 80 0 0 1 180 100" fill="none" stroke="url(#arcGrad)" stroke-width="12" stroke-linecap="round" stroke-dasharray="251.3" stroke-dashoffset="{{ gaugeOffset }}"/>
+            <text x="14" y="115" fill="#4a5878" font-size="9" font-family="monospace">0%</text>
+            <text x="88" y="20" fill="#4a5878" font-size="9" font-family="monospace" text-anchor="middle">50%</text>
+            <text x="168" y="115" fill="#4a5878" font-size="9" font-family="monospace">100%</text>
+            <text x="100" y="88" fill="#e6eaf2" font-size="20" font-weight="700" font-family="monospace" text-anchor="middle">{{ gaugePct }}</text>
+            <text x="100" y="106" fill="#8a9bba" font-size="10" text-anchor="middle">Drawdown</text>
+          </svg>
+          <div style="margin-top:12px">
+            <div style="display:flex;justify-content:space-between;margin-bottom:4px;font-size:10.5px">
+              <span style="color:#4a5878;font-weight:500">Daily Loss Used</span>
+              <span style="color:#e6eaf2;font-family:'JetBrains Mono',monospace;font-weight:600">{{ dailyBarLabel }}</span>
+            </div>
+            <div style="height:4px;background:#0b0e11;border-radius:3px;overflow:hidden">
+              <div style="height:100%;border-radius:3px;width:{{ dailyBarPct }}%;background:linear-gradient(90deg,#f0b429,#f0455a)"></div>
+            </div>
+          </div>
+          <div style="margin-top:10px">
+            <div style="display:flex;justify-content:space-between;margin-bottom:4px;font-size:10.5px">
+              <span style="color:#4a5878;font-weight:500">Positions Used</span>
+              <span style="color:#e6eaf2;font-family:'JetBrains Mono',monospace;font-weight:600">{{ posBarLabel }}</span>
+            </div>
+            <div style="height:4px;background:#0b0e11;border-radius:3px;overflow:hidden">
+              <div style="height:100%;border-radius:3px;width:{{ posBarPct }}%;background:linear-gradient(90deg,#4589ff,#22d3ee)"></div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div style="background:#111722;border:1px solid #1e2d45;border-radius:10px;overflow:hidden">
+        <div style="padding:12px 14px;border-bottom:1px solid #1e2d45;font-size:11px;font-weight:600;color:#8a9bba;text-transform:uppercase;letter-spacing:.5px">Feed Health per Symbol</div>
+        <div style="overflow-x:auto">
+          <table style="width:100%;border-collapse:collapse;font-size:11px;min-width:600px">
+            <thead>
+              <tr>
+                <th style="padding:9px 10px;text-align:left;font-size:9.5px;font-weight:600;color:#4a5878;text-transform:uppercase;letter-spacing:.5px;border-bottom:1px solid #1e2d45;background:#0b0e11;white-space:nowrap">Symbol</th>
+                <th style="padding:9px 10px;text-align:center;font-size:9.5px;font-weight:600;color:#4a5878;text-transform:uppercase;letter-spacing:.5px;border-bottom:1px solid #1e2d45;background:#0b0e11;white-space:nowrap">Feed</th>
+                <th style="padding:9px 10px;text-align:right;font-size:9.5px;font-weight:600;color:#4a5878;text-transform:uppercase;letter-spacing:.5px;border-bottom:1px solid #1e2d45;background:#0b0e11;white-space:nowrap">Age</th>
+                <th style="padding:9px 10px;text-align:right;font-size:9.5px;font-weight:600;color:#4a5878;text-transform:uppercase;letter-spacing:.5px;border-bottom:1px solid #1e2d45;background:#0b0e11;white-space:nowrap">Last Price</th>
+                <th style="padding:9px 10px;text-align:right;font-size:9.5px;font-weight:600;color:#4a5878;text-transform:uppercase;letter-spacing:.5px;border-bottom:1px solid #1e2d45;background:#0b0e11;white-space:nowrap">Spread%</th>
+              </tr>
+            </thead>
+            <tbody>
+              <sc-for list="{{ feedRows }}" as="f" hint-placeholder-count="6">
+                <tr>
+                  <td style="padding:10px;border-bottom:1px solid rgba(30,45,69,0.5);font-weight:700;white-space:nowrap">{{ f.symbol }}</td>
+                  <td style="padding:10px;text-align:center;border-bottom:1px solid rgba(30,45,69,0.5)"><span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:{{ f.dotColor }}"></span></td>
+                  <td style="padding:10px;text-align:right;border-bottom:1px solid rgba(30,45,69,0.5);font-family:'JetBrains Mono',monospace;color:#8a9bba">{{ f.age }}</td>
+                  <td style="padding:10px;text-align:right;border-bottom:1px solid rgba(30,45,69,0.5);font-family:'JetBrains Mono',monospace;color:#8a9bba">{{ f.price }}</td>
+                  <td style="padding:10px;text-align:right;border-bottom:1px solid rgba(30,45,69,0.5);font-family:'JetBrains Mono',monospace;color:{{ f.spreadColor }}">{{ f.spread }}</td>
+                </tr>
+              </sc-for>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </main>
+  </div>
+</div>
+
+</x-dc>
+<script type="text/x-dc" data-dc-script>
+
+function fmtUSD(v, d = 2) { if (v == null) return '—'; return '$' + Number(v).toLocaleString('en-US', { minimumFractionDigits: d, maximumFractionDigits: d }); }
+
+function demoHealth() {
+  return {
+    current_drawdown_pct: 3.2, max_drawdown_pct: 15, daily_loss_pct: 1.1, daily_loss_limit_pct: 10,
+    open_positions: 2, max_open_positions: 3, max_position_size_pct: 10, risk_per_trade_pct: 1,
+    current_equity: 10450, initial_equity: 10000, peak_equity: 10620, free_balance: 8210.44,
+    trailing_atr_mult: 1.5, is_halted: false, halt_reason: null, trailing_active: true,
+    atr_mult_sl: 2.0, atr_mult_tp: 3.5,
+  };
+}
+function demoFeed() {
+  const syms = ['BTC/USDT', 'ETH/USDT', 'SOL/USDT', 'ALT/USDT', 'SUI/USDT'];
+  return syms.map((s, i) => ({ symbol: s, feed_ok: i !== 3, age_sec: 2 + i * 3, last_price: i === 0 ? 68210 : i === 1 ? 3541 : i === 2 ? 172.4 : 0.4 + i, spread_pct: 0.02 + i * 0.01 }));
+}
+
+let toastSeq = 0;
+
+class Component extends DCLogic {
+  state = {
+    apiBase: 'http://localhost:8000/api', apiKey: '',
+    health: {}, feed: [], usingDemo: false, demoMessage: '', apiOnline: false,
+    toasts: [], confirm: null,
+  };
+
+  toast(type, title, msg) {
+    const id = ++toastSeq;
+    const meta = { success: { icon: '✅', accent: '#00d68f' }, error: { icon: '❌', accent: '#f0455a' }, warn: { icon: '⚠️', accent: '#f0b429' }, info: { icon: 'ℹ️', accent: '#4589ff' } }[type] || {};
+    this.setState(s => ({ toasts: [...s.toasts, { id, title, msg, icon: meta.icon, accent: meta.accent }] }));
+    setTimeout(() => this.setState(s => ({ toasts: s.toasts.filter(t => t.id !== id) })), 5000);
+  }
+  closeToast(id) { this.setState(s => ({ toasts: s.toasts.filter(t => t.id !== id) })); }
+  askConfirm(title, msg, actionLabel, onYes) { this.setState({ confirm: { title, msg, actionLabel, onYes } }); }
+  confirmCancel = () => this.setState({ confirm: null });
+  confirmYes = () => { const c = this.state.confirm; this.setState({ confirm: null }); if (c && c.onYes) c.onYes(); };
+
+  componentDidMount() {
+    try {
+      const b = localStorage.getItem('gs_api_base'); if (b) this.state.apiBase = b;
+      const k = localStorage.getItem('gs_api_key'); if (k) this.state.apiKey = k;
+    } catch (e) {}
+    this.state.isMobile = window.innerWidth <= 768;
+    this._onResize = () => this.setState({ isMobile: window.innerWidth <= 768 });
+    window.addEventListener('resize', this._onResize);
+    this.fetchData();
+    this._timer = setInterval(() => this.fetchData(), 15000);
+  }
+  componentWillUnmount() { if (this._timer) clearInterval(this._timer); if (this._onResize) window.removeEventListener('resize', this._onResize); }
+
+  toggleSidebar = () => this.setState(s => ({ sidebarOpen: !s.sidebarOpen }));
+  closeSidebar = () => this.setState({ sidebarOpen: false });
+
+  async apiGet(path) {
+    try {
+      const ctrl = new AbortController();
+      const tid = setTimeout(() => ctrl.abort(), 6000);
+      const hdrs = {}; if (this.state.apiKey) hdrs['X-API-Key'] = this.state.apiKey;
+      const r = await fetch(this.state.apiBase + path, { signal: ctrl.signal, headers: hdrs });
+      clearTimeout(tid);
+      if (!r.ok) return null;
+      return await r.json();
+    } catch (e) { return null; }
+  }
+  async apiPost(path, body, timeout = 15000) {
+    if (!this.state.apiKey) { this.toast('warn', 'API Key Diperlukan', 'Buka Gate Scanner → Settings dulu.'); return null; }
+    try {
+      const ctrl = new AbortController();
+      const tid = setTimeout(() => ctrl.abort(), timeout);
+      const r = await fetch(this.state.apiBase + path, {
+        method: 'POST', signal: ctrl.signal,
+        headers: { 'Content-Type': 'application/json', 'X-API-Key': this.state.apiKey },
+        body: JSON.stringify(body || {}),
+      });
+      clearTimeout(tid);
+      if (!r.ok) { this.toast('error', 'Gagal', 'HTTP ' + r.status); return null; }
+      return await r.json();
+    } catch (e) { this.toast('error', 'Gagal menghubungi bot', e.message || String(e)); return null; }
+  }
+
+  async fetchData() {
+    const h = await this.apiGet('/system_health');
+    if (h) {
+      this.setState({ health: h, feed: h.feed_health || demoFeed(), usingDemo: false, apiOnline: true });
+    } else {
+      this.setState({
+        health: demoHealth(), feed: demoFeed(), usingDemo: true, apiOnline: false,
+        demoMessage: this.state.apiKey ? 'Tidak bisa menyambung ke bot. Menampilkan data contoh.' : 'API Key belum diset (atur di Gate Scanner → Settings). Menampilkan data contoh.',
+      });
+    }
+  }
+
+  retryFetch = () => this.fetchData();
+  haltBot = () => this.askConfirm('Halt Bot', 'Halt trading bot sekarang?', 'Ya, Halt', async () => { const r = await this.apiPost('/bot/halt', { reason: 'Manual halt from dashboard' }); if (r) { this.toast('warn', '⏸ Halted', 'Bot trading dihentikan'); this.fetchData(); } });
+  resumeBot = () => this.askConfirm('Resume Bot', 'Resume trading bot?', 'Ya, Resume', async () => { const r = await this.apiPost('/bot/resume', {}); if (r) { this.toast('success', '▶ Resumed', 'Bot trading dilanjutkan'); this.fetchData(); } });
+
+  renderVals() {
+    const isMobile = !!this.state.isMobile;
+    const navItems = [
+      { icon: '⬛', label: 'Dashboard', href: 'Dashboard.dc.html' },
+      { icon: '👁', label: 'Watchlist', href: 'Watchlist.dc.html' },
+      { icon: '📌', label: 'Positions', href: 'Positions.dc.html' },
+      { icon: '🎯', label: 'Gate', href: 'Gate Scanner.dc.html' },
+    ];
+
+    const h = this.state.health || {};
+    const dd = h.current_drawdown_pct || 0;
+    const ddLimit = h.max_drawdown_pct || 15;
+    const dl = h.daily_loss_pct || 0;
+    const dlLimit = h.daily_loss_limit_pct || 10;
+    const openPos = h.open_positions || 0;
+    const maxOpen = h.max_open_positions || 3;
+
+    const paramRows = [
+      { label: 'Max Drawdown Limit', value: ddLimit + '%', color: '#e6eaf2' },
+      { label: 'Max Position Size', value: (h.max_position_size_pct || 0) + '%', color: '#e6eaf2' },
+      { label: 'Daily Loss Limit', value: dlLimit + '%', color: '#e6eaf2' },
+      { label: 'Risk Per Trade', value: (h.risk_per_trade_pct || 0) + '%', color: '#e6eaf2' },
+      { label: 'Current Equity', value: fmtUSD(h.current_equity), color: '#e6eaf2' },
+      { label: 'Initial Equity', value: fmtUSD(h.initial_equity), color: '#e6eaf2' },
+      { label: 'Peak Equity', value: fmtUSD(h.peak_equity), color: '#e6eaf2' },
+      { label: 'Free Balance', value: fmtUSD(h.free_balance), color: '#e6eaf2' },
+      { label: 'Trailing ATR Mult', value: (h.trailing_atr_mult || 0) + '×', color: '#e6eaf2' },
+      { label: 'Halt Status', value: h.is_halted ? 'HALTED' : 'RUNNING', color: h.is_halted ? '#f0455a' : '#00d68f' },
+    ];
+
+    const ddPctOfLimit = Math.min(100, (dd / ddLimit) * 100);
+    const gaugeOffset = (251.3 * (1 - ddPctOfLimit / 100)).toFixed(1);
+
+    const feedRows = (this.state.feed || []).map(f => ({
+      symbol: f.symbol,
+      dotColor: f.feed_ok ? '#00d68f' : '#f0455a',
+      age: (f.age_sec || 0).toFixed(0) + 's',
+      price: f.last_price >= 1 ? '$' + f.last_price.toFixed(2) : '$' + (f.last_price || 0).toFixed(6),
+      spread: (f.spread_pct || 0).toFixed(3) + '%',
+      spreadColor: (f.spread_pct || 0) > 0.1 ? '#f0455a' : '#8a9bba',
+    }));
+
+    const toasts = this.state.toasts.map(t => ({ ...t, onClose: () => this.closeToast(t.id) }));
+    const c = this.state.confirm;
+
+    const sidebarStyle = isMobile
+      ? 'width:220px;flex-shrink:0;background:#111722;padding:12px 6px;display:flex;flex-direction:column;gap:2px;position:fixed;top:56px;bottom:0;left:0;z-index:120;transform:translateX(' + (this.state.sidebarOpen ? '0' : '-100%') + ');transition:transform .25s ease;box-shadow:0 0 40px rgba(0,0,0,0.6);overflow-y:auto'
+      : 'width:220px;flex-shrink:0;background:#111722;border-right:1px solid #1e2d45;padding:12px 6px;display:flex;flex-direction:column;gap:2px';
+
+    return {
+      isMobile, showSidebar: !isMobile, showBackdrop: isMobile && !!this.state.sidebarOpen, sidebarStyle,
+      toggleSidebar: this.toggleSidebar, closeSidebar: this.closeSidebar, mainPadding: isMobile ? '12px' : '20px', navItems,
+      statCols: isMobile ? 'repeat(2,1fr)' : 'repeat(4,1fr)',
+      mainCols: isMobile ? '1fr' : '1fr 1fr',
+      toasts,
+      showConfirm: !!c, confirmTitle: c ? c.title : '', confirmMsg: c ? c.msg : '',
+      confirmActionLabel: c ? c.actionLabel : 'Ya', confirmCancel: this.confirmCancel, confirmYes: this.confirmYes,
+      wsColor: this.state.apiOnline ? '#00d68f' : '#f0455a',
+      wsAnim: this.state.apiOnline ? 'pulse 2s infinite' : 'none',
+      wsLabel: this.state.apiOnline ? 'LIVE' : 'OFFLINE',
+      retryFetch: this.retryFetch, haltBot: this.haltBot, resumeBot: this.resumeBot,
+      usingDemo: this.state.usingDemo, demoMessage: this.state.demoMessage,
+      curDD: dd.toFixed(2) + '%', ddLimit: ddLimit + '%',
+      dailyLoss: dl.toFixed(2) + '%', dailyLimit: dlLimit + '%',
+      openPos, maxOpen,
+      trailingStatus: h.trailing_active ? 'ACTIVE' : 'OFF', trailMult: (h.trailing_atr_mult || 0) + '×',
+      paramRows,
+      gaugeOffset, gaugePct: dd.toFixed(1) + '%',
+      dailyBarLabel: dl.toFixed(2) + '% / ' + dlLimit + '%', dailyBarPct: Math.min(100, (dl / dlLimit) * 100),
+      posBarLabel: openPos + ' / ' + maxOpen, posBarPct: Math.min(100, (openPos / maxOpen) * 100),
+      feedRows,
+    };
+  }
+}
+
+</script>
+</body>
+</html>

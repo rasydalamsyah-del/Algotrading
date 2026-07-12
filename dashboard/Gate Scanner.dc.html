@@ -1,0 +1,504 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+
+<helmet>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=Space+Grotesk:wght@500;600;700&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <style>
+    @keyframes pulseDot{0%,100%{opacity:1;transform:scale(1)}50%{opacity:.45;transform:scale(.75)}}
+    @keyframes fadeUp{from{opacity:0;transform:translateY(14px)}to{opacity:1;transform:translateY(0)}}
+    @keyframes shimmer{0%{background-position:200% 0}100%{background-position:-200% 0}}
+    body{margin:0;background:#05060a;-webkit-font-smoothing:antialiased}
+    a{color:#a855f7}
+    a:hover{color:#c084fc}
+  </style>
+</helmet>
+
+<div style="min-height:100vh;background:#05060a;color:#e7e9ef;font-family:'Inter',system-ui,sans-serif;position:relative;overflow-x:hidden">
+
+  <div style="position:fixed;inset:0;pointer-events:none;z-index:0;background:radial-gradient(ellipse 55% 40% at 12% 10%, rgba(168,85,247,0.09) 0%, transparent 60%), radial-gradient(ellipse 45% 35% at 90% 20%, rgba(59,130,246,0.07) 0%, transparent 60%), radial-gradient(ellipse 50% 40% at 50% 100%, rgba(245,158,11,0.05) 0%, transparent 60%)"></div>
+
+  <!-- TOPBAR -->
+  <nav style="position:sticky;top:0;z-index:50;display:flex;align-items:center;gap:14px;padding:0 24px;height:60px;background:rgba(5,6,10,0.88);backdrop-filter:blur(20px);border-bottom:1px solid rgba(255,255,255,0.07)">
+    <div style="display:flex;align-items:center;gap:9px;font-family:'Space Grotesk',sans-serif;font-weight:700;font-size:15px">
+      <div style="width:30px;height:30px;border-radius:9px;background:linear-gradient(135deg,#7c3aed,#a855f7);display:grid;place-items:center;font-size:15px">🎯</div>
+      Gate <span style="color:#a855f7">Scanner</span>
+    </div>
+
+    <div style="margin-left:8px;padding:3px 10px;border-radius:20px;font-size:10px;font-weight:700;letter-spacing:.04em;{{ modeBadgeStyle }}">{{ modeBadgeLabel }}</div>
+
+    <div style="flex:1"></div>
+
+    <div style="display:flex;align-items:center;gap:8px;background:#0d0f1a;border:1px solid rgba(255,255,255,0.08);border-radius:24px;padding:6px 14px;font-size:12px;color:#8b93a7;white-space:nowrap;flex-shrink:0">
+      <div style="width:7px;height:7px;border-radius:50%;background:#a855f7;animation:pulseDot 1.6s infinite;flex-shrink:0"></div>
+      Refresh dalam {{ countdown }}s
+    </div>
+    <button onclick="{{ toggleSettings }}" style="background:rgba(255,255,255,0.04);border:1px solid rgba(255,255,255,0.08);border-radius:8px;padding:7px 13px;font-size:11px;color:#8b93a7;cursor:pointer;font-family:inherit;white-space:nowrap;flex-shrink:0">⚙ Settings</button>
+    <a href="Dashboard.dc.html" style="background:rgba(255,255,255,0.04);border:1px solid rgba(255,255,255,0.08);border-radius:8px;padding:7px 13px;font-size:11px;color:#8b93a7;cursor:pointer;font-family:inherit;text-decoration:none;white-space:nowrap;flex-shrink:0">← Dashboard</a>
+  </nav>
+
+  <!-- SETTINGS OVERLAY -->
+  <sc-if value="{{ settingsOpen }}">
+    <div onclick="{{ toggleSettings }}" style="position:fixed;inset:0;z-index:100;display:flex;align-items:flex-start;justify-content:center;padding:80px 16px;background:rgba(0,0,0,0.7);backdrop-filter:blur(4px)">
+      <div onclick="{{ stopProp }}" style="background:#0d0f1a;border:1px solid rgba(255,255,255,0.12);border-radius:16px;padding:26px;width:100%;max-width:420px;box-shadow:0 24px 64px rgba(0,0,0,0.7)">
+        <div style="font-family:'Space Grotesk',sans-serif;font-weight:700;font-size:16px;margin-bottom:18px">⚙ Koneksi Bot</div>
+
+        <label style="font-size:11px;color:#8b93a7;display:block;margin-bottom:5px">API Base URL</label>
+        <input value="{{ apiBaseInput }}" oninput="{{ onApiBaseInput }}" style="width:100%;background:#111426;border:1px solid rgba(255,255,255,0.09);border-radius:8px;padding:9px 12px;color:#e7e9ef;font-family:'JetBrains Mono',monospace;font-size:12px;outline:none;margin-bottom:14px;box-sizing:border-box" />
+
+        <label style="font-size:11px;color:#8b93a7;display:block;margin-bottom:5px">Dashboard API Key</label>
+        <input type="password" value="{{ apiKeyInput }}" oninput="{{ onApiKeyInput }}" placeholder="DASHBOARD_API_KEY dari .env" style="width:100%;background:#111426;border:1px solid rgba(255,255,255,0.09);border-radius:8px;padding:9px 12px;color:#e7e9ef;font-family:'JetBrains Mono',monospace;font-size:12px;outline:none;margin-bottom:14px;box-sizing:border-box" />
+
+        <label style="font-size:11px;color:#8b93a7;display:block;margin-bottom:5px">Refresh Interval</label>
+        <select value="{{ refreshSecInput }}" onchange="{{ onRefreshInput }}" style="width:100%;background:#111426;border:1px solid rgba(255,255,255,0.09);border-radius:8px;padding:9px 12px;color:#e7e9ef;font-size:12px;outline:none;margin-bottom:18px">
+          <option value="20">20 detik</option>
+          <option value="30">30 detik</option>
+          <option value="60">60 detik</option>
+          <option value="120">2 menit</option>
+        </select>
+
+        <div style="font-size:11px;color:#6b7280;line-height:1.5;margin-bottom:16px;padding:10px 12px;background:rgba(255,255,255,0.03);border-radius:8px;border:1px solid rgba(255,255,255,0.06)">
+          Kalau bot belum online / API tidak terjangkau, tampilan otomatis memakai <b style="color:#f59e0b">data contoh</b> supaya desain tetap bisa dilihat.
+        </div>
+
+        <div style="display:flex;gap:8px">
+          <button onclick="{{ saveSettings }}" style="flex:1;background:linear-gradient(135deg,#7c3aed,#a855f7);border:none;border-radius:8px;padding:11px;color:#fff;font-weight:700;font-size:13px;cursor:pointer;font-family:inherit">Simpan &amp; Refresh</button>
+          <button onclick="{{ toggleSettings }}" style="background:#111426;border:1px solid rgba(255,255,255,0.09);border-radius:8px;padding:11px 18px;color:#8b93a7;font-size:13px;cursor:pointer;font-family:inherit">Batal</button>
+        </div>
+      </div>
+    </div>
+  </sc-if>
+
+  <main style="position:relative;z-index:1;max-width:1600px;margin:0 auto;padding:24px 24px 64px">
+
+    <!-- DEMO / ERROR BANNER -->
+    <sc-if value="{{ usingDemo }}" hint-placeholder-val="{{ false }}">
+      <div style="display:flex;align-items:center;gap:10px;background:rgba(245,158,11,0.08);border:1px solid rgba(245,158,11,0.25);border-radius:10px;padding:10px 16px;margin-bottom:20px;font-size:12px;color:#f59e0b">
+        <span>⚠</span>
+        <span>{{ demoMessage }}</span>
+        <button onclick="{{ retryFetch }}" style="margin-left:auto;background:none;border:1px solid rgba(245,158,11,0.35);border-radius:6px;padding:5px 12px;color:#f59e0b;font-size:11px;cursor:pointer;font-family:inherit;white-space:nowrap;flex-shrink:0">Coba sambungkan ulang</button>
+      </div>
+    </sc-if>
+
+    <!-- TOOLBAR -->
+    <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:22px;padding:12px 16px;background:#0b0d18;border:1px solid rgba(255,255,255,0.07);border-radius:12px">
+      <input placeholder="Cari symbol..." value="{{ searchInput }}" oninput="{{ onSearchInput }}" style="flex:1;min-width:150px;max-width:240px;background:#111426;border:1px solid rgba(255,255,255,0.08);border-radius:8px;padding:8px 12px;color:#e7e9ef;font-size:12px;outline:none;font-family:inherit;box-sizing:border-box" />
+      <div style="width:1px;height:22px;background:rgba(255,255,255,0.08)"></div>
+      <span style="font-size:10px;color:#6b7280;font-weight:600">PROFIL</span>
+      <sc-for list="{{ profileFilters }}" as="pf" hint-placeholder-count="7">
+        <button onclick="{{ pf.onClick }}" style="background:{{ pf.bg }};border:1px solid {{ pf.border }};border-radius:6px;padding:6px 11px;font-size:11px;color:{{ pf.color }};cursor:pointer;font-family:inherit;font-weight:{{ pf.weight }}">{{ pf.label }}</button>
+      </sc-for>
+      <div style="width:1px;height:22px;background:rgba(255,255,255,0.08)"></div>
+      <span style="font-size:10px;color:#6b7280;font-weight:600">SORT</span>
+      <select value="{{ sortBy }}" onchange="{{ onSortChange }}" style="background:#111426;border:1px solid rgba(255,255,255,0.08);border-radius:6px;padding:6px 11px;font-size:11px;color:#8b93a7;outline:none;font-family:inherit">
+        <option value="score">Score ↓</option>
+        <option value="prob">Probabilitas ↓</option>
+        <option value="rr">R:R Ratio ↓</option>
+        <option value="sym">Symbol A-Z</option>
+      </select>
+    </div>
+
+    <!-- STATS BAR -->
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:12px;margin-bottom:32px">
+      <div style="background:#0b0d18;border:1px solid rgba(255,255,255,0.07);border-radius:12px;padding:16px 18px">
+        <div style="font-size:10px;color:#8b93a7;font-weight:700;letter-spacing:.05em;text-transform:uppercase;margin-bottom:6px">Gate 5 🔥</div>
+        <div style="font-family:'JetBrains Mono',monospace;font-size:26px;font-weight:700;color:#f59e0b">{{ countG5 }}</div>
+        <div style="font-size:10px;color:#4b5563;margin-top:3px">Score ≥ 85</div>
+      </div>
+      <div style="background:#0b0d18;border:1px solid rgba(255,255,255,0.07);border-radius:12px;padding:16px 18px">
+        <div style="font-size:10px;color:#8b93a7;font-weight:700;letter-spacing:.05em;text-transform:uppercase;margin-bottom:6px">Gate 4 ✨</div>
+        <div style="font-family:'JetBrains Mono',monospace;font-size:26px;font-weight:700;color:#a855f7">{{ countG4 }}</div>
+        <div style="font-size:10px;color:#4b5563;margin-top:3px">Score 70–84</div>
+      </div>
+      <div style="background:#0b0d18;border:1px solid rgba(255,255,255,0.07);border-radius:12px;padding:16px 18px">
+        <div style="font-size:10px;color:#8b93a7;font-weight:700;letter-spacing:.05em;text-transform:uppercase;margin-bottom:6px">Gate 3 📊</div>
+        <div style="font-family:'JetBrains Mono',monospace;font-size:26px;font-weight:700;color:#3b82f6">{{ countG3 }}</div>
+        <div style="font-size:10px;color:#4b5563;margin-top:3px">Score 55–69</div>
+      </div>
+      <div style="background:#0b0d18;border:1px solid rgba(255,255,255,0.07);border-radius:12px;padding:16px 18px">
+        <div style="font-size:10px;color:#8b93a7;font-weight:700;letter-spacing:.05em;text-transform:uppercase;margin-bottom:6px">Total Coin</div>
+        <div style="font-family:'JetBrains Mono',monospace;font-size:26px;font-weight:700;color:#10b981">{{ countTotal }}</div>
+        <div style="font-size:10px;color:#4b5563;margin-top:3px">{{ lastUpdateLabel }}</div>
+      </div>
+    </div>
+
+    <!-- GATE SECTIONS -->
+    <sc-for list="{{ gateSections }}" as="section" hint-placeholder-count="3">
+      <section style="margin-bottom:40px;animation:fadeUp .4s ease both">
+        <div style="display:flex;align-items:center;gap:12px;margin-bottom:18px;padding-bottom:13px;border-bottom:1px solid rgba(255,255,255,0.07)">
+          <div style="width:42px;height:42px;border-radius:11px;display:grid;place-items:center;font-size:19px;background:{{ section.iconBg }};box-shadow:0 0 22px {{ section.glow }}">{{ section.icon }}</div>
+          <div style="flex:1">
+            <div style="font-family:'Space Grotesk',sans-serif;font-size:17px;font-weight:700;color:{{ section.color }}">{{ section.name }}</div>
+            <div style="font-size:11.5px;color:#8b93a7;margin-top:2px">{{ section.sub }}</div>
+          </div>
+          <div style="font-family:'JetBrains Mono',monospace;font-size:26px;font-weight:700;color:{{ section.color }};opacity:.3">{{ section.count }}</div>
+        </div>
+
+        <sc-if value="{{ section.hasCoins }}" hint-placeholder-val="{{ true }}">
+          <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(360px,1fr));gap:14px">
+            <sc-for list="{{ section.cards }}" as="card" hint-placeholder-count="3">
+              <div style="background:#0b0d18;border:1px solid rgba(255,255,255,0.07);border-radius:13px;overflow:hidden;transition:transform .15s,border-color .15s;position:relative">
+                <div style="height:2px;background:linear-gradient(90deg,{{ card.accent }},transparent 70%)"></div>
+
+                <div style="display:flex;align-items:center;gap:11px;padding:14px 16px 11px;border-bottom:1px solid rgba(255,255,255,0.06)">
+                  <div style="width:38px;height:38px;border-radius:10px;display:grid;place-items:center;font-size:12px;font-weight:800;font-family:'JetBrains Mono',monospace;background:{{ card.avatarBg }};color:{{ card.accent }};flex-shrink:0">{{ card.avatar }}</div>
+                  <div style="flex:1;min-width:0">
+                    <div style="font-family:'Space Grotesk',sans-serif;font-weight:700;font-size:14.5px">{{ card.symbol }}</div>
+                    <div style="font-size:10px;color:#4b5563;margin-top:2px">{{ card.profileEmoji }} {{ card.profileLabel }} · <span style="color:#8b93a7">{{ card.regimeLabel }}</span></div>
+                    <div style="display:flex;gap:5px;margin-top:5px;align-items:center">
+                      <span style="font-size:8.5px;font-weight:700;padding:2px 7px;border-radius:10px;background:{{ card.qualityBg }};color:{{ card.qualityColor }}">{{ card.qualityLabel }}</span>
+                      <sc-if value="{{ card.triggerMet }}" hint-placeholder-val="{{ false }}">
+                        <span style="font-size:8.5px;font-weight:700;padding:2px 7px;border-radius:10px;background:rgba(16,185,129,.12);color:#10b981">✓ TRIGGER</span>
+                      </sc-if>
+                    </div>
+                  </div>
+                  <div style="display:flex;flex-direction:column;align-items:center;gap:1px;flex-shrink:0">
+                    <svg viewBox="0 0 38 38" style="transform:rotate(-90deg);width:46px;height:46px">
+                      <circle cx="19" cy="19" r="17" fill="none" stroke="rgba(255,255,255,0.1)" stroke-width="3"/>
+                      <circle cx="19" cy="19" r="17" fill="none" stroke="{{ card.accent }}" stroke-width="3" stroke-linecap="round" stroke-dasharray="106.8" stroke-dashoffset="{{ card.ringOffset }}"/>
+                    </svg>
+                    <div style="font-family:'JetBrains Mono',monospace;font-size:13px;font-weight:700;margin-top:-32px;color:{{ card.accent }}">{{ card.scoreRounded }}</div>
+                  </div>
+                </div>
+
+                <!-- sparkline -->
+                <div style="display:flex;align-items:flex-end;gap:2px;height:44px;padding:10px 16px 6px">
+                  <sc-for list="{{ card.spark }}" as="bar" hint-placeholder-count="12">
+                    <div style="flex:1;min-width:3px;border-radius:2px 2px 0 0;height:{{ bar.h }}%;background:{{ card.accent }};opacity:{{ bar.op }}"></div>
+                  </sc-for>
+                </div>
+
+                <div style="display:grid;grid-template-columns:1fr 1px 1fr 1px 1fr;padding:10px 16px;border-top:1px solid rgba(255,255,255,0.06);border-bottom:1px solid rgba(255,255,255,0.06);background:rgba(0,0,0,0.15)">
+                  <div>
+                    <div style="font-size:9px;color:#4b5563;font-weight:600;letter-spacing:.04em;text-transform:uppercase">Take Profit</div>
+                    <div style="font-family:'JetBrains Mono',monospace;font-size:12px;font-weight:700;color:#10b981;margin-top:2px">{{ card.tpPrice }}</div>
+                    <div style="font-size:9.5px;color:#10b981;margin-top:1px">{{ card.tpPct }}</div>
+                  </div>
+                  <div style="background:rgba(255,255,255,0.06)"></div>
+                  <div style="text-align:center">
+                    <div style="font-size:9px;color:#4b5563;font-weight:600;letter-spacing:.04em;text-transform:uppercase">R:R</div>
+                    <div style="font-family:'JetBrains Mono',monospace;font-size:12px;font-weight:700;margin-top:2px;color:{{ card.rrColor }}">{{ card.rrLabel }}</div>
+                    <div style="font-size:9.5px;color:#6b7280;margin-top:1px">risk/reward</div>
+                  </div>
+                  <div style="background:rgba(255,255,255,0.06)"></div>
+                  <div style="text-align:right">
+                    <div style="font-size:9px;color:#4b5563;font-weight:600;letter-spacing:.04em;text-transform:uppercase">Stop Loss</div>
+                    <div style="font-family:'JetBrains Mono',monospace;font-size:12px;font-weight:700;color:#ef4444;margin-top:2px">{{ card.slPrice }}</div>
+                    <div style="font-size:9.5px;color:#ef4444;margin-top:1px">{{ card.slPct }}</div>
+                  </div>
+                </div>
+
+                <div style="display:flex;gap:5px;flex-wrap:wrap;padding:9px 16px;border-bottom:1px solid rgba(255,255,255,0.06)">
+                  <sc-for list="{{ card.pills }}" as="pill" hint-placeholder-count="4">
+                    <span style="display:inline-flex;align-items:center;padding:2px 8px;border-radius:20px;font-size:9.5px;font-weight:600;background:{{ pill.bg }};color:{{ pill.color }};border:1px solid {{ pill.border }}">{{ pill.text }}</span>
+                  </sc-for>
+                </div>
+
+                <div style="padding:11px 16px;display:grid;grid-template-columns:1fr 1fr;gap:6px 14px">
+                  <sc-for list="{{ card.bars }}" as="b" hint-placeholder-count="8">
+                    <div>
+                      <div style="display:flex;justify-content:space-between;font-size:9px;color:#8b93a7;margin-bottom:3px">
+                        <span>{{ b.label }}</span><span style="font-family:'JetBrains Mono',monospace;color:{{ b.color }}">{{ b.val }}</span>
+                      </div>
+                      <div style="height:3px;background:rgba(255,255,255,0.09);border-radius:2px;overflow:hidden">
+                        <div style="height:100%;border-radius:2px;width:{{ b.width }}%;background:{{ b.color }}"></div>
+                      </div>
+                    </div>
+                  </sc-for>
+                </div>
+
+                <div style="display:flex;align-items:center;justify-content:space-between;padding:10px 16px;background:rgba(0,0,0,0.12)">
+                  <div style="display:flex;flex-direction:column;gap:4px">
+                    <span style="display:inline-flex;align-items:center;gap:3px;font-size:10px;padding:2px 8px;border-radius:20px;background:{{ card.trendBg }};color:{{ card.trendColor }};width:fit-content">{{ card.trendIcon }} {{ card.trendLabel }}</span>
+                    <span style="font-size:9.5px;color:#4b5563">🕐 {{ card.holdDisplay }} · TP ETA {{ card.tpEta }}</span>
+                  </div>
+                  <div style="font-size:12px;font-weight:700;font-family:'JetBrains Mono',monospace;padding:4px 10px;border-radius:20px;background:{{ card.probBg }};color:{{ card.probColor }}">▲ {{ card.probLabel }}</div>
+                </div>
+              </div>
+            </sc-for>
+          </div>
+        </sc-if>
+        <sc-if value="{{ section.isEmpty }}" hint-placeholder-val="{{ false }}">
+          <div style="text-align:center;padding:40px;color:#4b5563;font-size:13px;border:1px dashed rgba(255,255,255,0.09);border-radius:12px">Belum ada coin di {{ section.name }}</div>
+        </sc-if>
+      </section>
+    </sc-for>
+
+    <div style="text-align:center;padding:24px;font-size:11px;color:#4b5563;border-top:1px solid rgba(255,255,255,0.06);margin-top:8px">
+      AlgoTrader Pro — Gate Scanner · Data dari <code>/api/forecast</code> + <code>/api/candles</code> · {{ footerTimestamp }}
+    </div>
+  </main>
+</div>
+
+</x-dc>
+<script type="text/x-dc" data-dc-script>
+
+const PROFILES = [
+  ['all','Semua'], ['hodl_accumulate','🏦 Hodl'], ['trend_follow','📈 Trend'],
+  ['breakout_swift','⚡ Break'], ['scalp_volatile','🎯 Scalp'],
+  ['extreme_momentum','🚀 Momentum'], ['mean_revert','🔄 Revert'],
+];
+const PROF_EMOJI = { hodl_accumulate:'🏦', trend_follow:'📈', breakout_swift:'⚡', scalp_volatile:'🎯', mean_revert:'🔄', extreme_momentum:'🚀' };
+const BAR_CATS = [['Trend','trend'],['Momentum','momentum'],['Strength','strength'],['Volatility','volatility'],['Pattern','pattern'],['Oscillator','oscillator'],['Structure','structure'],['Orderbook','orderbook']];
+
+function demoForecasts() {
+  const mk = (symbol, score, profile, regime, quality, trigger, prob, trend, rr, price, tpPct, slPct, breakdown) => ({
+    symbol, total_score: score, strategy_profile: profile, regime, signal_quality: quality,
+    trigger_met: trigger, probability_up_pct: prob, trend_summary: trend, rr_ratio: rr,
+    current_price: price, suggested_tp: price * (1 + tpPct/100), suggested_sl: price * (1 - slPct/100),
+    potential_profit_pct: tpPct, potential_loss_pct: slPct, score_breakdown: breakdown,
+    indicators: { rsi: 48 + score/4, adx: 22 + score/5, volume_ratio: 1.1 + score/120, atr_pct: 1.2 },
+    indicator_status: { rsi: score>60?'pass':'neutral', adx: score>55?'pass':'weak', volume: score>60?'pass':'neutral' },
+    hold_display: '2j 15m', tp_eta_date: '13 Jul, 14:30',
+  });
+  return [
+    mk('ALT/USDT', 91.4, 'scalp_volatile', 'volatile_expansion', 'excellent', true, 78, 'Bullish', 2.8, 0.412, 6.2, 2.1, {trend:88,momentum:82,strength:75,volatility:70,pattern:65,oscillator:80,structure:72,orderbook:60}),
+    mk('SUI/USDT', 87.1, 'breakout_swift', 'trending', 'excellent', true, 71, 'Bullish', 2.2, 4.31, 5.0, 2.3, {trend:85,momentum:79,strength:70,volatility:66,pattern:60,oscillator:74,structure:68,orderbook:58}),
+    mk('AIGENSYN/USDT', 76.3, 'scalp_volatile', 'volatile_expansion', 'good', true, 64, 'Bullish', 1.8, 0.0562, 4.1, 2.3, {trend:70,momentum:68,strength:60,volatility:62,pattern:55,oscillator:64,structure:58,orderbook:50}),
+    mk('CRV/USDT', 72.9, 'trend_follow', 'trending', 'good', false, 60, 'Bullish', 1.6, 0.612, 3.6, 2.2, {trend:66,momentum:60,strength:58,volatility:55,pattern:52,oscillator:60,structure:54,orderbook:48}),
+    mk('KAT/USDT', 61.5, 'mean_revert', 'ranging', 'fair', false, 55, 'Sideways', 1.3, 0.0231, 2.8, 2.1, {trend:52,momentum:55,strength:50,volatility:48,pattern:45,oscillator:53,structure:47,orderbook:44}),
+    mk('APE/USDT', 58.2, 'mean_revert', 'ranging', 'fair', false, 52, 'Sideways', 1.1, 1.21, 2.4, 2.2, {trend:48,momentum:50,strength:46,volatility:44,pattern:42,oscillator:49,structure:45,orderbook:41}),
+  ];
+}
+
+class Component extends DCLogic {
+  state = {
+    apiBase: 'http://localhost:8000/api',
+    apiKey: '',
+    apiBaseInput: 'http://localhost:8000/api',
+    apiKeyInput: '',
+    refreshSecInput: '30',
+    refreshSec: 30,
+    countdown: 30,
+    forecasts: [],
+    usingDemo: false,
+    demoMessage: '',
+    settingsOpen: false,
+    search: '',
+    searchInput: '',
+    filterProfile: 'all',
+    sortBy: 'score',
+    lastUpdate: null,
+  };
+
+  componentDidMount() {
+    try {
+      const b = localStorage.getItem('gs_api_base'); if (b) this.state.apiBase = this.state.apiBaseInput = b;
+      const k = localStorage.getItem('gs_api_key'); if (k) this.state.apiKey = this.state.apiKeyInput = k;
+      const r = localStorage.getItem('gs_refresh'); if (r) { this.state.refreshSec = parseInt(r); this.state.refreshSecInput = r; }
+    } catch (e) {}
+    this.fetchData();
+    this._timer = setInterval(() => {
+      this.setState(s => {
+        const next = s.countdown - 1;
+        if (next <= 0) { this.fetchData(); return { countdown: s.refreshSec }; }
+        return { countdown: next };
+      });
+    }, 1000);
+  }
+
+  componentWillUnmount() { if (this._timer) clearInterval(this._timer); }
+
+  async fetchData() {
+    try {
+      const ctrl = new AbortController();
+      const tid = setTimeout(() => ctrl.abort(), 6000);
+      const hdrs = {};
+      if (this.state.apiKey) hdrs['X-API-Key'] = this.state.apiKey;
+      const r = await fetch(this.state.apiBase + '/forecast', { signal: ctrl.signal, headers: hdrs });
+      clearTimeout(tid);
+      if (!r.ok) throw new Error('http ' + r.status);
+      const data = await r.json();
+      if (!data || !Array.isArray(data.forecasts)) throw new Error('bad payload');
+      this.setState({ forecasts: data.forecasts, usingDemo: false, lastUpdate: new Date() });
+    } catch (e) {
+      this.setState({
+        forecasts: demoForecasts(),
+        usingDemo: true,
+        demoMessage: this.state.apiKey
+          ? 'Tidak bisa menyambung ke bot (' + (e.message || 'gagal fetch') + '). Menampilkan data contoh.'
+          : 'API Key belum diset — buka Settings untuk hubungkan ke bot asli. Menampilkan data contoh.',
+        lastUpdate: new Date(),
+      });
+    }
+  }
+
+  retryFetch = () => this.fetchData();
+  toggleSettings = () => this.setState(s => ({ settingsOpen: !s.settingsOpen }));
+  stopProp = (e) => e.stopPropagation();
+  onApiBaseInput = (e) => this.setState({ apiBaseInput: e.target.value });
+  onApiKeyInput = (e) => this.setState({ apiKeyInput: e.target.value });
+  onRefreshInput = (e) => this.setState({ refreshSecInput: e.target.value });
+  onSearchInput = (e) => this.setState({ search: e.target.value, searchInput: e.target.value });
+  onSortChange = (e) => this.setState({ sortBy: e.target.value });
+
+  saveSettings = () => {
+    const base = this.state.apiBaseInput.trim().replace(/\/$/, '');
+    const key = this.state.apiKeyInput.trim();
+    const refresh = parseInt(this.state.refreshSecInput) || 30;
+    try {
+      localStorage.setItem('gs_api_base', base);
+      localStorage.setItem('gs_api_key', key);
+      localStorage.setItem('gs_refresh', String(refresh));
+    } catch (e) {}
+    this.setState({ apiBase: base, apiKey: key, refreshSec: refresh, countdown: refresh, settingsOpen: false });
+    this.fetchData();
+  };
+
+  setFilter(p) { this.setState({ filterProfile: p }); }
+
+  getGate(fc) {
+    const s = fc.total_score || 0;
+    if (s >= 85) return 5;
+    if (s >= 70) return 4;
+    if (s >= 55) return 3;
+    return 0;
+  }
+
+  fmtP(v) {
+    if (v == null || v === 0) return '—';
+    return '$' + (v >= 1 ? v.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : v.toFixed(6));
+  }
+
+  buildCard(fc, gate) {
+    const accent = gate === 5 ? '#f59e0b' : gate === 4 ? '#a855f7' : '#3b82f6';
+    const sym = fc.symbol || '—';
+    const base = sym.split('/')[0];
+    const score = fc.total_score || 0;
+    const bd = fc.score_breakdown || {};
+    const ind = fc.indicators || {};
+    const ist = fc.indicator_status || {};
+    const prob = fc.probability_up_pct || 0;
+    const trend = (fc.trend_summary || 'Sideways');
+    const trendL = trend.toLowerCase();
+    const trendIcon = trendL.includes('bull') ? '▲' : trendL.includes('bear') ? '▼' : '↔';
+    const trendColor = trendL.includes('bull') ? '#10b981' : trendL.includes('bear') ? '#ef4444' : '#f59e0b';
+    const rr = fc.rr_ratio;
+    const circ = 106.8;
+    const ringOffset = circ * (1 - Math.min(100, score) / 100);
+
+    const pills = [];
+    if (ind.rsi != null) pills.push({ text: 'RSI ' + ind.rsi.toFixed(1), bg: ist.rsi === 'pass' ? 'rgba(16,185,129,.1)' : 'rgba(255,255,255,.05)', color: ist.rsi === 'pass' ? '#10b981' : '#8b93a7', border: 'rgba(255,255,255,.08)' });
+    if (ind.adx != null) pills.push({ text: 'ADX ' + ind.adx.toFixed(1), bg: ist.adx === 'pass' ? 'rgba(16,185,129,.1)' : 'rgba(245,158,11,.1)', color: ist.adx === 'pass' ? '#10b981' : '#f59e0b', border: 'rgba(255,255,255,.08)' });
+    if (ind.volume_ratio != null) pills.push({ text: 'Vol ' + ind.volume_ratio.toFixed(2) + '×', bg: ist.volume === 'pass' ? 'rgba(16,185,129,.1)' : 'rgba(255,255,255,.05)', color: ist.volume === 'pass' ? '#10b981' : '#8b93a7', border: 'rgba(255,255,255,.08)' });
+    if (fc.threshold_gap != null) pills.push({ text: 'Gap ' + (fc.threshold_gap >= 0 ? '+' : '') + fc.threshold_gap.toFixed(1), bg: fc.threshold_gap >= 0 ? 'rgba(16,185,129,.1)' : 'rgba(239,68,68,.1)', color: fc.threshold_gap >= 0 ? '#10b981' : '#ef4444', border: 'rgba(255,255,255,.08)' });
+
+    const bars = BAR_CATS.map(([lbl, k]) => {
+      const v = bd[k] || 0;
+      const color = v >= 70 ? '#10b981' : v >= 50 ? '#f59e0b' : '#ef4444';
+      return { label: lbl, val: Math.round(v), color, width: Math.min(100, Math.max(0, v)) };
+    });
+
+    // deterministic pseudo-sparkline from symbol+score so it's stable across renders
+    let seed = 0; for (let i = 0; i < sym.length; i++) seed += sym.charCodeAt(i);
+    const spark = Array.from({ length: 12 }, (_, i) => {
+      const h = 30 + Math.abs(Math.sin(seed + i * 1.7)) * 65;
+      return { h: h.toFixed(0), op: (0.35 + i / 12 * 0.65).toFixed(2) };
+    });
+
+    const qualityColor = fc.signal_quality === 'excellent' ? '#f59e0b' : fc.signal_quality === 'good' ? '#a855f7' : fc.signal_quality === 'fair' ? '#3b82f6' : '#6b7280';
+
+    return {
+      symbol: sym, avatar: base.slice(0, 3), accent,
+      avatarBg: accent + '22',
+      profileEmoji: PROF_EMOJI[fc.strategy_profile] || '📊',
+      profileLabel: (fc.strategy_profile || '').replace(/_/g, ' '),
+      regimeLabel: (fc.regime || '—').replace(/_/g, ' '),
+      qualityLabel: (fc.signal_quality || '').toUpperCase(),
+      qualityBg: qualityColor + '22', qualityColor,
+      triggerMet: !!fc.trigger_met,
+      scoreRounded: Math.round(score), ringOffset: ringOffset.toFixed(1),
+      spark,
+      tpPrice: this.fmtP(fc.suggested_tp), tpPct: fc.potential_profit_pct != null ? '+' + fc.potential_profit_pct.toFixed(2) + '%' : '—',
+      slPrice: this.fmtP(fc.suggested_sl), slPct: fc.potential_loss_pct != null ? '-' + fc.potential_loss_pct.toFixed(2) + '%' : '—',
+      rrLabel: rr != null ? rr.toFixed(2) + '×' : '—',
+      rrColor: rr && rr >= 2 ? '#10b981' : rr && rr >= 1 ? '#f59e0b' : '#ef4444',
+      pills, bars,
+      trendIcon, trendLabel: trend, trendColor, trendBg: trendColor + '1a',
+      probLabel: prob.toFixed(1) + '%',
+      probBg: prob >= 65 ? 'rgba(16,185,129,.1)' : prob >= 50 ? 'rgba(245,158,11,.1)' : 'rgba(239,68,68,.1)',
+      probColor: prob >= 65 ? '#10b981' : prob >= 50 ? '#f59e0b' : '#ef4444',
+      holdDisplay: fc.hold_display || '—', tpEta: fc.tp_eta_date || '—',
+    };
+  }
+
+  renderVals() {
+    const search = (this.state.search || '').toLowerCase();
+    let filtered = this.state.forecasts.filter(f => {
+      const okSearch = !search || (f.symbol || '').toLowerCase().includes(search);
+      const okProfile = this.state.filterProfile === 'all' || f.strategy_profile === this.state.filterProfile;
+      return okSearch && okProfile;
+    });
+    filtered.sort((a, b) => {
+      switch (this.state.sortBy) {
+        case 'prob': return (b.probability_up_pct || 0) - (a.probability_up_pct || 0);
+        case 'rr': return (b.rr_ratio || 0) - (a.rr_ratio || 0);
+        case 'sym': return (a.symbol || '').localeCompare(b.symbol || '');
+        default: return (b.total_score || 0) - (a.total_score || 0);
+      }
+    });
+
+    const g5 = filtered.filter(f => this.getGate(f) === 5);
+    const g4 = filtered.filter(f => this.getGate(f) === 4);
+    const g3 = filtered.filter(f => this.getGate(f) === 3);
+
+    const mkSection = (name, sub, icon, color, glow, list) => ({
+      name, sub, icon, color, glow,
+      iconBg: color + '1a',
+      count: list.length, hasCoins: list.length > 0, isEmpty: list.length === 0,
+      cards: list.map(fc => this.buildCard(fc, this.getGate(fc))),
+    });
+
+    const gateSections = [
+      mkSection('Gate 5 — Elite Signals', 'Score ≥ 85 · Signal Quality: Excellent · Highest conviction setups', '🔥', '#f59e0b', 'rgba(245,158,11,0.25)', g5),
+      mkSection('Gate 4 — Strong Signals', 'Score 70–84 · Signal Quality: Good · High confidence setups', '✨', '#a855f7', 'rgba(168,85,247,0.2)', g4),
+      mkSection('Gate 3 — Watch List', 'Score 55–69 · Signal Quality: Fair · Monitor untuk entry', '📊', '#3b82f6', 'rgba(59,130,246,0.18)', g3),
+    ];
+
+    const profileFilters = PROFILES.map(([val, label]) => {
+      const active = this.state.filterProfile === val;
+      return {
+        label,
+        onClick: () => this.setFilter(val),
+        bg: active ? '#a855f7' : '#111426',
+        border: active ? '#a855f7' : 'rgba(255,255,255,0.08)',
+        color: active ? '#fff' : '#8b93a7',
+        weight: active ? '700' : '500',
+      };
+    });
+
+    return {
+      modeBadgeLabel: this.state.usingDemo ? '◆ DEMO DATA' : '● LIVE',
+      modeBadgeStyle: this.state.usingDemo
+        ? 'color:#f59e0b;background:rgba(245,158,11,0.1);border:1px solid rgba(245,158,11,0.25)'
+        : 'color:#10b981;background:rgba(16,185,129,0.1);border:1px solid rgba(16,185,129,0.25)',
+      countdown: this.state.countdown,
+      settingsOpen: this.state.settingsOpen,
+      toggleSettings: this.toggleSettings,
+      stopProp: this.stopProp,
+      apiBaseInput: this.state.apiBaseInput, onApiBaseInput: this.onApiBaseInput,
+      apiKeyInput: this.state.apiKeyInput, onApiKeyInput: this.onApiKeyInput,
+      refreshSecInput: this.state.refreshSecInput, onRefreshInput: this.onRefreshInput,
+      saveSettings: this.saveSettings,
+      usingDemo: this.state.usingDemo, demoMessage: this.state.demoMessage, retryFetch: this.retryFetch,
+      searchInput: this.state.searchInput, onSearchInput: this.onSearchInput,
+      profileFilters,
+      sortBy: this.state.sortBy, onSortChange: this.onSortChange,
+      countG5: g5.length, countG4: g4.length, countG3: g3.length, countTotal: filtered.length,
+      lastUpdateLabel: this.state.lastUpdate ? this.state.lastUpdate.toLocaleTimeString('id-ID') : '—',
+      gateSections,
+      footerTimestamp: this.state.lastUpdate ? this.state.lastUpdate.toLocaleString('id-ID') : '—',
+    };
+  }
+}
+
+</script>
+</body>
+</html>
