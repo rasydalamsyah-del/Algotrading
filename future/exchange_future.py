@@ -189,6 +189,23 @@ class FutureExchangeConnector(BaseExchangeConnector):
 
     # ── Balance & order simulation (futures-specific, override base) ──────────
 
+    def apply_funding_payment(self, symbol: str, payment: float) -> float:
+        """
+        [FUTURES-SPECIFIC -- BARU] Terapkan funding payment ke margin balance
+        virtual. payment NEGATIF = posisi membayar (margin_balance berkurang),
+        POSITIF = posisi menerima (margin_balance bertambah). Ini menyesuaikan
+        _paper_margin_balance langsung (BUKAN margin_locked posisi -- funding
+        adalah cash flow ke/dari wallet balance, bukan collateral posisi).
+
+        Dipanggil oleh main_future.py::run_funding_settlement_loop() secara
+        periodik. Tidak melakukan apapun ke exchange asli (paper trading only,
+        exchange asli menerapkan funding otomatis sendiri di sisi mereka).
+
+        Return: margin_balance TERBARU setelah payment diterapkan (utk logging).
+        """
+        self._paper_margin_balance += payment
+        return self._paper_margin_balance
+
     async def fetch_balance(self) -> Dict:
         """
         [PAPER TRADING FUTURES] BEDA dari spot: ini margin balance, bukan

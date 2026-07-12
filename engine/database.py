@@ -913,6 +913,22 @@ class DatabaseManager:
             )
             await s.commit()
 
+    async def update_position_funding(self, symbol: str, payment: float) -> None:
+        """
+        [FUTURES-SPECIFIC -- BARU] Akumulasi funding_paid_total posisi
+        terbuka. payment bisa negatif (bayar) atau positif (terima).
+        Pakai increment atomik SQL (funding_paid_total + payment), BUKAN
+        read-then-write, supaya aman kalau ada concurrent update lain
+        terhadap posisi yang sama.
+        """
+        async with self._session() as s:
+            await s.execute(
+                update(Position)
+                .where(Position.symbol == symbol, Position.is_open == True)
+                .values(funding_paid_total=func.coalesce(Position.funding_paid_total, 0.0) + round(payment, 8))
+            )
+            await s.commit()
+
 
     async def update_position_highest_price(self, symbol: str, price: float) -> None:
         async with self._session() as s:

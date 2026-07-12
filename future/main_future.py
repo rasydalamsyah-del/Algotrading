@@ -1587,6 +1587,87 @@ class TradingBot:
                 log.error("run_position_sync_loop (futures) error: %s", e)
             await asyncio.sleep(300)
 
+    async def run_funding_settlement_loop(self) -> None:
+        """
+        [FUTURES-SPECIFIC -- BARU] Sebelumnya funding.py (calculate_funding_payment,
+        fetch_funding_rate) sudah ada & teruji terpisah, TAPI tidak pernah
+        disambungkan ke loop manapun -- posisi futures yang ditahan lama
+        tidak pernah kena potongan/dapat funding di paper trading kita.
+
+        Binance mem-settle funding tiap 00:00, 08:00, 16:00 UTC. Loop ini
+        cek tiap 5 menit apakah sudah melewati boundary funding baru sejak
+        terakhir diproses (dibandingkan via "funding slot" = tanggal + jam//8),
+        lalu terapkan payment ke SEMUA posisi terbuka saat itu.
+
+        ⚠️ CATATAN: real Binance funding rate berubah tiap interval (bukan
+        konstan) -- kita fetch rate TERKINI persis sebelum settlement,
+        bukan memprediksi. Untuk paper trading, payment diterapkan ke
+        _paper_margin_balance (via exchange.apply_funding_payment) dan
+        Position.funding_paid_total (akumulasi, via db.update_position_funding).
+        """
+        from future.funding import calculate_funding_payment
+        last_funding_slot: Optional[str] = None
+
+        while self.is_running:
+            try:
+                now = _utcnow_dt()
+                current_slot = f"{now.date()}_{now.hour // 8}"
+
+                if last_funding_slot is None:
+                    # Startup: catat slot saat ini sbg baseline, JANGAN langsung
+                    # settle (supaya tidak salah kena funding utk periode yg
+                    # sebagian besar sudah lewat sebelum bot ini hidup).
+                    last_funding_slot = current_slot
+                elif current_slot != last_funding_slot:
+                    last_funding_slot = current_slot
+                    positions = await self.db.get_open_positions()
+                    if positions:
+                        log.info(
+                            "Funding settlement window (futures): slot baru %s, "
+                            "%d posisi terbuka.", current_slot, len(positions),
+                        )
+                    for pos in positions:
+                        try:
+                            funding_data = await self.exchange.fetch_funding_rate(pos.symbol)
+                            funding_rate = float(
+                                funding_data.get("fundingRate")
+                                or funding_data.get("info", {}).get("lastFundingRate", 0)
+                                or 0
+                            )
+                            price = await self._get_current_price(pos.symbol) or float(pos.current_price or pos.entry_price or 0)
+                            notional = float(pos.amount or 0) * price
+                            if notional <= 0:
+                                continue
+
+                            payment = calculate_funding_payment(notional, funding_rate, pos.side)
+
+                            new_margin_balance = self.exchange.apply_funding_payment(pos.symbol, payment)
+                            await self.db.update_position_funding(pos.symbol, payment)
+
+                            log.info(
+                                "Funding settled (futures): %s %s | rate=%.6f%% notional=$%.2f "
+                                "payment=%+.4f USDT | margin_balance baru=%.4f",
+                                pos.side.upper(), pos.symbol, funding_rate * 100,
+                                notional, payment, new_margin_balance,
+                            )
+                        except Exception as e:
+                            log.warning("Funding settlement gagal utk %s (non-fatal): %s", pos.symbol, e)
+
+                    # Equity berubah akibat funding -- refresh supaya risk_manager
+                    # & dashboard lihat angka terkini.
+                    if positions:
+                        try:
+                            await self._refresh_portfolio()
+                        except Exception:
+                            pass
+
+            except asyncio.CancelledError:
+                break
+            except Exception as e:
+                log.error("Funding settlement loop error: %s", e, exc_info=True)
+
+            await asyncio.sleep(300)  # cek tiap 5 menit
+
     async def run(self) -> None:
         await self.start()
 
@@ -1609,6 +1690,7 @@ class TradingBot:
             asyncio.create_task(self.run_analytics_loop(),     name="task_analytics_futures"),
             asyncio.create_task(self.run_config_watcher(),     name="task_config_watcher_futures"),
             asyncio.create_task(self.run_position_sync_loop(), name="task_position_sync_futures"),
+            asyncio.create_task(self.run_funding_settlement_loop(), name="task_funding_settlement_futures"),
         ]
 
         if self.notifier is not None and self.config.get('telegram_enabled', False):
@@ -1665,3 +1747,4 @@ async def main() -> None:
 
 if __name__ == "__main__":
     asyncio.run(main())
+
