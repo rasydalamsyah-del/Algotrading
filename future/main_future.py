@@ -474,6 +474,25 @@ class TradingBot:
         leverage = self.config.get("default_leverage", 10)
         margin_mode = self.config.get("margin_mode", "isolated")
 
+        # [FUTURES-SPECIFIC -- BARU] set_leverage() SEBELUMNYA TIDAK PERNAH
+        # dipanggil sama sekali -- untuk paper trading tidak berdampak
+        # (simulasi internal pakai leverage yg kita tentukan sendiri), TAPI
+        # untuk exchange ASLI ini krusial: Binance memakai leverage yang
+        # TERAKHIR di-set untuk symbol itu (bisa jadi beda dari
+        # config["default_leverage"] kalau pernah diubah manual/sesi lain).
+        # Tanpa memanggil ini, kalkulasi margin/liquidation kita bisa TIDAK
+        # SINKRON dengan leverage yang benar-benar dipakai exchange.
+        try:
+            await self.exchange.set_leverage(symbol, leverage)
+        except Exception as e:
+            log.error(
+                "set_leverage(%s, %dx) gagal — entry %s DIBATALKAN (leverage "
+                "exchange tidak terkonfirmasi, tidak aman melanjutkan): %s",
+                symbol, leverage, side, e,
+            )
+            _reset_position_flag()
+            return
+
         # Order level exchange: buka long="buy", buka short="sell"
         order_side = "buy" if side == "long" else "sell"
 
@@ -1300,24 +1319,47 @@ class TradingBot:
                     # DULU, sebelum apapun lain. Ini lapis pengaman independen
                     # dari SL normal -- kalau entah kenapa SL gagal ter-trigger
                     # tepat waktu (network lag, dst), ini jaring pengaman kedua.
+                    #
+                    # [FIX] Binance men-trigger liquidation berdasar MARK PRICE,
+                    # BUKAN last traded price -- sebelumnya cek ini pakai `price`
+                    # (dari _get_current_price/last price) yang bisa BEDA dari
+                    # mark price (terutama saat funding/basis spread melebar).
+                    # Sekarang pakai fetch_mark_price() (sudah ada di
+                    # FutureExchangeConnector, sebelumnya dibangun tapi tidak
+                    # pernah dipanggil di manapun). SL/TP normal TETAP pakai
+                    # `price` (last/trade price) di bawah -- itu memang benar
+                    # menggunakan harga transaksi, cuma liquidation spesifik
+                    # yang perlu mark price.
                     # ══════════════════════════════════════════════════════
                     if pos.liquidation_price:
+                        try:
+                            mark_price = await self.exchange.fetch_mark_price(pos.symbol)
+                        except Exception as _mp_err:
+                            log.warning(
+                                "fetch_mark_price(%s) gagal, fallback ke last price "
+                                "utk cek liquidation (kurang akurat): %s",
+                                pos.symbol, _mp_err,
+                            )
+                            mark_price = price
+                        if not mark_price or mark_price <= 0:
+                            mark_price = price
+
                         liq = float(pos.liquidation_price)
                         entry = float(pos.entry_price or 0)
                         if entry > 0:
                             if pos.side == "long":
-                                dist_to_liq_pct = (price - liq) / liq * 100 if liq > 0 else 999
+                                dist_to_liq_pct = (mark_price - liq) / liq * 100 if liq > 0 else 999
                                 in_danger = dist_to_liq_pct <= self.LIQUIDATION_EMERGENCY_PROXIMITY_PCT
                             else:
-                                dist_to_liq_pct = (liq - price) / liq * 100 if liq > 0 else 999
+                                dist_to_liq_pct = (liq - mark_price) / liq * 100 if liq > 0 else 999
                                 in_danger = dist_to_liq_pct <= self.LIQUIDATION_EMERGENCY_PROXIMITY_PCT
 
                             if in_danger:
                                 log.critical(
-                                    "⚠️ LIQUIDATION PROXIMITY DARURAT: %s %s | price=%.6f "
+                                    "⚠️ LIQUIDATION PROXIMITY DARURAT: %s %s | mark_price=%.6f "
                                     "liq_price≈%.6f (APPROXIMATE) | jarak=%.2f%% <= ambang %.1f%% "
                                     "— EMERGENCY CLOSE.",
-                                    pos.side.upper(), pos.symbol, price, liq,
+                                    pos.side.upper(), pos.symbol, mark_price, liq,
                                     dist_to_liq_pct, self.LIQUIDATION_EMERGENCY_PROXIMITY_PCT,
                                 )
                                 if self.notifier:
