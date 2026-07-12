@@ -22,6 +22,7 @@ atau seluruhnya) posisi itu -- BUKAN membuka posisi baru arah berlawanan
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import time
 import uuid
@@ -430,3 +431,217 @@ class FutureExchangeConnector(BaseExchangeConnector):
             symbol, side.upper(), order_type, amount, fill_price, action, order_id,
         )
         return dict(order)
+
+
+# ═══════════════════════════════════════════════════════════════
+#  Auto-scan universe KHUSUS FUTURES dari Binance — tanpa API key (public)
+#  Hasil disimpan ke universe_futures.json + universe_overrides DB
+#
+#  [PENTING] Ini BUKAN sekadar duplikasi dari spot/exchange_spot.py.
+#  Binance Spot dan Futures (USDT-M) adalah DUA MARKET BERBEDA dengan
+#  daftar simbol yang TIDAK SAMA -- banyak koin yang ada di spot TIDAK
+#  punya kontrak futures. Fungsi ini hit endpoint PUBLIK FUTURES
+#  (fapi.binance.com), BUKAN endpoint spot (api.binance.com) yang dipakai
+#  spot/exchange_spot.py::scan_binance_universe().
+#
+#  Ditemukan sebagai gap SAAT user tanya "di mana watchlist spot disimpan"
+#  -- ternyata main_spot.py punya mekanisme auto-discovery dinamis
+#  (scan Binance -> universe.json) yang SAMA SEKALI TIDAK ADA
+#  padanannya di future/ sebelum ini.
+# ═══════════════════════════════════════════════════════════════
+import urllib.request as _urllib_request
+import json as _json
+import ssl as _ssl
+from datetime import datetime as _datetime
+
+_STABLES_FUT  = {
+    "USDC", "BUSD", "DAI", "TUSD", "FDUSD", "USDD", "USDP", "USDT",
+}
+_LEVERAGE_FUT = ["UP", "DOWN", "BULL", "BEAR"]
+_UNIVERSE_FILE_FUTURES = "universe_futures.json"
+
+
+def _fetch_binance_futures_tickers() -> list:
+    """Hit Binance Futures public API (fapi), return raw list ticker 24hr."""
+    urls = [
+        "https://fapi.binance.com/fapi/v1/ticker/24hr",
+    ]
+    import certifi as _certifi
+    ctx = _ssl.create_default_context(cafile=_certifi.where())
+    for url in urls:
+        try:
+            req  = _urllib_request.urlopen(url, timeout=15, context=ctx)
+            data = _json.loads(req.read())
+            log.info("scan_universe_futures: fetch sukses dari %s (%d tickers)", url, len(data))
+            return data
+        except Exception as e:
+            log.warning("scan_universe_futures: gagal %s — %s", url, e)
+    return []
+
+
+def _fetch_binance_futures_trading_symbols() -> set:
+    """Fetch exchangeInfo FUTURES, return set symbol dgn status TRADING &
+    contractType PERPETUAL saja (skip kontrak quarterly/delivery)."""
+    urls = [
+        "https://fapi.binance.com/fapi/v1/exchangeInfo",
+    ]
+    import certifi as _certifi
+    ctx = _ssl.create_default_context(cafile=_certifi.where())
+    for url in urls:
+        try:
+            req  = _urllib_request.urlopen(url, timeout=15, context=ctx)
+            data = _json.loads(req.read())
+            trading = {
+                s["symbol"]
+                for s in data.get("symbols", [])
+                if s.get("status") == "TRADING" and s.get("contractType") == "PERPETUAL"
+            }
+            log.info("scan_universe_futures: %d symbol TRADING+PERPETUAL dari exchangeInfo", len(trading))
+            return trading
+        except Exception as e:
+            log.warning("scan_universe_futures: exchangeInfo gagal %s — %s", url, e)
+    return set()
+
+
+def scan_binance_futures_universe(
+    min_volume_usdt: float = 100_000,
+    max_coins:       int   = 200,
+    quote:           str   = "USDT",
+) -> list:
+    """
+    Scan koin paling likuid di Binance USDT-M FUTURES (BUKAN spot).
+    Return list of dict: [{"symbol": "BTC/USDT", "volume_24h": 1688600000}, ...]
+
+    ⚠️ CATATAN: field response Binance Futures API BISA berbeda nama dari
+    spot (mis. beberapa field pakai penamaan berbeda) -- struktur di sini
+    ditulis mengikuti pola umum publik Binance Futures API, TAPI BELUM
+    diverifikasi terhadap response API asli (sandbox ini tidak punya akses
+    network ke Binance). WAJIB divalidasi/dites dulu di lingkungan yang
+    punya akses internet sebelum dipakai produksi.
+    """
+    raw = _fetch_binance_futures_tickers()
+    if not raw:
+        log.error("scan_universe_futures: tidak ada data dari Binance Futures.")
+        return []
+
+    _trading_symbols = _fetch_binance_futures_trading_symbols()
+
+    results = []
+    for t in raw:
+        sym = t.get("symbol", "")
+        if not sym.endswith(quote):
+            continue
+        if _trading_symbols and sym not in _trading_symbols:
+            continue
+        base = sym[:-len(quote)]
+        if base in _STABLES_FUT:
+            continue
+        if any(base.endswith(lv) or base.startswith(lv) for lv in _LEVERAGE_FUT):
+            continue
+        if not base.isascii() or not base.isalnum():
+            continue
+        vol = float(t.get("quoteVolume", 0))
+        if vol < min_volume_usdt:
+            continue
+        results.append({
+            "symbol":     f"{base}/{quote}",
+            "volume_24h": round(vol, 2),
+        })
+
+    results.sort(key=lambda x: x["volume_24h"], reverse=True)
+    results = results[:max_coins]
+    log.info(
+        "scan_universe_futures: %d koin lolos filter (min_vol=$%.0fM, max=%d)",
+        len(results), min_volume_usdt / 1_000_000, max_coins,
+    )
+    return results
+
+
+def save_universe_json_futures(coins: list, min_volume_usdt: float = 100_000) -> None:
+    """Simpan hasil scan ke universe_futures.json -- FILE TERPISAH dari
+    universe.json milik spot, supaya tidak saling menimpa."""
+    data = {
+        "market":         "futures",
+        "scanned_at":     _datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%S"),
+        "total_coins":    len(coins),
+        "min_volume_usd": min_volume_usdt,
+        "symbols":        coins,
+    }
+    with open(_UNIVERSE_FILE_FUTURES, "w") as f:
+        _json.dump(data, f, indent=2)
+    log.info("scan_universe_futures: hasil disimpan ke %s (%d koin)", _UNIVERSE_FILE_FUTURES, len(coins))
+
+
+def load_universe_json_futures() -> list:
+    """Baca universe_futures.json, return list symbol string."""
+    try:
+        with open(_UNIVERSE_FILE_FUTURES) as f:
+            data = _json.load(f)
+        symbols = [c["symbol"] for c in data.get("symbols", [])]
+        log.info("load_universe_futures: %d koin dari %s (scan: %s)",
+                 len(symbols), _UNIVERSE_FILE_FUTURES, data.get("scanned_at", "?"))
+        return symbols
+    except FileNotFoundError:
+        log.warning("load_universe_futures: %s tidak ditemukan.", _UNIVERSE_FILE_FUTURES)
+        return []
+    except Exception as e:
+        log.error("load_universe_futures: gagal baca — %s", e)
+        return []
+
+
+async def auto_scan_and_populate_futures(db) -> list:
+    """
+    Padanan futures dari spot/exchange_spot.py::auto_scan_and_populate().
+    Dipanggil saat bot futures startup. Pakai bot_state key TERPISAH
+    ('auto_scan_universe_futures') supaya tidak bentrok dengan flag spot
+    kalau suatu saat DB pernah di-share (saat ini fisik terpisah, tapi
+    defensif tetap penting).
+    """
+    flag = await db.get_bot_state("auto_scan_universe_futures")
+    should_scan = (flag == "true")
+
+    if should_scan:
+        log.info("auto_scan_universe_futures=true — mulai scan Binance Futures...")
+        loop = asyncio.get_running_loop()
+        _scan_min_volume = 100_000
+        coins = await loop.run_in_executor(
+            None, scan_binance_futures_universe, _scan_min_volume, 200,
+        )
+
+        if coins:
+            save_universe_json_futures(coins, min_volume_usdt=_scan_min_volume)
+
+            old_symbols = await db.get_active_universe_overrides()
+            for sym in old_symbols:
+                await db.deactivate_universe_override(sym)
+            log.info("auto_scan_futures: %d koin lama dinonaktifkan", len(old_symbols))
+
+            for coin in coins:
+                vol_m = coin["volume_24h"] / 1_000_000
+                await db.upsert_universe_override(
+                    symbol=coin["symbol"], source="auto_scan_futures",
+                    notes=f"vol_24h=${vol_m:.1f}M scanned_at={_datetime.utcnow().strftime('%Y-%m-%d')}",
+                )
+            log.info("auto_scan_futures: %d koin baru dimasukkan ke universe_overrides", len(coins))
+
+            await db.set_bot_state("auto_scan_universe_futures", "false")
+            log.info("auto_scan_futures: flag auto_scan_universe_futures direset ke false")
+
+            return [c["symbol"] for c in coins]
+        else:
+            log.error("auto_scan_futures: scan gagal, fallback ke universe_futures.json / .env")
+
+    from_json = load_universe_json_futures()
+    if from_json:
+        return from_json
+
+    try:
+        db_symbols = await db.get_active_universe_overrides()
+        if db_symbols:
+            log.info("auto_scan_futures: %d koin dari universe_overrides DB (fallback)", len(db_symbols))
+            return db_symbols
+    except Exception:
+        pass
+
+    log.warning("auto_scan_futures: tidak ada sumber universe tersedia -- pakai UNIVERSE_WATCHLIST_FUTURES/.env")
+    return []

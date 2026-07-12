@@ -295,6 +295,18 @@ class TradingBot:
                 self.config["initial_capital"], self.config["quote_currency"],
             )
 
+        # ── Auto-scan universe dari Binance FUTURES ──
+        # [BARU] Sebelumnya TIDAK ADA sama sekali -- ditemukan sebagai gap
+        # saat dibandingkan dengan spot/main_spot.py yang punya mekanisme
+        # ini (baris 349-354 di sana). Pola identik: cek flag DB
+        # 'auto_scan_universe_futures', kalau true baru scan Binance
+        # FUTURES (bukan spot), simpan ke universe_futures.json.
+        from future.exchange_future import auto_scan_and_populate_futures
+        scanned = await auto_scan_and_populate_futures(self.db)
+        if scanned:
+            self.config["universe_watchlist"] = scanned
+            log.info("universe_watchlist (futures) diupdate dari auto_scan: %d koin", len(scanned))
+
         self.ws_feed = WebSocketFeed(
             exchange_id=self.config["exchange_id"],
             api_key=self.config["api_key"],
