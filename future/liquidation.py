@@ -139,6 +139,7 @@ def calculate_liquidation_price(
 def is_stop_loss_safe(
     stop_loss_price: float,
     liquidation_price: float,
+    entry_price: float,
     side: str = "long",
     min_safety_margin_pct: float = 20.0,
 ) -> bool:
@@ -148,20 +149,37 @@ def is_stop_loss_safe(
     modul ini: SL harus lebih longgar dari liquidation price, dengan margin
     keamanan tambahan (default 20% dari jarak entry-ke-liquidation).
 
+    [BUG-FIX] Sebelumnya gap_pct dihitung relatif ke liquidation_price ITU
+    SENDIRI (`(SL-liq)/liq`), BUKAN relatif ke jarak entry-ke-liquidation
+    seperti yang dituliskan di docstring ini. Akibatnya threshold jauh
+    LEBIH KETAT dari yang dimaksud -- pada leverage 10x+, SL manapun di
+    bawah entry SELALU gagal (matematis mustahil), padahal seharusnya SL
+    wajar (mis. 2% dari entry) semestinya lolos dengan mudah. Ditemukan
+    saat stress-test fitur leverage adaptif yang mendorong leverage naik
+    dan membuat kejanggalan ini jelas terlihat.
+
     Return True kalau SL aman (tidak akan pernah memicu liquidation duluan
     sebelum SL sempat jalan, DENGAN asumsi liquidation_price yang dihitung
     itu sendiri akurat -- lihat peringatan modul ini soal akurasi).
     """
+    if entry_price <= 0:
+        raise ValueError(f"entry_price harus > 0, dapat: {entry_price}")
+
+    entry_to_liq_distance = abs(entry_price - liquidation_price)
+    if entry_to_liq_distance <= 0:
+        return False  # entry == liquidation, tidak masuk akal, tolak demi aman
+
     if side == "long":
         # Long: liquidation di bawah entry, SL juga di bawah entry.
         # SL aman kalau SL > liquidation_price (SL kena duluan sebelum liq),
-        # DENGAN margin tambahan.
+        # DENGAN margin tambahan diukur relatif ke JARAK entry-ke-liquidation
+        # (bukan ke nilai liquidation_price itu sendiri).
         if stop_loss_price <= liquidation_price:
             return False
-        gap_pct = (stop_loss_price - liquidation_price) / liquidation_price * 100.0
+        gap_pct = (stop_loss_price - liquidation_price) / entry_to_liq_distance * 100.0
         return gap_pct >= min_safety_margin_pct
     else:  # short
         if stop_loss_price >= liquidation_price:
             return False
-        gap_pct = (liquidation_price - stop_loss_price) / liquidation_price * 100.0
+        gap_pct = (liquidation_price - stop_loss_price) / entry_to_liq_distance * 100.0
         return gap_pct >= min_safety_margin_pct

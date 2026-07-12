@@ -41,6 +41,98 @@ class RiskManager(BaseRiskManager):
         # equity (di futures, "equity" vs "margin tersedia" adalah dua hal
         # berbeda krn sebagian equity sudah terkunci sbg margin posisi lain).
 
+    # [FUTURES-SPECIFIC -- BARU] Tabel faktor leverage per profile koin.
+    # Filosofi: koin yang diklasifikasi "stabil/tren jelas" boleh leverage
+    # sedikit lebih tinggi, koin yang diklasifikasi "volatile/ekstrem"
+    # WAJIB leverage lebih rendah. Angka ini bisa dikalibrasi ulang --
+    # bukan hasil backtest, murni penalaran risiko yang masuk akal.
+    PROFILE_LEVERAGE_FACTOR = {
+        "hodl_accumulate":  1.3,
+        "trend_follow":     1.15,
+        "breakout_swift":   0.9,
+        "mean_revert":      1.0,
+        "scalp_volatile":   0.6,
+        "extreme_momentum": 0.4,
+    }
+
+    def compute_adaptive_leverage(
+        self,
+        base_leverage: int,
+        atr_pct:       Optional[float] = None,
+        regime:        Optional[str]   = None,
+        profile_name:  Optional[str]   = None,
+        score:         Optional[float] = None,
+    ) -> int:
+        """
+        [FUTURES-SPECIFIC -- BARU] Leverage adaptif, MENGGANTIKAN nilai
+        config["default_leverage"] yang sebelumnya FLAT/seragam utk semua
+        koin. Empat faktor dikombinasikan secara MULTIPLIKATIF:
+
+        1. Volatilitas (ATR% thd harga) -- makin volatile, leverage makin
+           rendah (posisi leveraged di koin liar = risiko liquidation tinggi)
+        2. Regime pasar -- trend jelas (bull/bear) sedikit lebih longgar,
+           volatile_expansion/undefined lebih ketat
+        3. Profile koin -- hodl_accumulate/trend_follow (biasanya koin besar,
+           stabil) dapat bonus, scalp_volatile/extreme_momentum dapat penalti
+        4. Skor confidence sinyal -- skor tinggi = sedikit bonus, skor pas-
+           pasan di ambang threshold = sedikit penalti
+
+        Hasil akhir SELALU di-clamp ke [1, max_leverage] dari config --
+        tidak akan pernah melebihi batas atas yang sudah ditentukan.
+
+        Kalau semua parameter opsional None (data tidak tersedia), fungsi
+        ini return base_leverage APA ADANYA (fallback aman, tidak menebak).
+        """
+        if atr_pct is None and regime is None and profile_name is None and score is None:
+            return base_leverage
+
+        factor = 1.0
+
+        if atr_pct is not None and atr_pct > 0:
+            if atr_pct < 0.5:
+                factor *= 1.2
+            elif atr_pct < 1.0:
+                factor *= 1.0
+            elif atr_pct < 2.0:
+                factor *= 0.7
+            elif atr_pct < 3.5:
+                factor *= 0.5
+            else:
+                factor *= 0.3
+
+        if regime is not None:
+            regime_lower = str(regime).lower()
+            if "trending" in regime_lower:
+                factor *= 1.1
+            elif "ranging" in regime_lower:
+                factor *= 0.9
+            elif "volatile_expansion" in regime_lower:
+                factor *= 0.6
+            elif "undefined" in regime_lower:
+                factor *= 0.7
+            # regime lain (kalau ada) -- tidak ada penyesuaian, factor tetap
+
+        if profile_name is not None:
+            profile_factor = self.PROFILE_LEVERAGE_FACTOR.get(str(profile_name).lower(), 1.0)
+            factor *= profile_factor
+
+        if score is not None:
+            if score >= 80:
+                factor *= 1.1
+            elif score >= 65:
+                factor *= 1.0
+            else:
+                factor *= 0.85
+
+        adaptive_leverage = round(base_leverage * factor)
+        clamped = max(1, min(adaptive_leverage, self._max_leverage))
+
+        log.debug(
+            "Adaptive leverage: base=%dx factor=%.3f (atr=%s regime=%s profile=%s score=%s) -> %dx",
+            base_leverage, factor, atr_pct, regime, profile_name, score, clamped,
+        )
+        return clamped
+
     async def evaluate_order(
         self,
         symbol:      str,
@@ -197,6 +289,7 @@ class RiskManager(BaseRiskManager):
             sl_safe = is_stop_loss_safe(
                 stop_loss_price=sl,
                 liquidation_price=liq_result.liquidation_price,
+                entry_price=price,
                 side=intended_side,
                 min_safety_margin_pct=self._min_liquidation_safety_pct,
             )

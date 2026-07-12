@@ -71,6 +71,11 @@ class FutureExchangeConnector(BaseExchangeConnector):
         # posisi terbuka). Tidak ada konsep "punya saldo BTC" seperti spot.
         self._paper_margin_balance: float = float(initial_capital)
         self._default_leverage    = default_leverage
+        # [BUG-FIX] Leverage per-symbol, diisi oleh set_leverage(), dipakai
+        # _simulate_order_fill() saat membuka posisi -- sebelumnya tidak ada,
+        # jadi leverage adaptif dari risk_future.py tidak pernah benar-benar
+        # dipakai exchange saat hitung margin/liquidation.
+        self._symbol_leverage: Dict[str, int] = {}
         self._default_margin_mode = default_margin_mode
         self._default_mmr         = default_mmr
 
@@ -146,9 +151,21 @@ class FutureExchangeConnector(BaseExchangeConnector):
 
     async def set_leverage(self, symbol: str, leverage: int) -> Dict:
         """
-        Set leverage untuk symbol. Paper trading: cuma disimulasikan
-        (disimpan di internal state), TIDAK pernah dikirim ke exchange asli.
+        Set leverage untuk symbol. Paper trading: disimpan di
+        self._symbol_leverage (per-symbol), dipakai oleh
+        _simulate_order_fill() saat membuka posisi baru untuk symbol ini.
+
+        [BUG-FIX] Sebelumnya method ini CUMA log, tidak menyimpan apapun --
+        _simulate_order_fill() selalu fallback ke self._default_leverage
+        (nilai dari konstruktor), TIDAK PERNAH memakai leverage yang baru
+        di-set lewat pemanggilan ini. Akibatnya leverage ADAPTIF (dari
+        risk_future.py::compute_adaptive_leverage) tercatat benar di
+        RiskAssessment & DB, TAPI margin/liquidation_price yang dihitung
+        exchange saat fill tetap pakai leverage DEFAULT yang salah --
+        ditemukan lewat log yang menunjukkan dua nilai leverage berbeda
+        utk transaksi yang sama.
         """
+        self._symbol_leverage[symbol] = leverage
         if self.paper_trading:
             log.info(
                 "📝 [PAPER] set_leverage disimulasikan: %s -> %dx (TIDAK dikirim ke exchange)",
@@ -303,7 +320,7 @@ class FutureExchangeConnector(BaseExchangeConnector):
             # Buka posisi baru: buy=long, sell=short
             new_side = "long" if side == "buy" else "short"
             action = "open"
-            leverage = self._default_leverage
+            leverage = self._symbol_leverage.get(symbol, self._default_leverage)
             margin_mode = self._default_margin_mode
             required_margin = notional / leverage
 

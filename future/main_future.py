@@ -229,6 +229,7 @@ class TradingBot:
             # [FUTURES-SPECIFIC] Parameter yang tidak ada sama sekali di spot.
             "default_leverage":            int(os.getenv("DEFAULT_LEVERAGE", "10")),
             "max_leverage":                int(os.getenv("MAX_LEVERAGE", "20")),
+            "adaptive_leverage_enabled":    os.getenv("ADAPTIVE_LEVERAGE_ENABLED", "true").lower() == "true",
             "margin_mode":                 os.getenv("MARGIN_MODE", "isolated"),
             "maintenance_margin_rate":     float(os.getenv("MAINTENANCE_MARGIN_RATE", "0.005")),
             "min_liquidation_safety_pct":  float(os.getenv("MIN_LIQUIDATION_SAFETY_PCT", "20.0")),
@@ -483,7 +484,27 @@ class TradingBot:
             _reset_position_flag()
             return
 
-        leverage = self.config.get("default_leverage", 10)
+        # [BARU] Leverage ADAPTIF -- sebelumnya SELALU flat dari config,
+        # sekarang menyesuaikan volatilitas (ATR%), regime, profile koin,
+        # dan skor confidence sinyal. Bisa dimatikan via ADAPTIVE_LEVERAGE_ENABLED
+        # (fallback ke nilai flat config["default_leverage"] apa adanya).
+        base_leverage = self.config.get("default_leverage", 10)
+        if self.config.get("adaptive_leverage_enabled", True):
+            _atr_pct = (atr / price * 100) if (atr and price > 0) else None
+            _profile_name = signal.metadata.get("coin_profile") if signal.metadata else None
+            leverage = self.risk_manager.compute_adaptive_leverage(
+                base_leverage=base_leverage, atr_pct=_atr_pct,
+                regime=str(signal.regime) if signal.regime else None,
+                profile_name=str(_profile_name) if _profile_name else None,
+                score=signal.total_score,
+            )
+            if leverage != base_leverage:
+                log.info(
+                    "Leverage adaptif %s: %dx -> %dx (atr_pct=%s regime=%s profile=%s score=%s)",
+                    symbol, base_leverage, leverage, _atr_pct, signal.regime, _profile_name, signal.total_score,
+                )
+        else:
+            leverage = base_leverage
         margin_mode = self.config.get("margin_mode", "isolated")
 
         # [FUTURES-SPECIFIC -- BARU] set_leverage() SEBELUMNYA TIDAK PERNAH
@@ -534,6 +555,23 @@ class TradingBot:
                 _reset_position_flag()
                 return
 
+            # [BUG-FIX] Sebelumnya pakai assessment.liquidation_price (dihitung
+            # dari SIGNAL price, sebelum slippage) -- sedikit beda dari
+            # liquidation_price yang exchange hitung sendiri (dari EXECUTED
+            # price, sesudah slippage). Recompute di sini pakai executed_price
+            # aktual supaya DB record konsisten PERSIS dengan tracking internal
+            # exchange (penting utk akurasi monitoring liquidation proximity).
+            from future.liquidation import calculate_liquidation_price
+            _final_leverage = assessment.leverage or leverage
+            try:
+                _liq_recompute = calculate_liquidation_price(
+                    entry_price=trade.executed_price, leverage=_final_leverage,
+                    side=side, mmr=self.config.get("maintenance_margin_rate", 0.005),
+                    margin_mode=margin_mode,
+                ).liquidation_price
+            except Exception:
+                _liq_recompute = assessment.liquidation_price  # fallback ke estimasi kalau recompute gagal
+
             try:
                 await self.db.upsert_position(symbol, {
                     "entry_time": _utcnow_dt(),
@@ -550,9 +588,9 @@ class TradingBot:
                     "entry_score": signal.total_score,
                     "entry_regime": str(signal.regime) if signal.regime else "undefined",
                     "market_type": "futures",
-                    "leverage": assessment.leverage,
+                    "leverage": _final_leverage,
                     "margin_mode": assessment.margin_mode,
-                    "liquidation_price": assessment.liquidation_price,
+                    "liquidation_price": _liq_recompute,
                     "mark_price_at_entry": trade.executed_price,
                 })
             except Exception as e:
@@ -568,7 +606,7 @@ class TradingBot:
             "leverage=%dx liq_price≈%s",
             side.upper(), symbol, trade.executed_price, trade.filled or trade.amount,
             assessment.stop_loss, assessment.take_profit,
-            assessment.leverage or leverage, assessment.liquidation_price,
+            _final_leverage, _liq_recompute,
         )
         if self.notifier:
             try:
