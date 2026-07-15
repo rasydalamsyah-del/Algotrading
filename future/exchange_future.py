@@ -27,7 +27,7 @@ import logging
 import time
 import uuid
 from datetime import datetime, timezone
-from typing import Optional, Dict, List
+from typing import Optional, Dict, List, Callable
 
 from engine.exchange_base import BaseExchangeConnector
 from future.liquidation import calculate_liquidation_price
@@ -606,13 +606,25 @@ def load_universe_json_futures() -> list:
         return []
 
 
-async def auto_scan_and_populate_futures(db) -> list:
+async def auto_scan_and_populate_futures(
+    db,
+    is_valid_symbol: Optional[Callable[[str], bool]] = None,
+) -> list:
     """
     Padanan futures dari spot/exchange_spot.py::auto_scan_and_populate().
     Dipanggil saat bot futures startup. Pakai bot_state key TERPISAH
     ('auto_scan_universe_futures') supaya tidak bentrok dengan flag spot
     kalau suatu saat DB pernah di-share (saat ini fisik terpisah, tapi
     defensif tetap penting).
+
+    is_valid_symbol: [FIX] callback opsional (mis. self.exchange.get_market_info
+    dibungkus jadi predicate) utk validasi tiap simbol hasil scan terhadap ccxt
+    SEBELUM ditulis ke universe_futures.json/universe_overrides.
+    scan_binance_futures_universe() sendiri hit REST Binance mentah, independen
+    dari ccxt -- bisa menghasilkan simbol yang secara teknis TRADING+PERPETUAL
+    di Binance tapi entah kenapa tidak dikenali objek ccxt yang benar-benar
+    dipakai bot (insiden nyata: EVAA/USDT). Kalau None (default), tidak ada
+    validasi -- perilaku lama, tidak breaking untuk caller lain.
     """
     flag = await db.get_bot_state("auto_scan_universe_futures")
     should_scan = (flag == "true")
@@ -624,6 +636,17 @@ async def auto_scan_and_populate_futures(db) -> list:
         coins = await loop.run_in_executor(
             None, scan_binance_futures_universe, _scan_min_volume, 200,
         )
+
+        if coins and is_valid_symbol is not None:
+            before   = len(coins)
+            invalid  = [c["symbol"] for c in coins if not is_valid_symbol(c["symbol"])]
+            coins    = [c for c in coins if is_valid_symbol(c["symbol"])]
+            if invalid:
+                log.warning(
+                    "auto_scan_futures: %d/%d simbol hasil scan tidak dikenali "
+                    "ccxt, dibuang sebelum ditulis ke universe_futures.json: %s",
+                    len(invalid), before, invalid,
+                )
 
         if coins:
             save_universe_json_futures(coins, min_volume_usdt=_scan_min_volume)

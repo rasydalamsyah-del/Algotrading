@@ -192,9 +192,13 @@ def calculate_cci_divergence(df: pd.DataFrame, lookback: int = CCI_DIV_LOOKBACK)
     return None
 
 
-def score_cci(cci: Optional[float]) -> float:
+def score_cci(cci: Optional[float], side: str = "long") -> float:
+    # [BIAS-FIX -- Batch 4, input-reflection] CCI simetris di sekitar 0 by
+    # construction (mean-deviation oscillator) -- mirror(cci) = -cci.
     if cci is None:
         return 50.0
+    if side == "short":
+        cci = -cci
     if cci >= CCI_EXTREME_OB:
         return 20.0
     if cci >= CCI_OVERBOUGHT:
@@ -256,9 +260,14 @@ def calculate_willr_trend(df: pd.DataFrame,
     return "flat"
 
 
-def score_williams_r(wr: Optional[float]) -> float:
+def score_williams_r(wr: Optional[float], side: str = "long") -> float:
+    # [BIAS-FIX -- Batch 4, input-reflection] Williams %R range [-100,0],
+    # midpoint -50 -- mirror(wr) = -100-wr (verified: mirror(0)=-100,
+    # mirror(-100)=0, mirror(-50)=-50 fixed point).
     if wr is None:
         return 50.0
+    if side == "short":
+        wr = -100.0 - wr
     if wr >= -20:
         t = (wr - (-20)) / (0 - (-20))
         return clamp_score(30.0 - t * 10.0)
@@ -335,11 +344,24 @@ def calculate_roc_slope(df: pd.DataFrame,
     return float(roc_vals[-1] - roc_vals[0])
 
 
+_ROC_CROSSOVER_MIRROR = {"bullish": "bearish", "bearish": "bullish"}
+
+
 def score_roc(roc: Optional[float], roc_slope: Optional[float] = None,
-              roc_crossover: Optional[str] = None) -> float:
-    """[MSL-4] Score ROC dengan crossover sebagai modifier tambahan."""
+              roc_crossover: Optional[str] = None, side: str = "long") -> float:
+    """[MSL-4] Score ROC dengan crossover sebagai modifier tambahan.
+
+    [BIAS-FIX -- Batch 4, input-reflection] mirror(roc)=-roc,
+    mirror(roc_slope)=-roc_slope (turunan seri yg dicerminkan, sama pola
+    dgn slope RSI di Batch 3), roc_crossover di-swap bullish<->bearish.
+    """
     if roc is None:
         return 50.0
+
+    if side == "short":
+        roc = -roc
+        roc_slope = -roc_slope if roc_slope is not None else None
+        roc_crossover = _ROC_CROSSOVER_MIRROR.get(roc_crossover, roc_crossover)
 
     if roc > 5.0:
         base = clamp_score(70.0 + min(roc - 5.0, 10.0) * 2.0)
@@ -407,6 +429,7 @@ def score_oscillators(
             result.cci = calculate_cci(df)
 
         result.cci_score     = score_cci(result.cci)
+        result.cci_score_short = score_cci(result.cci, side="short")
         result.cci_trend     = calculate_cci_trend(df)        # [MSL-3]
         result.cci_divergence = calculate_cci_divergence(df)  # [MSL-6]
 
@@ -418,6 +441,7 @@ def score_oscillators(
             result.williams_r = calculate_williams_r(df)
 
         result.williams_r_score = score_williams_r(result.williams_r)
+        result.williams_r_score_short = score_williams_r(result.williams_r, side="short")
         result.willr_trend      = calculate_willr_trend(df)   # [MSL-3]
 
         # ── ROC ───────────────────────────────────────────────────────────────
@@ -437,6 +461,9 @@ def score_oscillators(
         result.roc_slow     = calculate_roc_slow(df)
         result.roc_crossover = calculate_roc_crossover(result.roc, result.roc_slow)
         result.roc_score    = score_roc(result.roc, result.roc_slope, result.roc_crossover)
+        result.roc_score_short = score_roc(
+            result.roc, result.roc_slope, result.roc_crossover, side="short"
+        )
 
         # ── Composite ─────────────────────────────────────────────────────────
         # [BUG-FIX] Sebelumnya composite SELALU memakai bobot tetap

@@ -146,6 +146,27 @@ class BaseExchangeConnector:
             "maker_fee":        market.get("maker", 0.001),
         }
 
+    def is_symbol_supported(self, symbol: str) -> bool:
+        """
+        [FIX] Cek apakah ccxt BENAR-BENAR mengenali simbol ini lewat resolusi
+        pintar ex.market() -- BUKAN raw dict lookup seperti get_market_info()
+        (self._markets.get(symbol, {})). Perbedaannya nyata dan penting:
+        get_market_info("EVAA/USDT") return kosong (dianggap invalid) padahal
+        ex.market() berhasil resolve ke "EVAA/USDT:USDT" (swap valid) --
+        sebaliknya get_market_info("BONK/USDT") return market SPOT (dianggap
+        valid) padahal tidak ada kontrak futures "BONKUSDT" tanpa prefix 1000x.
+        Dibuktikan lewat pengujian terhadap 61 simbol nyata yang pernah gagal
+        di produksi -- get_market_info salah di kedua arah, method ini benar
+        untuk semuanya. Pakai method ini (bukan get_market_info) kalau
+        tujuannya validasi "apakah simbol ini bisa dipakai", bukan ambil
+        detail precision/limits/fee.
+        """
+        try:
+            self._ex.market(symbol)
+            return True
+        except Exception:
+            return False
+
     def amount_to_precision(self, symbol: str, amount: float) -> float:
         try:
             return float(self._ex.amount_to_precision(symbol, amount))

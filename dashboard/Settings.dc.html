@@ -113,12 +113,12 @@
         <div style="display:grid;grid-template-columns:{{ settingsCols }};gap:10px">
           <div>
             <label style="font-size:10px;color:#4a5878;font-weight:600;margin-bottom:4px;display:block;text-transform:uppercase;letter-spacing:.4px">API Base URL</label>
-            <input value="{{ apiBaseInput }}" oninput="{{ onApiBaseInput }}" style="width:100%;background:#0f1420;border:1px solid #1e2d45;border-radius:6px;color:#e6eaf2;padding:7px 10px;font-size:11.5px;font-family:'JetBrains Mono',monospace;outline:none;box-sizing:border-box" />
+            <input value="{{ apiBaseInput }}" oninput="{{ onApiBaseInput }}" onblur="{{ onApiBaseBlur }}" style="width:100%;background:#0f1420;border:1px solid #1e2d45;border-radius:6px;color:#e6eaf2;padding:7px 10px;font-size:11.5px;font-family:'JetBrains Mono',monospace;outline:none;box-sizing:border-box" />
             <div style="font-size:9.5px;color:#4a5878;margin-top:3px">URL bot API. Ganti jika bot berjalan di server lain.</div>
           </div>
           <div>
             <label style="font-size:10px;color:#4a5878;font-weight:600;margin-bottom:4px;display:block;text-transform:uppercase;letter-spacing:.4px">Dashboard API Key</label>
-            <input type="password" value="{{ apiKeyInput }}" oninput="{{ onApiKeyInput }}" placeholder="Isi DASHBOARD_API_KEY dari .env" style="width:100%;background:#0f1420;border:1px solid #1e2d45;border-radius:6px;color:#e6eaf2;padding:7px 10px;font-size:11.5px;font-family:'JetBrains Mono',monospace;outline:none;box-sizing:border-box" />
+            <input type="password" value="{{ apiKeyInput }}" oninput="{{ onApiKeyInput }}" onblur="{{ onApiKeyBlur }}" placeholder="Isi DASHBOARD_API_KEY dari .env" style="width:100%;background:#0f1420;border:1px solid #1e2d45;border-radius:6px;color:#e6eaf2;padding:7px 10px;font-size:11.5px;font-family:'JetBrains Mono',monospace;outline:none;box-sizing:border-box" />
             <div style="font-size:9.5px;color:#4a5878;margin-top:3px">Diperlukan untuk kontrol bot (halt/resume/panic).</div>
           </div>
           <div>
@@ -184,7 +184,7 @@ function demoStatus() {
   return { exchange: 'BINANCE', strategy: 'VolumetricBreakout', testnet: true, timeframe: '15m/1h/4h', watchlist: 15, uptime_display: '4j 12m' };
 }
 function demoRisk() {
-  return { max_drawdown_pct: 15, max_position_size_pct: 10, daily_loss_limit_pct: 10, risk_per_trade_pct: 1, atr_mult_sl: 2.0, atr_mult_tp: 3.5, trailing_atr_mult: 1.5, max_open_positions: 3 };
+  return { max_drawdown_pct: 15, max_position_size_pct: 10, daily_loss_limit_pct: 10, risk_per_trade_pct: 1, atr_multiplier_sl: 2.0, atr_multiplier_tp: 3.5, trailing_atr_mult: 1.5, max_open_positions: 3 };
 }
 
 let toastSeq = 0;
@@ -263,6 +263,19 @@ class Component extends DCLogic {
 
   onApiBaseInput = (e) => this.setState({ apiBaseInput: e.target.value });
   onApiKeyInput = (e) => this.setState({ apiKeyInput: e.target.value });
+  // Auto-commit ke apiBase/apiKey saat kolom kehilangan fokus, supaya apiBase
+  // tetap satu-satunya sumber kebenaran yang dipakai semua fungsi (apiGet,
+  // apiPost, testConnection) -- tidak perlu klik Simpan dulu.
+  onApiBaseBlur = () => {
+    const base = this.state.apiBaseInput.trim().replace(/\/$/, '');
+    try { localStorage.setItem('gs_api_base', base); } catch (e) {}
+    this.setState({ apiBase: base, apiBaseInput: base });
+  };
+  onApiKeyBlur = () => {
+    const key = this.state.apiKeyInput.trim();
+    try { localStorage.setItem('gs_api_key', key); } catch (e) {}
+    this.setState({ apiKey: key, apiKeyInput: key });
+  };
   saveApiSettings = () => {
     const base = this.state.apiBaseInput.trim().replace(/\/$/, '');
     const key = this.state.apiKeyInput.trim();
@@ -279,8 +292,10 @@ class Component extends DCLogic {
 
   onRiskInput(key, e) { this.setState(s => ({ riskInputs: { ...s.riskInputs, [key]: e.target.value } })); }
   saveRiskConfig = async () => {
-    const r = await this.apiPost('/config/risk', this.state.riskInputs);
-    if (r) this.toast('success', '💾 Tersimpan', 'Risk config disimpan. Aktif dalam ~30 detik.');
+    const r = await this.apiPost('/config/update', this.state.riskInputs);
+    if (!r) return; // apiPost sudah toast error sendiri (network/HTTP gagal)
+    if (r.success) this.toast('success', '💾 Tersimpan', 'Risk config disimpan. Aktif dalam ~30 detik.');
+    else this.toast('error', '❌ Gagal', r.message || r.error || 'Config ditolak backend.');
   };
   resumeBot = async () => { const r = await this.apiPost('/bot/resume', {}); if (r) this.toast('success', '▶ Resumed', 'Bot resumed.'); };
   haltBot = () => this.askConfirm('Halt Bot', 'Halt bot sekarang?', 'Ya, Halt', async () => { const r = await this.apiPost('/bot/halt', { reason: 'Manual halt from settings' }); if (r) this.toast('warn', '⏹ Halted', 'Bot halted.'); });
@@ -302,7 +317,7 @@ class Component extends DCLogic {
       { label: 'Strategy', value: s.strategy || '—' },
       { label: 'Mode', value: s.testnet ? 'TESTNET' : 'LIVE' },
       { label: 'Timeframe', value: s.timeframe || '—' },
-      { label: 'Watchlist', value: (s.watchlist || 0) + ' coins' },
+      { label: 'Watchlist', value: (Array.isArray(s.watchlist) ? s.watchlist.length : (s.watchlist || 0)) + ' coins' },
       { label: 'Uptime', value: s.uptime_display || '—' },
     ];
 
@@ -312,8 +327,8 @@ class Component extends DCLogic {
       ['max_position_size_pct', 'Max Position Size %', 'Ukuran posisi maks % ekuitas'],
       ['daily_loss_limit_pct', 'Daily Loss Limit %', 'Batas loss harian'],
       ['risk_per_trade_pct', 'Risk Per Trade %', 'Risk per trade % ekuitas'],
-      ['atr_mult_sl', 'ATR Mult SL', 'ATR multiplier untuk Stop Loss'],
-      ['atr_mult_tp', 'ATR Mult TP', 'ATR multiplier untuk Take Profit'],
+      ['atr_multiplier_sl', 'ATR Mult SL', 'ATR multiplier untuk Stop Loss'],
+      ['atr_multiplier_tp', 'ATR Mult TP', 'ATR multiplier untuk Take Profit'],
       ['trailing_atr_mult', 'Trailing ATR Mult', 'ATR multiplier trailing stop'],
       ['max_open_positions', 'Max Open Positions', 'Maks posisi terbuka sekaligus'],
     ];
@@ -339,8 +354,8 @@ class Component extends DCLogic {
       wsColor: this.state.apiStatus === 'ok' ? '#00d68f' : '#f0455a',
       wsAnim: this.state.apiStatus === 'ok' ? 'pulse 2s infinite' : 'none',
       wsLabel: this.state.apiStatus === 'ok' ? 'LIVE' : 'OFFLINE',
-      apiBaseInput: this.state.apiBaseInput, onApiBaseInput: this.onApiBaseInput,
-      apiKeyInput: this.state.apiKeyInput, onApiKeyInput: this.onApiKeyInput,
+      apiBaseInput: this.state.apiBaseInput, onApiBaseInput: this.onApiBaseInput, onApiBaseBlur: this.onApiBaseBlur,
+      apiKeyInput: this.state.apiKeyInput, onApiKeyInput: this.onApiKeyInput, onApiKeyBlur: this.onApiKeyBlur,
       apiStatusLabel: this.state.apiStatus === 'ok' ? '✅ Connected' : this.state.apiStatus === 'fail' ? '❌ Disconnected (data contoh ditampilkan)' : '— Belum dites',
       apiStatusColor: this.state.apiStatus === 'ok' ? '#00d68f' : '#f0455a',
       testConnection: this.testConnection, saveApiSettings: this.saveApiSettings,

@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 import time
 import uuid
 from datetime import datetime, timezone
@@ -21,6 +22,23 @@ log = logging.getLogger("exchange")
 
 def _utcnow() -> datetime:
     return datetime.now(timezone.utc).replace(tzinfo=None)
+
+def _extract_bad_symbol_from_error(e: Exception) -> Optional[str]:
+    """Ekstrak simbol dari pesan error format ccxt 'X does not have market
+    symbol Y'. Dipakai baik untuk exception ccxt.BadSymbol yang tipenya
+    benar, MAUPUN sebagai circuit-breaker pola-pesan di except Exception
+    generik _watch_tickers_all() untuk exception lain yang kebetulan
+    membawa pesan identik -- ditemukan lewat insiden EVAA/USDT 13 Juli 2026
+    (~3 jam siklus mati-restart), di mana exception yang tertangkap TERNYATA
+    BUKAN ccxt.BadSymbol (dibuktikan lewat investigasi source ccxt + repro
+    langsung), tapi pesannya persis sama -- root cause tipe exception
+    aslinya belum terkonfirmasi. Regex ini struktural unik: dikonfirmasi
+    lewat grep seluruh source ccxt, frasa "does not have market symbol"
+    HANYA pernah dihasilkan oleh raise BadSymbol() di ccxt/base/exchange.py
+    market() -- tidak ada exception lain (rate-limit/network/auth/timeout)
+    yang pernah menghasilkan pola pesan ini."""
+    m = re.search(r"does not have market symbol (\S+)", str(e))
+    return m.group(1) if m else None
 
 class ExchangeConnector(BaseExchangeConnector):
     """
@@ -213,6 +231,11 @@ class WebSocketFeed:
         max_retries:     int              = 10,
         on_ticker:       Optional[Callable] = None,
         on_orderbook:    Optional[Callable] = None,
+        # [FUTURES-READY] Default "spot" mempertahankan perilaku lama
+        # PERSIS untuk semua caller yang tidak eksplisit mengirim
+        # parameter ini (yaitu spot/main_spot.py) -- future/main_future.py
+        # yang reuse class ini akan kirim "future" secara eksplisit.
+        default_type:    str              = "spot",
     ):
         self.symbols         = symbols or []
         self.reconnect_delay = reconnect_delay
@@ -227,7 +250,7 @@ class WebSocketFeed:
             "enableRateLimit": True,
             "timeout": 30000,
             "options": {
-                "defaultType": "spot",
+                "defaultType": default_type,
                 "adjustForTimeDifference": True,
                 "recvWindow": 10000,
             },
@@ -273,6 +296,12 @@ class WebSocketFeed:
         self._ws_ticker_is_multiplexed: bool = False
         self._ws_restart_count:  int = 0
         self._ws_last_restart_ts: float = 0.0
+        # [FIX] Simbol yang terbukti ccxt.BadSymbol (exchange tidak mengenalnya
+        # sama sekali) -- dikeluarkan dari batch watch_tickers() berikutnya
+        # supaya satu simbol jelek tidak menghentikan/loop-kan seluruh batch.
+        # Tetap ada di self.symbols (REST fallback & get_feed_status() masih
+        # perlu tahu simbol ini ada, statusnya cuma "dead" untuk WS).
+        self._ws_excluded_symbols: set = set()
 
         rest_cls = getattr(ccxt, exchange_id)
         self._rest_exchange: ccxt.Exchange = rest_cls({
@@ -281,7 +310,7 @@ class WebSocketFeed:
             "enableRateLimit": True,
             "timeout": 30000,
             "options": {
-                "defaultType": "spot",
+                "defaultType": default_type,
                 "adjustForTimeDifference": True,
                 "recvWindow": 10000,
             },
@@ -504,7 +533,14 @@ class WebSocketFeed:
         while self._running and retries < self.max_retries:
             try:
                 while self._running:
-                    tickers = await self._ex.watch_tickers(self.symbols)
+                    active = [s for s in self.symbols if s not in self._ws_excluded_symbols]
+                    if not active:
+                        log.error(
+                            "watch_tickers_all: semua %d simbol ter-exclude "
+                            "(BadSymbol) — task berhenti.", len(self.symbols),
+                        )
+                        return
+                    tickers = await self._ex.watch_tickers(active)
                     now = time.time()
                     for symbol, tk in tickers.items():
                         self.live_tickers[symbol] = {
@@ -529,11 +565,65 @@ class WebSocketFeed:
                     self._ws_restart_count = 0
             except asyncio.CancelledError:
                 break
+            except ccxt.BadSymbol as e:
+                # [FIX] Satu simbol tidak dikenal exchange TIDAK BOLEH menghentikan/
+                # loop-kan seluruh batch watch_tickers(). Keluarkan simbol itu saja,
+                # lanjut SEGERA dengan sisa simbol valid -- bukan reconnect/backoff.
+                bad = _extract_bad_symbol_from_error(e)
+                if bad and bad in self.symbols:
+                    self._ws_excluded_symbols.add(bad)
+                    self._ticker_dead[bad] = True
+                    self._feed_mode[bad]   = "WS_UNSUPPORTED"
+                    log.warning(
+                        "watch_tickers_all: %s tidak dikenal exchange — dikeluarkan "
+                        "dari batch WS (skip, bukan reconnect). Sisa %d/%d simbol aktif.",
+                        bad, len(self.symbols) - len(self._ws_excluded_symbols), len(self.symbols),
+                    )
+                else:
+                    # Tidak bisa identifikasi simbolnya dari pesan error --
+                    # treat seperti error biasa supaya tidak tight-loop tanpa backoff.
+                    retries += 1
+                    wait = self.reconnect_delay * retries
+                    log.warning(
+                        "watch_tickers_all: BadSymbol tak teridentifikasi: %s — wait %ds",
+                        e, wait,
+                    )
+                    await asyncio.sleep(wait)
+                continue
             except Exception as e:
+                # [CIRCUIT-BREAKER -- WS-exclude gagal via ccxt.BadSymbol, insiden
+                # EVAA/USDT 13 Juli 2026] Cek pola pesan TERLEPAS dari tipe exception
+                # aktualnya -- regex sama persis dgn cabang ccxt.BadSymbol di atas.
+                # Exclude HANYA simbol yang match pola ini; exception lain (network
+                # timeout, rate-limit, auth, connection reset, dll -- format pesannya
+                # beda total dari pola ini, dikonfirmasi lewat grep source ccxt) tetap
+                # jatuh ke retry/backoff normal di bawah, TIDAK ikut ter-exclude.
+                bad = _extract_bad_symbol_from_error(e)
+                if bad and bad in self.symbols:
+                    self._ws_excluded_symbols.add(bad)
+                    self._ticker_dead[bad] = True
+                    self._feed_mode[bad]   = "WS_UNSUPPORTED"
+                    log.warning(
+                        "watch_tickers_all: %s dikeluarkan dari batch WS via "
+                        "circuit-breaker pola pesan (exception_type=%s, BUKAN "
+                        "ccxt.BadSymbol) — sisa %d/%d simbol aktif.",
+                        bad, type(e).__name__,
+                        len(self.symbols) - len(self._ws_excluded_symbols), len(self.symbols),
+                        exc_info=True,
+                    )
+                    continue
+
+                # Bukan pola bad-symbol -- retry/backoff normal, tidak berubah dari
+                # sebelumnya, cuma ditambah type(e).__name__ utk instrumentasi
+                # diagnostik ringan (TANPA exc_info -- lihat catatan di atas, jalur
+                # ini sering terjadi utk network blip biasa yang sudah terbukti
+                # benign, exc_info penuh di sini akan membengkakkan log signifikan).
                 retries += 1
                 wait = self.reconnect_delay * retries
-                log.warning("watch_tickers_all retry %d/%d: %s — wait %ds",
-                            retries, self.max_retries, e, wait)
+                log.warning(
+                    "watch_tickers_all retry %d/%d: [%s] %s — wait %ds",
+                    retries, self.max_retries, type(e).__name__, e, wait,
+                )
                 await asyncio.sleep(wait)
         log.critical("watch_tickers_all DEAD after %d retries.", self.max_retries)
 

@@ -212,6 +212,84 @@ def _spoofing_penalty(
     return max(0.3, 1.0 - spoof_ratio)
 
 
+def _score_imbalance(imb: float, side: str = "long") -> float:
+    # [BIAS-FIX -- Batch 7, fungsi 1/3] side="short": reflection literal
+    # (imb -> 1-imb), BUKAN role-swap -- diverifikasi empiris dulu (200rb
+    # sampel acak + titik boundary): score_imbalance(imb) + score_imbalance
+    # (1-imb) == 100.0 PERSIS di seluruh range [0,1], tanpa deviasi sama
+    # sekali (beda dgn sar/pivot/fib yg TIDAK simetris sempurna) -- formula
+    # ini genuinely simetris, pola sama dgn _score_vwap_zone di trend.py.
+    if side == "short":
+        imb = 1.0 - imb
+    _anchor_bull = 50.0 + (IMBALANCE_BULL - 0.5) * 40.0  # ~54.8
+    _anchor_bear = 50.0 + (IMBALANCE_BEAR - 0.5) * 40.0  # ~45.2
+    if imb >= IMBALANCE_BULL:
+        t = (imb - IMBALANCE_BULL) / (1.0 - IMBALANCE_BULL)
+        return clamp_score(_anchor_bull + t * (90.0 - _anchor_bull))
+    elif imb <= IMBALANCE_BEAR:
+        t = (IMBALANCE_BEAR - imb) / IMBALANCE_BEAR
+        return clamp_score(_anchor_bear - t * (_anchor_bear - 10.0))
+    else:
+        return clamp_score(50.0 + (imb - 0.5) * 40.0)
+
+
+def _score_whale(
+    wb_str: Optional[float], bid_dist_factor: float,
+    cb_str: Optional[float], cb_price: Optional[float], wb_price: Optional[float],
+    wa_str: Optional[float], ask_dist_factor: float,
+    ca_str: Optional[float], ca_price: Optional[float], wa_price: Optional[float],
+    side: str = "long",
+) -> float:
+    # [BIAS-FIX -- Batch 7, fungsi 2/3] side="short": role-swap PENUH semua
+    # 5 pasangan bid<->ask (wb_str<->wa_str, bid_dist_factor<->ask_dist_
+    # factor, cb_str<->ca_str, cb_price<->ca_price, wb_price<->wa_price) --
+    # BUKAN reflection skalar tunggal spt imbalance_score (tidak ada satu
+    # angka kontinu yg bisa direfleksikan di sini, datanya inherently
+    # dua-sisi). Diverifikasi empiris dulu (200rb sampel acak): koefisien
+    # bid (0.3/cap 8.0 whale, 0.2/cap 5.0 cluster) IDENTIK dgn koefisien ask
+    # -- beda dgn score_pivot yg koefisien near/far-nya BEDA (12/6/-5 vs
+    # -15/-7/+5) sehingga pivot TIDAK sum-to-100. Whale_score kebetulan
+    # simetris sempurna (score+score_short==100, deviasi cuma float noise
+    # ~1e-14) justru KARENA role-swap penuh + koefisien identik, bukan krn
+    # ini reflection literal spt imbalance.
+    if side == "short":
+        wb_str, wa_str = wa_str, wb_str
+        bid_dist_factor, ask_dist_factor = ask_dist_factor, bid_dist_factor
+        cb_str, ca_str = ca_str, cb_str
+        cb_price, ca_price = ca_price, cb_price
+        wb_price, wa_price = wa_price, wb_price
+
+    score = 50.0
+    if wb_str:
+        score += min(wb_str * 0.3, 8.0) * bid_dist_factor
+    if wa_str:
+        score -= min(wa_str * 0.3, 8.0) * ask_dist_factor
+    if cb_str and cb_price != wb_price:   # cluster bonus jika beda dari single wall
+        score += min(cb_str * 0.2, 5.0) * bid_dist_factor
+    if ca_str and ca_price != wa_price:
+        score -= min(ca_str * 0.2, 5.0) * ask_dist_factor
+    return clamp_score(score)
+
+
+def _score_absorption(absorbed_bid: bool, absorbed_ask: bool, side: str = "long") -> float:
+    # [BIAS-FIX -- Batch 7, fungsi 3/3, TERAKHIR] side="short": role-swap
+    # PENUH absorbed_bid<->absorbed_ask -- pola sama dgn _score_whale, BUKAN
+    # reflection skalar tunggal spt imbalance_score (cuma 2 boolean, tidak
+    # ada angka kontinu). Diverifikasi empiris dulu (domain finite, 4
+    # kombinasi, EXHAUSTIVE bukan cuma sampel acak): score+score_short==100
+    # PERSIS di semua 4 kombinasi -- koefisien +15/-15 identik di kedua
+    # sisi & range pre-clamp [35,65] tidak pernah menyentuh batas [0,100]
+    # (beda dgn score_pivot yg near/far-nya pakai koefisien BEDA).
+    if side == "short":
+        absorbed_bid, absorbed_ask = absorbed_ask, absorbed_bid
+    score = 50.0
+    if absorbed_ask:
+        score += 15.0   # (peran "ask diserap") = breakout signal utk side ini
+    if absorbed_bid:
+        score -= 15.0   # (peran "bid diserap") = breakdown signal utk side ini
+    return clamp_score(score)
+
+
 def _liquidity_score(total_raw_usdt: float) -> float:
     """
     MSL-6: Likuiditas pasar dalam USDT → skor 0-100.
@@ -487,9 +565,12 @@ def calculate_orderbook(ob: dict, symbol: str = "_default") -> dict:
         "liquidity_score":    50.0,
         "spoofing_confidence": 1.0,
         "imbalance_score":    50.0,
+        "imbalance_score_short": 50.0,
         "whale_score":        50.0,
+        "whale_score_short":  50.0,
         "spread_score":       50.0,
         "absorption_score":   50.0,
+        "absorption_score_short": 50.0,
     }
 
     if not ob:
@@ -528,27 +609,19 @@ def calculate_orderbook(ob: dict, symbol: str = "_default") -> dict:
     total_raw   = bid_vol_raw + ask_vol_raw
 
     # ── Imbalance ─────────────────────────────────────────────────────────────
+    # [BUG-FIX v3.1] Diskontinuitas 10.2 poin di kedua boundary imbalance:
+    # Neutral branch berakhir di 54.8 saat imb=0.62, tapi bull branch dimulai
+    # dari 65.0 — lompatan yang tidak masuk akal. Begitu pula di sisi bear.
+    # Fix: anchor bull/bear branch tepat di nilai yang dihasilkan neutral branch,
+    # sehingga scoring kontinu di seluruh range [0, 1]. Logic dipindah ke
+    # _score_imbalance() [BIAS-FIX -- Batch 7] supaya bisa dipanggil ulang
+    # dgn side="short" (reflection literal, imb -> 1-imb -- lihat docstring
+    # _score_imbalance utk verifikasi simetrinya).
     if total_w > 0:
         imb = round(bid_vol_w / total_w, 4)
         result["bid_ask_imbalance"] = imb
-
-        # [BUG-FIX v3.1] Diskontinuitas 10.2 poin di kedua boundary imbalance:
-        # Neutral branch berakhir di 54.8 saat imb=0.62, tapi bull branch dimulai
-        # dari 65.0 — lompatan yang tidak masuk akal. Begitu pula di sisi bear.
-        # Fix: anchor bull/bear branch tepat di nilai yang dihasilkan neutral branch,
-        # sehingga scoring kontinu di seluruh range [0, 1].
-        # anchor_bull = 50 + (IMBALANCE_BULL - 0.5) * 40 = 54.8
-        # anchor_bear = 50 + (IMBALANCE_BEAR - 0.5) * 40 = 45.2
-        _anchor_bull = 50.0 + (IMBALANCE_BULL - 0.5) * 40.0  # ~54.8
-        _anchor_bear = 50.0 + (IMBALANCE_BEAR - 0.5) * 40.0  # ~45.2
-        if imb >= IMBALANCE_BULL:
-            t = (imb - IMBALANCE_BULL) / (1.0 - IMBALANCE_BULL)
-            result["imbalance_score"] = clamp_score(_anchor_bull + t * (90.0 - _anchor_bull))
-        elif imb <= IMBALANCE_BEAR:
-            t = (IMBALANCE_BEAR - imb) / IMBALANCE_BEAR
-            result["imbalance_score"] = clamp_score(_anchor_bear - t * (_anchor_bear - 10.0))
-        else:
-            result["imbalance_score"] = clamp_score(50.0 + (imb - 0.5) * 40.0)
+        result["imbalance_score"] = _score_imbalance(imb)
+        result["imbalance_score_short"] = _score_imbalance(imb, side="short")
 
     # ── Whale walls (single level) ────────────────────────────────────────────
     wb_price, wb_str = _find_whale_wall(bids_f, bid_vol_w)
@@ -612,16 +685,18 @@ def calculate_orderbook(ob: dict, symbol: str = "_default") -> dict:
     result["liquidity_score"] = _liquidity_score(total_raw)
 
     # ── Whale sub-score (dengan distance factor — MSL-5) ─────────────────────
-    whale_score = 50.0
-    if wb_str:
-        whale_score += min(wb_str * 0.3, 8.0) * bid_dist_factor
-    if wa_str:
-        whale_score -= min(wa_str * 0.3, 8.0) * ask_dist_factor
-    if cb_str and cb_price != wb_price:   # cluster bonus jika beda dari single wall
-        whale_score += min(cb_str * 0.2, 5.0) * bid_dist_factor
-    if ca_str and ca_price != wa_price:
-        whale_score -= min(ca_str * 0.2, 5.0) * ask_dist_factor
-    result["whale_score"] = clamp_score(whale_score)
+    # Logic dipindah ke _score_whale() [BIAS-FIX -- Batch 7] supaya bisa
+    # dipanggil ulang dgn side="short" (role-swap penuh bid<->ask -- lihat
+    # docstring _score_whale utk verifikasi simetrinya).
+    result["whale_score"] = _score_whale(
+        wb_str, bid_dist_factor, cb_str, cb_price, wb_price,
+        wa_str, ask_dist_factor, ca_str, ca_price, wa_price,
+    )
+    result["whale_score_short"] = _score_whale(
+        wb_str, bid_dist_factor, cb_str, cb_price, wb_price,
+        wa_str, ask_dist_factor, ca_str, ca_price, wa_price,
+        side="short",
+    )
 
     # ── Spread sub-score (kontekstual — MSL-4) ────────────────────────────────
     spread_score = 80.0  # default bagus
@@ -643,27 +718,41 @@ def calculate_orderbook(ob: dict, symbol: str = "_default") -> dict:
     result["spread_score"] = spread_score
 
     # ── Absorption sub-score ──────────────────────────────────────────────────
-    absorption_score = 50.0
-    if result["absorbed_ask"]:
-        absorption_score += 15.0   # ask wall diserap = breakout signal
-    if result["absorbed_bid"]:
-        absorption_score -= 15.0   # bid wall diserap = breakdown signal
-    result["absorption_score"] = clamp_score(absorption_score)
+    # Logic dipindah ke _score_absorption() [BIAS-FIX -- Batch 7] supaya bisa
+    # dipanggil ulang dgn side="short" (role-swap penuh absorbed_bid<->
+    # absorbed_ask -- lihat docstring _score_absorption utk verifikasi
+    # simetrinya).
+    result["absorption_score"] = _score_absorption(result["absorbed_bid"], result["absorbed_ask"])
+    result["absorption_score_short"] = _score_absorption(
+        result["absorbed_bid"], result["absorbed_ask"], side="short"
+    )
 
     return result
 
 
-def score_orderbook(data: dict) -> float:
+def score_orderbook(data: dict, side: str = "long") -> float:
     """
     Hitung composite orderbook score 0-100 dari semua sub-komponen.
     Komponen: imbalance (40%) + whale (25%) + absorption (20%) + spread (10%) + liquidity (5%).
+
+    [BIAS-FIX -- Batch 7, wiring composite] side="short": baca
+    imbalance_score_short/whale_score_short/absorption_score_short (SELALU
+    terisi -- dijamin oleh calculate_orderbook(), tidak perlu fallback
+    manual). spread_score, liquidity_score, spoofing_confidence dipakai
+    IDENTIK di kedua sisi -- diverifikasi eksplisit (Tahap 0 investigasi):
+    spoofing_confidence = rata-rata pen_b & pen_a (komutatif, arah-agnostic
+    scr matematis DAN empiris via 2000 fuzz swap-test, 0 mismatch);
+    spread_score/liquidity_score sudah dikonfirmasi arah-agnostic sebelum
+    Batch 7 dimulai. Bobot (40/25/20/10/5) & formula penalti spoofing
+    TIDAK berubah antar side.
     """
     if data.get("bid_ask_imbalance") is None:
         return 50.0
 
-    imb_score  = data.get("imbalance_score",   50.0)
-    whl_score  = data.get("whale_score",        50.0)
-    abs_score  = data.get("absorption_score",   50.0)
+    suffix = "_short" if side == "short" else ""
+    imb_score  = data.get(f"imbalance_score{suffix}",  50.0)
+    whl_score  = data.get(f"whale_score{suffix}",       50.0)
+    abs_score  = data.get(f"absorption_score{suffix}",  50.0)
     spr_score  = data.get("spread_score",       80.0)
     liq_score  = data.get("liquidity_score",    50.0)
     spoof_conf = data.get("spoofing_confidence", 1.0)
@@ -718,10 +807,14 @@ def score_orderbook_data(ob: dict, errors: Optional[list] = None, symbol: str = 
         result.liquidity_score      = data["liquidity_score"]
         result.spoofing_confidence  = data["spoofing_confidence"]
         result.imbalance_score      = data["imbalance_score"]
+        result.imbalance_score_short = data["imbalance_score_short"]
         result.whale_score          = data["whale_score"]
+        result.whale_score_short    = data["whale_score_short"]
         result.spread_score         = data["spread_score"]
         result.absorption_score     = data["absorption_score"]
+        result.absorption_score_short = data["absorption_score_short"]
         result.orderbook_score      = score_orderbook(data)
+        result.orderbook_score_short = score_orderbook(data, side="short")
         result.composite_score      = result.orderbook_score
     except Exception as exc:
         if errors is not None:

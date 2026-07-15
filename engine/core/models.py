@@ -47,6 +47,21 @@ class MarketRegime(str, Enum):
             MarketRegime.VOLATILE_EXPANSION,
         )
 
+    # [BIAS-FIX -- short regime gate] Mirror allows_long -- TRENDING_BULL/
+    # TRENDING_BEAR ditukar, RANGING/VOLATILE_EXPANSION tetap masuk keduanya
+    # (regime netral-arah, tradeable dua arah), UNDEFINED tetap tidak masuk
+    # keduanya. Sebelumnya properti ini tidak ada sama sekali -- is_tradeable_
+    # regime() cuma pernah cek allows_long, TIDAK PERNAH ada padanan utk short
+    # (root cause kenapa short di trending_bear selalu tertolak di Commander
+    # walau scoring pipeline-nya sendiri sudah side-aware).
+    @property
+    def allows_short(self) -> bool:
+        return self in (
+            MarketRegime.TRENDING_BEAR,
+            MarketRegime.RANGING,
+            MarketRegime.VOLATILE_EXPANSION,
+        )
+
     @property
     def emoji(self) -> str:
         _MAP = {
@@ -210,18 +225,22 @@ class TrendIndicators:
     ema100: Optional[float] = None
     ema200: Optional[float] = None
     ema_stack_score: float = 50.0
+    ema_stack_score_short: Optional[float] = None   # [BIAS-FIX -- Batch 5]
     golden_cross_bars_ago: Optional[int]   = None
     dead_cross_bars_ago:   Optional[int]   = None
     cross_score:           float           = 50.0
+    cross_score_short:     Optional[float] = None   # [BIAS-FIX -- Batch 5]
     supertrend_value:     Optional[float]  = None
     supertrend_direction: Optional[int]    = None
     supertrend_score:     float            = 50.0
+    supertrend_score_short: Optional[float] = None   # [BIAS-FIX -- Batch 5]
     vwap:          Optional[float] = None
     vwap_upper_1:  Optional[float] = None
     vwap_lower_1:  Optional[float] = None
     vwap_upper_2:  Optional[float] = None
     vwap_lower_2:  Optional[float] = None
     vwap_score:    float           = 50.0
+    vwap_score_short: Optional[float] = None   # [BIAS-FIX -- Batch 5]
     composite_score: float = 50.0
     
     def is_valid(self) -> bool:
@@ -235,6 +254,8 @@ class MomentumIndicators:
     rsi_divergence:   Optional[float] = None
     rsi_zone_exit:    Optional[str]   = None
     rsi_score:        float           = 50.0
+    # [BIAS-FIX -- Batch 3] Default None, sama pola dgn Batch 1/2.
+    rsi_score_short:  Optional[float] = None
     macd_line:         Optional[float] = None
     macd_signal:       Optional[float] = None
     macd_histogram:    Optional[float] = None
@@ -242,11 +263,13 @@ class MomentumIndicators:
     macd_divergence:   Optional[float] = None
     macd_zero_cross:   Optional[bool]  = None
     macd_score:        float           = 50.0
+    macd_score_short:  Optional[float] = None
     stoch_k:           Optional[float] = None
     stoch_d:           Optional[float] = None
     stoch_kd_cross:    Optional[str]   = None
     stoch_zone:        Optional[str]   = None
     stoch_score:       float           = 50.0
+    stoch_score_short: Optional[float] = None
     # [UPGRADE] VWMA — Volume Weighted MA dari ta_compat.vwma(), sebelumnya idle
     vwma:              Optional[float] = None   # nilai VWMA_20
     vwma_vs_sma:       Optional[float] = None   # VWMA - SMA: positif = vol berat di atas avg
@@ -263,15 +286,21 @@ class StrengthIndicators:
     minus_di:        Optional[float] = None
     adx_score:       float           = 50.0
     di_score:        float           = 50.0
+    # [BIAS-FIX -- Batch 2] Default None (bukan 50.0), sama alasannya dgn
+    # pattern_score_short di Batch 1 -- _pick_side_score() butuh "is not
+    # None" utk fallback yg aman selama field ini belum di-populate.
+    di_score_short:  Optional[float] = None
     volume_ratio:        Optional[float] = None
     volume_spike:        bool            = False
     obv:                 Optional[float] = None
     obv_trend:           Optional[str]   = None
     volume_climax:       bool            = False
     volume_score:        float           = 50.0
+    volume_score_short:  Optional[float] = None
     mfi:             Optional[float] = None
     mfi_divergence:  Optional[float] = None
     mfi_score:       float           = 50.0
+    mfi_score_short: Optional[float] = None
     composite_score: float = 50.0
 
     def is_valid(self) -> bool:
@@ -314,6 +343,11 @@ class PatternIndicators:
     distance_to_resistance: Optional[float] = None
     higher_tf_aligned:      Optional[bool]  = None
     pattern_score:    float = 50.0
+    # [BIAS-FIX -- Batch 1] Default None (BUKAN 50.0) -- _pick_side_score()
+    # di scorer.py mengecek "is not None" utk fallback; kalau default-nya
+    # 50.0, field ini akan SELALU dianggap "ada" walau belum pernah di-set
+    # eksplisit oleh score_pattern(), merusak mekanisme fallback aman.
+    pattern_score_short: Optional[float] = None
     context_score:    float = 50.0
     composite_score:  float = 50.0
 
@@ -325,11 +359,13 @@ class OscillatorIndicators:
     # ── CCI ───────────────────────────────────────────────────────────────────
     cci:              Optional[float] = None
     cci_score:        float           = 50.0
+    cci_score_short:  Optional[float] = None   # [BIAS-FIX -- Batch 4]
     cci_trend:        Optional[str]   = None   # "rising"|"falling"|"flat"
     cci_divergence:   Optional[float] = None   # bull(+) / bear(-) divergence score
     # ── Williams %R ───────────────────────────────────────────────────────────
     williams_r:       Optional[float] = None
     williams_r_score: float           = 50.0
+    williams_r_score_short: Optional[float] = None   # [BIAS-FIX -- Batch 4]
     willr_trend:      Optional[str]   = None   # "rising"|"falling"|"flat"
     # ── ROC / Momentum ────────────────────────────────────────────────────────
     roc:              Optional[float] = None   # ROC fast (9-period)
@@ -337,6 +373,7 @@ class OscillatorIndicators:
     roc_slope:        Optional[float] = None   # acceleration of fast ROC
     roc_crossover:    Optional[str]   = None   # "bullish"|"bearish"|None
     roc_score:        float           = 50.0
+    roc_score_short:  Optional[float] = None   # [BIAS-FIX -- Batch 4]
     # ── Composite ─────────────────────────────────────────────────────────────
     composite_score:  float           = 50.0
 
@@ -357,10 +394,12 @@ class StructureIndicators:
     cloud_thickness:  Optional[float] = None
     tk_cross:         Optional[str]   = None   # "bullish","bearish",None
     ichimoku_score:   float           = 50.0
+    ichimoku_score_short: Optional[float] = None   # [BIAS-FIX -- Batch 6]
     # Parabolic SAR
     sar_value:        Optional[float] = None
     sar_direction:    Optional[str]   = None   # "up","down"
     sar_score:        float           = 50.0
+    sar_score_short:  Optional[float] = None   # [BIAS-FIX -- Batch 6]
     # Pivot Points
     pivot:            Optional[float] = None
     r1:               Optional[float] = None
@@ -373,6 +412,7 @@ class StructureIndicators:
     nearest_resistance: Optional[float] = None
     price_vs_pivot:     Optional[str]   = None   # "above","below"
     pivot_score:        float           = 50.0
+    pivot_score_short:  Optional[float] = None   # [BIAS-FIX -- Batch 6]
     # Fibonacci
     fib_swing_high:          Optional[float] = None
     fib_swing_low:           Optional[float] = None
@@ -384,6 +424,7 @@ class StructureIndicators:
     nearest_fib_support:     Optional[float] = None
     nearest_fib_resistance:  Optional[float] = None
     fib_score:               float           = 50.0
+    fib_score_short:         Optional[float] = None   # [BIAS-FIX -- Batch 6]
     # [v2 NEW] Fibonacci trend-awareness (uptrend/downtrend retracement) + extension target
     fib_trend:               Optional[str]   = None   # "uptrend" | "downtrend"
     fib_ext_1272:            Optional[float] = None
@@ -432,13 +473,23 @@ class OrderbookIndicators:
     ask_wall_dist:      Optional[float] = None   # relevansi jarak ask wall (0-1)
     # ── Sub-scores (0-100) ────────────────────────────────────────────────────
     imbalance_score:    float           = 50.0   # bid/ask ratio score
+    imbalance_score_short: Optional[float] = None   # [BIAS-FIX -- Batch 7]
     whale_score:        float           = 50.0   # whale wall + cluster score
+    whale_score_short:  Optional[float] = None   # [BIAS-FIX -- Batch 7]
     spread_score:       float           = 80.0   # likuiditas spread score
     absorption_score:   float           = 50.0   # absorption signal score
+    absorption_score_short: Optional[float] = None   # [BIAS-FIX -- Batch 7]
     liquidity_score:    float           = 50.0   # total depth USDT score
     spoofing_confidence: float          = 1.0    # 0-1, makin rendah makin banyak spoof
     # ── Composite ─────────────────────────────────────────────────────────────
     orderbook_score:    float           = 50.0
+    orderbook_score_short: Optional[float] = None   # [BIAS-FIX -- Batch 7]
+    # composite_score TETAP alias long-only dari orderbook_score -- TIDAK
+    # dapat versi _short (lihat Tahap 0 investigasi sesi wiring composite):
+    # cuma dipakai _compute_tf_score() (observer.py, MTF gate, side-agnostic
+    # by construction, di luar cakupan proyek side-aware ini) & simulate_test.py
+    # (logging). Satu-satunya field yg dibaca _pick_side_score() adalah
+    # orderbook_score, bukan composite_score.
     composite_score:    float           = 50.0
 
     def is_valid(self) -> bool:
@@ -655,6 +706,13 @@ class TradeDecision:
     kelly_method_used: str             = "fallback"
     correlated_symbols: List[str] = field(default_factory=list)
     correlation_penalty: float    = 0.0
+    # [FUTURES-READY -- capital_allocator prasyarat] True HANYA kalau gate
+    # risk manager gagal spesifik karena RiskDecision.REJECTED_INSUFFICIENT_
+    # CAPITAL (slot habis / margin kurang) -- BUKAN utk kegagalan gate
+    # lain manapun (supertrend, score/trigger, regime, spread, kelly
+    # negative-edge, dst). Default False -- tidak mengubah decision.action
+    # untuk caller manapun yang belum tahu/pakai field ini.
+    capital_constrained: bool = False
     decided_at: datetime = field(default_factory=_utcnow)
 
     @property

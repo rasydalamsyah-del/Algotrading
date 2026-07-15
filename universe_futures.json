@@ -1,0 +1,808 @@
+{
+  "market": "futures",
+  "scanned_at": "2026-07-13T08:40:44",
+  "total_coins": 200,
+  "min_volume_usd": 100000,
+  "symbols": [
+    {
+      "symbol": "BTC/USDT",
+      "volume_24h": 7247070297.49
+    },
+    {
+      "symbol": "ETH/USDT",
+      "volume_24h": 6913231302.36
+    },
+    {
+      "symbol": "SOL/USDT",
+      "volume_24h": 1048210265.66
+    },
+    {
+      "symbol": "ZEC/USDT",
+      "volume_24h": 743070322.65
+    },
+    {
+      "symbol": "EVAA/USDT",
+      "volume_24h": 463633079.43
+    },
+    {
+      "symbol": "HYPE/USDT",
+      "volume_24h": 434786548.41
+    },
+    {
+      "symbol": "T/USDT",
+      "volume_24h": 414789055.79
+    },
+    {
+      "symbol": "XRP/USDT",
+      "volume_24h": 360106983.17
+    },
+    {
+      "symbol": "LAB/USDT",
+      "volume_24h": 352090553.98
+    },
+    {
+      "symbol": "DEXE/USDT",
+      "volume_24h": 283783549.28
+    },
+    {
+      "symbol": "WLD/USDT",
+      "volume_24h": 256331849.42
+    },
+    {
+      "symbol": "BNB/USDT",
+      "volume_24h": 239436390.76
+    },
+    {
+      "symbol": "DOGE/USDT",
+      "volume_24h": 199935680.04
+    },
+    {
+      "symbol": "DODOX/USDT",
+      "volume_24h": 168240831.23
+    },
+    {
+      "symbol": "VELVET/USDT",
+      "volume_24h": 146074730.39
+    },
+    {
+      "symbol": "SXT/USDT",
+      "volume_24h": 139534260.98
+    },
+    {
+      "symbol": "1000PEPE/USDT",
+      "volume_24h": 122163395.1
+    },
+    {
+      "symbol": "ADA/USDT",
+      "volume_24h": 119113246.36
+    },
+    {
+      "symbol": "1000XEC/USDT",
+      "volume_24h": 108396493.04
+    },
+    {
+      "symbol": "NEAR/USDT",
+      "volume_24h": 103233358.76
+    },
+    {
+      "symbol": "BEAT/USDT",
+      "volume_24h": 98328046.44
+    },
+    {
+      "symbol": "BILL/USDT",
+      "volume_24h": 89773039.34
+    },
+    {
+      "symbol": "AAVE/USDT",
+      "volume_24h": 89597621.43
+    },
+    {
+      "symbol": "SUI/USDT",
+      "volume_24h": 83757510.12
+    },
+    {
+      "symbol": "MAGMA/USDT",
+      "volume_24h": 83072859.7
+    },
+    {
+      "symbol": "UNI/USDT",
+      "volume_24h": 76318308.02
+    },
+    {
+      "symbol": "LINK/USDT",
+      "volume_24h": 69961219.69
+    },
+    {
+      "symbol": "AVAX/USDT",
+      "volume_24h": 64602270.02
+    },
+    {
+      "symbol": "VANRY/USDT",
+      "volume_24h": 63706169.6
+    },
+    {
+      "symbol": "ARX/USDT",
+      "volume_24h": 59522080.41
+    },
+    {
+      "symbol": "BCH/USDT",
+      "volume_24h": 59371175.21
+    },
+    {
+      "symbol": "ENA/USDT",
+      "volume_24h": 58963547.85
+    },
+    {
+      "symbol": "TAO/USDT",
+      "volume_24h": 57999567.4
+    },
+    {
+      "symbol": "LIT/USDT",
+      "volume_24h": 56394897.55
+    },
+    {
+      "symbol": "PUMP/USDT",
+      "volume_24h": 54622862.6
+    },
+    {
+      "symbol": "ARB/USDT",
+      "volume_24h": 52897032.78
+    },
+    {
+      "symbol": "ALLO/USDT",
+      "volume_24h": 47508965.04
+    },
+    {
+      "symbol": "XLM/USDT",
+      "volume_24h": 45447276.77
+    },
+    {
+      "symbol": "FIL/USDT",
+      "volume_24h": 44435454.88
+    },
+    {
+      "symbol": "TLM/USDT",
+      "volume_24h": 44360747.07
+    },
+    {
+      "symbol": "AGLD/USDT",
+      "volume_24h": 42233088.9
+    },
+    {
+      "symbol": "PAXG/USDT",
+      "volume_24h": 41452455.56
+    },
+    {
+      "symbol": "CLO/USDT",
+      "volume_24h": 37677543.26
+    },
+    {
+      "symbol": "B/USDT",
+      "volume_24h": 36580552.37
+    },
+    {
+      "symbol": "O/USDT",
+      "volume_24h": 34033327.65
+    },
+    {
+      "symbol": "LTC/USDT",
+      "volume_24h": 33391539.6
+    },
+    {
+      "symbol": "DOT/USDT",
+      "volume_24h": 33261603.27
+    },
+    {
+      "symbol": "TRX/USDT",
+      "volume_24h": 30707354.61
+    },
+    {
+      "symbol": "US/USDT",
+      "volume_24h": 30326192.7
+    },
+    {
+      "symbol": "ONDO/USDT",
+      "volume_24h": 29775732.32
+    },
+    {
+      "symbol": "TRUMP/USDT",
+      "volume_24h": 29170852.22
+    },
+    {
+      "symbol": "JTO/USDT",
+      "volume_24h": 28322402.75
+    },
+    {
+      "symbol": "ASTER/USDT",
+      "volume_24h": 27395988.98
+    },
+    {
+      "symbol": "OP/USDT",
+      "volume_24h": 26282413.01
+    },
+    {
+      "symbol": "RE/USDT",
+      "volume_24h": 25141056.78
+    },
+    {
+      "symbol": "VIRTUAL/USDT",
+      "volume_24h": 24872542.37
+    },
+    {
+      "symbol": "EDGE/USDT",
+      "volume_24h": 24644683.14
+    },
+    {
+      "symbol": "SKL/USDT",
+      "volume_24h": 24573570.87
+    },
+    {
+      "symbol": "JCT/USDT",
+      "volume_24h": 24128878.0
+    },
+    {
+      "symbol": "INJ/USDT",
+      "volume_24h": 24086270.87
+    },
+    {
+      "symbol": "XPL/USDT",
+      "volume_24h": 22467023.59
+    },
+    {
+      "symbol": "SYN/USDT",
+      "volume_24h": 22380788.79
+    },
+    {
+      "symbol": "APT/USDT",
+      "volume_24h": 22082384.63
+    },
+    {
+      "symbol": "HBAR/USDT",
+      "volume_24h": 21853415.34
+    },
+    {
+      "symbol": "KITE/USDT",
+      "volume_24h": 21735995.23
+    },
+    {
+      "symbol": "TIA/USDT",
+      "volume_24h": 21682006.95
+    },
+    {
+      "symbol": "PIPPIN/USDT",
+      "volume_24h": 20579527.33
+    },
+    {
+      "symbol": "XMR/USDT",
+      "volume_24h": 20488789.79
+    },
+    {
+      "symbol": "FARTCOIN/USDT",
+      "volume_24h": 20131385.18
+    },
+    {
+      "symbol": "1000SHIB/USDT",
+      "volume_24h": 19977943.61
+    },
+    {
+      "symbol": "RIVER/USDT",
+      "volume_24h": 18985700.41
+    },
+    {
+      "symbol": "AIOT/USDT",
+      "volume_24h": 18742093.89
+    },
+    {
+      "symbol": "SLX/USDT",
+      "volume_24h": 18566652.61
+    },
+    {
+      "symbol": "XAUT/USDT",
+      "volume_24h": 18356066.36
+    },
+    {
+      "symbol": "OGN/USDT",
+      "volume_24h": 18355432.3
+    },
+    {
+      "symbol": "PENGU/USDT",
+      "volume_24h": 17721443.45
+    },
+    {
+      "symbol": "XPIN/USDT",
+      "volume_24h": 17428078.03
+    },
+    {
+      "symbol": "FET/USDT",
+      "volume_24h": 17418611.62
+    },
+    {
+      "symbol": "ETC/USDT",
+      "volume_24h": 17246989.3
+    },
+    {
+      "symbol": "LDO/USDT",
+      "volume_24h": 16643097.35
+    },
+    {
+      "symbol": "GWEI/USDT",
+      "volume_24h": 16364749.09
+    },
+    {
+      "symbol": "PARTI/USDT",
+      "volume_24h": 16152207.59
+    },
+    {
+      "symbol": "H/USDT",
+      "volume_24h": 15790294.21
+    },
+    {
+      "symbol": "ETHFI/USDT",
+      "volume_24h": 15637437.57
+    },
+    {
+      "symbol": "FHE/USDT",
+      "volume_24h": 15624785.51
+    },
+    {
+      "symbol": "DASH/USDT",
+      "volume_24h": 15131622.45
+    },
+    {
+      "symbol": "TAG/USDT",
+      "volume_24h": 14742236.57
+    },
+    {
+      "symbol": "1000BONK/USDT",
+      "volume_24h": 14070230.43
+    },
+    {
+      "symbol": "ICP/USDT",
+      "volume_24h": 13191318.65
+    },
+    {
+      "symbol": "BASED/USDT",
+      "volume_24h": 13103235.29
+    },
+    {
+      "symbol": "TRIA/USDT",
+      "volume_24h": 12987633.26
+    },
+    {
+      "symbol": "HOT/USDT",
+      "volume_24h": 12914161.99
+    },
+    {
+      "symbol": "OPN/USDT",
+      "volume_24h": 12891452.73
+    },
+    {
+      "symbol": "CAP/USDT",
+      "volume_24h": 12237265.98
+    },
+    {
+      "symbol": "ORDI/USDT",
+      "volume_24h": 11966885.68
+    },
+    {
+      "symbol": "WLFI/USDT",
+      "volume_24h": 11951449.26
+    },
+    {
+      "symbol": "EIGEN/USDT",
+      "volume_24h": 11871006.93
+    },
+    {
+      "symbol": "KAITO/USDT",
+      "volume_24h": 11767318.76
+    },
+    {
+      "symbol": "EPIC/USDT",
+      "volume_24h": 11699316.76
+    },
+    {
+      "symbol": "TAC/USDT",
+      "volume_24h": 11685690.15
+    },
+    {
+      "symbol": "EGLD/USDT",
+      "volume_24h": 11648915.93
+    },
+    {
+      "symbol": "WIF/USDT",
+      "volume_24h": 11606174.71
+    },
+    {
+      "symbol": "BANK/USDT",
+      "volume_24h": 11397227.87
+    },
+    {
+      "symbol": "PUNDIX/USDT",
+      "volume_24h": 11181790.84
+    },
+    {
+      "symbol": "HMSTR/USDT",
+      "volume_24h": 11175172.21
+    },
+    {
+      "symbol": "MORPHO/USDT",
+      "volume_24h": 10765029.85
+    },
+    {
+      "symbol": "CRV/USDT",
+      "volume_24h": 10716108.29
+    },
+    {
+      "symbol": "RIF/USDT",
+      "volume_24h": 10472492.9
+    },
+    {
+      "symbol": "BSB/USDT",
+      "volume_24h": 10291248.86
+    },
+    {
+      "symbol": "GRAM/USDT",
+      "volume_24h": 10007478.08
+    },
+    {
+      "symbol": "PYTH/USDT",
+      "volume_24h": 9845811.15
+    },
+    {
+      "symbol": "MMT/USDT",
+      "volume_24h": 9825555.51
+    },
+    {
+      "symbol": "ID/USDT",
+      "volume_24h": 9661202.14
+    },
+    {
+      "symbol": "PENDLE/USDT",
+      "volume_24h": 9416770.78
+    },
+    {
+      "symbol": "ATOM/USDT",
+      "volume_24h": 9312867.61
+    },
+    {
+      "symbol": "VVV/USDT",
+      "volume_24h": 8658229.41
+    },
+    {
+      "symbol": "SKY/USDT",
+      "volume_24h": 8552187.72
+    },
+    {
+      "symbol": "SKYAI/USDT",
+      "volume_24h": 8507168.7
+    },
+    {
+      "symbol": "HEI/USDT",
+      "volume_24h": 8436175.99
+    },
+    {
+      "symbol": "UB/USDT",
+      "volume_24h": 8254562.16
+    },
+    {
+      "symbol": "SIREN/USDT",
+      "volume_24h": 8042349.28
+    },
+    {
+      "symbol": "DYDX/USDT",
+      "volume_24h": 8012402.55
+    },
+    {
+      "symbol": "ESPORTS/USDT",
+      "volume_24h": 7908094.8
+    },
+    {
+      "symbol": "CHZ/USDT",
+      "volume_24h": 7838877.45
+    },
+    {
+      "symbol": "GIGGLE/USDT",
+      "volume_24h": 7714433.51
+    },
+    {
+      "symbol": "UAI/USDT",
+      "volume_24h": 7705257.06
+    },
+    {
+      "symbol": "POL/USDT",
+      "volume_24h": 7608231.08
+    },
+    {
+      "symbol": "SNX/USDT",
+      "volume_24h": 7595129.27
+    },
+    {
+      "symbol": "RENDER/USDT",
+      "volume_24h": 7456260.52
+    },
+    {
+      "symbol": "USUAL/USDT",
+      "volume_24h": 7413343.67
+    },
+    {
+      "symbol": "GALA/USDT",
+      "volume_24h": 7260861.95
+    },
+    {
+      "symbol": "M/USDT",
+      "volume_24h": 7095847.98
+    },
+    {
+      "symbol": "APR/USDT",
+      "volume_24h": 7083875.95
+    },
+    {
+      "symbol": "BLUR/USDT",
+      "volume_24h": 7079616.56
+    },
+    {
+      "symbol": "ELSA/USDT",
+      "volume_24h": 7028368.09
+    },
+    {
+      "symbol": "ANKR/USDT",
+      "volume_24h": 6998729.29
+    },
+    {
+      "symbol": "KAT/USDT",
+      "volume_24h": 6980207.76
+    },
+    {
+      "symbol": "SEI/USDT",
+      "volume_24h": 6895102.59
+    },
+    {
+      "symbol": "CHIP/USDT",
+      "volume_24h": 6721017.59
+    },
+    {
+      "symbol": "MON/USDT",
+      "volume_24h": 6714477.59
+    },
+    {
+      "symbol": "RAVE/USDT",
+      "volume_24h": 6644690.25
+    },
+    {
+      "symbol": "ZEN/USDT",
+      "volume_24h": 6635629.49
+    },
+    {
+      "symbol": "AVAAI/USDT",
+      "volume_24h": 6634151.06
+    },
+    {
+      "symbol": "ALGO/USDT",
+      "volume_24h": 6551351.41
+    },
+    {
+      "symbol": "ZRO/USDT",
+      "volume_24h": 6519985.01
+    },
+    {
+      "symbol": "CAKE/USDT",
+      "volume_24h": 6468043.17
+    },
+    {
+      "symbol": "STORJ/USDT",
+      "volume_24h": 6222113.51
+    },
+    {
+      "symbol": "JELLYJELLY/USDT",
+      "volume_24h": 6097419.52
+    },
+    {
+      "symbol": "BEL/USDT",
+      "volume_24h": 5926564.85
+    },
+    {
+      "symbol": "OPG/USDT",
+      "volume_24h": 5874630.84
+    },
+    {
+      "symbol": "SPELL/USDT",
+      "volume_24h": 5639673.75
+    },
+    {
+      "symbol": "USELESS/USDT",
+      "volume_24h": 5634175.63
+    },
+    {
+      "symbol": "0G/USDT",
+      "volume_24h": 5619342.32
+    },
+    {
+      "symbol": "FF/USDT",
+      "volume_24h": 5564434.63
+    },
+    {
+      "symbol": "AIGENSYN/USDT",
+      "volume_24h": 5482393.96
+    },
+    {
+      "symbol": "AERO/USDT",
+      "volume_24h": 5463971.78
+    },
+    {
+      "symbol": "BSV/USDT",
+      "volume_24h": 5338701.74
+    },
+    {
+      "symbol": "TNSR/USDT",
+      "volume_24h": 5277481.28
+    },
+    {
+      "symbol": "IDOL/USDT",
+      "volume_24h": 5239189.46
+    },
+    {
+      "symbol": "APE/USDT",
+      "volume_24h": 5181348.76
+    },
+    {
+      "symbol": "IOTA/USDT",
+      "volume_24h": 5173832.59
+    },
+    {
+      "symbol": "CFX/USDT",
+      "volume_24h": 5147310.45
+    },
+    {
+      "symbol": "AXS/USDT",
+      "volume_24h": 4948903.33
+    },
+    {
+      "symbol": "SENT/USDT",
+      "volume_24h": 4929056.1
+    },
+    {
+      "symbol": "BERA/USDT",
+      "volume_24h": 4839352.5
+    },
+    {
+      "symbol": "THETA/USDT",
+      "volume_24h": 4717824.15
+    },
+    {
+      "symbol": "RED/USDT",
+      "volume_24h": 4700229.56
+    },
+    {
+      "symbol": "1000LUNC/USDT",
+      "volume_24h": 4633110.49
+    },
+    {
+      "symbol": "1MBABYDOGE/USDT",
+      "volume_24h": 4632263.2
+    },
+    {
+      "symbol": "GRASS/USDT",
+      "volume_24h": 4575803.36
+    },
+    {
+      "symbol": "HOME/USDT",
+      "volume_24h": 4521563.3
+    },
+    {
+      "symbol": "AZTEC/USDT",
+      "volume_24h": 4501762.59
+    },
+    {
+      "symbol": "BIO/USDT",
+      "volume_24h": 4466410.2
+    },
+    {
+      "symbol": "NIL/USDT",
+      "volume_24h": 4459887.47
+    },
+    {
+      "symbol": "MEGA/USDT",
+      "volume_24h": 4373634.12
+    },
+    {
+      "symbol": "BLUAI/USDT",
+      "volume_24h": 4362876.37
+    },
+    {
+      "symbol": "PEOPLE/USDT",
+      "volume_24h": 4326130.53
+    },
+    {
+      "symbol": "YFI/USDT",
+      "volume_24h": 4312353.7
+    },
+    {
+      "symbol": "AIO/USDT",
+      "volume_24h": 4292938.5
+    },
+    {
+      "symbol": "ZAMA/USDT",
+      "volume_24h": 4198723.38
+    },
+    {
+      "symbol": "SAHARA/USDT",
+      "volume_24h": 4189105.17
+    },
+    {
+      "symbol": "STG/USDT",
+      "volume_24h": 4153243.25
+    },
+    {
+      "symbol": "RPL/USDT",
+      "volume_24h": 4141206.05
+    },
+    {
+      "symbol": "W/USDT",
+      "volume_24h": 4102650.57
+    },
+    {
+      "symbol": "MYX/USDT",
+      "volume_24h": 4072361.26
+    },
+    {
+      "symbol": "STX/USDT",
+      "volume_24h": 4069270.33
+    },
+    {
+      "symbol": "MANTA/USDT",
+      "volume_24h": 3953472.61
+    },
+    {
+      "symbol": "IN/USDT",
+      "volume_24h": 3901714.89
+    },
+    {
+      "symbol": "ATH/USDT",
+      "volume_24h": 3883279.37
+    },
+    {
+      "symbol": "JST/USDT",
+      "volume_24h": 3858388.93
+    },
+    {
+      "symbol": "ENSO/USDT",
+      "volume_24h": 3857357.84
+    },
+    {
+      "symbol": "CHILLGUY/USDT",
+      "volume_24h": 3766849.51
+    },
+    {
+      "symbol": "BTW/USDT",
+      "volume_24h": 3720920.02
+    },
+    {
+      "symbol": "2Z/USDT",
+      "volume_24h": 3643137.04
+    },
+    {
+      "symbol": "TST/USDT",
+      "volume_24h": 3642315.91
+    },
+    {
+      "symbol": "MANA/USDT",
+      "volume_24h": 3596505.52
+    },
+    {
+      "symbol": "SAND/USDT",
+      "volume_24h": 3561399.56
+    },
+    {
+      "symbol": "COAI/USDT",
+      "volume_24h": 3548015.04
+    },
+    {
+      "symbol": "STRK/USDT",
+      "volume_24h": 3518346.65
+    },
+    {
+      "symbol": "ZK/USDT",
+      "volume_24h": 3508445.86
+    }
+  ]
+}

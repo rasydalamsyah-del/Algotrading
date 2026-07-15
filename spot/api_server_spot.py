@@ -459,13 +459,14 @@ def create_app(bot_getter) -> FastAPI:
             ("GET",    "/api/universe/detail",                 "Detail universe + regime + score 🔑"),
             ("POST",   "/api/universe/add",                    "Tambah coin ke universe 🔑"),
             ("POST",   "/api/universe/remove",                 "Hapus coin dari universe 🔑"),
-            ("GET",    "/api/executor/stats",                  "Fill rate, retry, queue 🔑"),
+            ("GET",    "/api/executor/stats",                  "Fill rate, slippage, fee, latency executor 🔑"),
             ("GET",    "/api/intelligence/scores",             "Skor sinyal semua coin 🔑"),
             ("GET",    "/api/intelligence/scores/{symbol}",    "Skor sinyal per coin 🔑"),
             ("GET",    "/api/intelligence/regime",             "Market regime terkini 🔑"),
             ("GET",    "/api/analytics/attribution",           "Atribusi PnL per profil 🔑"),
             ("GET",    "/api/analytics/indicator_effectiveness","Efektivitas indikator 🔑"),
             ("GET",    "/api/analytics/regime_performance",    "Performa per regime 🔑"),
+            ("GET",    "/api/analytics/attribution_by_profile","Atribusi per strategy_profile 🔑"),
             ("POST",   "/api/analytics/refresh",               "Trigger refresh analytics 🔑"),
             ("GET",    "/api/meta_learner/suggestions",        "Saran auto-tuning pending 🔑"),
             ("POST",   "/api/meta_learner/approve/{id}",       "Approve saran auto-tuning 🔑"),
@@ -869,6 +870,9 @@ def create_app(bot_getter) -> FastAPI:
             "strategy_name":      b.strategy.name if b.strategy else None,
             "testnet":            b.config.get("testnet", True),
             "universe_watchlist": b.config.get("universe_watchlist", []),
+            # [FIX] Sebelumnya cuma ada di /config/current -- Risk Monitor.dc.html
+            # terpaksa double-fetch. Sekarang disertakan langsung di sini juga.
+            "max_position_size_pct": b.config.get("max_position_size_pct", 10.0),
             "ws_feed_status":     feed_st,
             "recent_latencies": [
                 {
@@ -1500,6 +1504,36 @@ def create_app(bot_getter) -> FastAPI:
             "regime_performance": report,
             "lookback_days":     lookback_days,
             "timestamp":         _iso(_utcnow()),
+        }
+
+    @app.get("/api/analytics/attribution_by_profile")
+    async def get_attribution_by_profile(
+        lookback_days: int = 30,
+        _: str = Depends(verify_api_key),
+    ):
+        """[NEW] Breakdown attribution per strategy_profile -- sebelumnya
+        compute_all_profiles() sudah ada di engine tapi tidak pernah
+        di-expose lewat endpoint API manapun (hanya dipakai internal oleh
+        run_full_analysis()/refresh_snapshots() untuk caching, hasilnya
+        tidak pernah dikembalikan ke API caller)."""
+        b = bot()
+
+        if not hasattr(b, "analytics") or not b.analytics:
+            raise HTTPException(
+                status_code=503,
+                detail="Analytics engine belum diinisialisasi."
+            )
+
+        try:
+            reports = await b.analytics.compute_all_profiles(lookback_days=lookback_days)
+        except Exception as e:
+            log.error("compute_all_profiles error: %s", e, exc_info=True)
+            raise HTTPException(status_code=500, detail=f"Attribution by profile error: {e}")
+
+        return {
+            "profiles":      reports,
+            "lookback_days": lookback_days,
+            "timestamp":     _iso(_utcnow()),
         }
 
     @app.post("/api/analytics/refresh")
@@ -2230,22 +2264,18 @@ def create_app(bot_getter) -> FastAPI:
 
     @app.get("/api/executor/stats")
     async def get_executor_stats(_: str = Depends(verify_api_key)):
-        """[NEW v8] Fill rate, retry count, order queue dari execution engine."""
+        """[EXECUTOR-STATS] Fill rate, slippage, fee, latency, leverage dari
+        BaseOrderExecutionManager.get_stats() -- implementasi nyata, bukan
+        placeholder (lihat engine/execution_base.py). Tidak ada queue_size
+        (arsitektur ini tidak punya order queue -- signal diproses sinkron
+        langsung, bukan lewat antrian)."""
         b = bot()
         if not b.executor:
             raise HTTPException(status_code=503, detail="Executor belum aktif")
         try:
-            stats = getattr(b.executor, "get_stats", lambda: {})()
-            queue = getattr(b.executor, "_queue", None)
-            return {
-                "fill_rate":      stats.get("fill_rate",   None),
-                "retry_count":    stats.get("retry_count", 0),
-                "orders_placed":  stats.get("orders_placed", 0),
-                "orders_failed":  stats.get("orders_failed", 0),
-                "avg_fill_ms":    stats.get("avg_fill_ms", None),
-                "queue_size":     queue.qsize() if queue else None,
-                "timestamp":      _iso(_utcnow()),
-            }
+            stats = await b.executor.get_stats()
+            stats["timestamp"] = _iso(_utcnow())
+            return stats
         except Exception as e:
             raise HTTPException(status_code=500, detail=str(e))
 

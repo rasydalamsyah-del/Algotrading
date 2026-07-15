@@ -13,3 +13,4 @@ data/*.db
 venv/
 .venv/
 data/
+.bot_future_pid

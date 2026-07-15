@@ -13,14 +13,6 @@ cd "$SCRIPT_DIR" || { echo "ERR: gagal cd ke $SCRIPT_DIR"; exit 1; }
 echo "🔮 Starting AlgoTrader Pro Futures..."
 echo "⚠️  Pastikan kamu paham: future/ belum sematang spot/ -- lihat audit-notes.md"
 
-if [ ! -f "$SCRIPT_DIR/venv/bin/activate" ]; then
-    echo "❌ venv tidak ditemukan di $SCRIPT_DIR/venv"
-    echo "   Jalankan ulang: bash install_termux.sh"
-    exit 1
-fi
-source "$SCRIPT_DIR/venv/bin/activate"
-echo "✔ venv aktif: $VIRTUAL_ENV"
-
 if grep -q "ISI_API_KEY_KAMU_DISINI" "$SCRIPT_DIR/.env" 2>/dev/null; then
     echo ""
     echo "⚠️  Peringatan: API_KEY belum diisi di .env!"
@@ -42,7 +34,7 @@ fi
 
 mkdir -p "$SCRIPT_DIR/logs"
 
-nohup python "$SCRIPT_DIR/future/main_future.py" >> "$SCRIPT_DIR/logs/trading_bot_futures.log" 2>&1 &
+nohup python3 -m future.main_future >> "$SCRIPT_DIR/logs/trading_bot_futures.log" 2>&1 &
 BOT_FUT_PID=$!
 echo $BOT_FUT_PID > "$SCRIPT_DIR/.bot_future_pid"
 

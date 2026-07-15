@@ -83,10 +83,64 @@ DYNAMIC_THRESHOLD_MATRIX: Dict[str, Dict[str, float]] = {
     },
 }
 
-def get_dynamic_threshold(profile_name: str, regime_value: str) -> float:
-    """Ambil threshold dinamis berdasarkan kombinasi profil dan regime."""
-    matrix = DYNAMIC_THRESHOLD_MATRIX.get(profile_name, {})
-    return matrix.get(regime_value, ENTRY_THRESHOLDS.get(profile_name, 65.0))
+# [BIAS-FIX -- short threshold] Mirror DYNAMIC_THRESHOLD_MATRIX di atas --
+# trending_bull/trending_bear DITUKAR (999.0 pindah ke trending_bull, angka
+# sebelumnya di trending_bull pindah ke trending_bear), ranging/volatile_
+# expansion/undefined TIDAK DIUBAH (regime netral-arah, tidak ada alasan
+# direksional beda ketat antara long/short). Matrix long di atas TIDAK
+# disentuh sama sekali -- ini dict baru terpisah, tidak modifikasi existing.
+DYNAMIC_THRESHOLD_MATRIX_SHORT: Dict[str, Dict[str, float]] = {
+    "hodl_accumulate": {
+        "trending_bull":     999.0,
+        "trending_bear":      52.0,
+        "ranging":            68.0,
+        "volatile_expansion": 72.0,
+        "undefined":          65.0,
+    },
+    "trend_follow": {
+        "trending_bull":     999.0,
+        "trending_bear":      58.0,
+        "ranging":            75.0,
+        "volatile_expansion": 68.0,
+        "undefined":          65.0,
+    },
+    "breakout_swift": {
+        "trending_bull":     999.0,
+        "trending_bear":      55.0,
+        "ranging":            70.0,
+        "volatile_expansion": 52.0,
+        "undefined":          62.0,
+    },
+    "scalp_volatile": {
+        "trending_bull":     999.0,
+        "trending_bear":      63.0,
+        "ranging":            65.0,
+        "volatile_expansion": 52.0,
+        "undefined":          61.0,
+    },
+    "mean_revert": {
+        "trending_bull":     999.0,
+        "trending_bear":      70.0,
+        "ranging":            50.0,
+        "volatile_expansion": 68.0,
+        "undefined":          59.0,
+    },
+    "extreme_momentum": {
+        "trending_bull":     999.0,
+        "trending_bear":      55.0,
+        "ranging":            80.0,
+        "volatile_expansion": 48.0,
+        "undefined":          68.0,
+    },
+}
+
+def get_dynamic_threshold(profile_name: str, regime_value: str, side: str = "long") -> float:
+    """Ambil threshold dinamis berdasarkan kombinasi profil, regime, dan side.
+    [BIAS-FIX] side="long" default -- caller lama yang tidak eksplisit
+    mengirim side tetap dapat perilaku identik persis (pakai
+    DYNAMIC_THRESHOLD_MATRIX seperti sebelumnya)."""
+    matrix = DYNAMIC_THRESHOLD_MATRIX_SHORT if side == "short" else DYNAMIC_THRESHOLD_MATRIX
+    return matrix.get(profile_name, {}).get(regime_value, ENTRY_THRESHOLDS.get(profile_name, 65.0))
 
 # Transition Action Matrix: profile × entry_regime × current_regime
 # Aksi: HOLD | HOLD_TIGHTEN_SL | HOLD_RELAX_SL | EXIT | NO_POSITION
@@ -443,6 +497,40 @@ ALLOWED_REGIMES: Dict[str, List[str]] = {
     ],
 }
 
+# [BIAS-FIX -- short regime whitelist] Mirror ALLOWED_REGIMES di atas --
+# trending_bull/trending_bear ditukar, ranging/volatile_expansion tetap
+# sama persis dengan versi long per profil (regime netral-arah). Sebelumnya
+# TIDAK ADA padanan ini -- is_tradeable_regime()'s allowed_regimes check
+# selalu pakai ALLOWED_REGIMES (long) apapun side-nya, jadi trending_bear
+# (ideal utk short) selalu tertolak di gate whitelist ini duluan, bahkan
+# sebelum sempat dicek allows_long/allows_short.
+ALLOWED_REGIMES_SHORT: Dict[str, List[str]] = {
+    "hodl_accumulate": [
+        "trending_bear",
+    ],
+    "trend_follow": [
+        "trending_bear",
+    ],
+    "breakout_swift": [
+        "trending_bear",
+        "ranging",
+        "volatile_expansion",
+    ],
+    "scalp_volatile": [
+        "trending_bear",
+        "ranging",
+        "volatile_expansion",
+    ],
+    "mean_revert": [
+        "trending_bear",
+        "ranging",
+    ],
+    "extreme_momentum": [
+        "trending_bear",
+        "volatile_expansion",
+    ],
+}
+
 PARAMETER_BOUNDS_OVERRIDE: Dict[str, Dict[str, Tuple[float, float]]] = {
     "hodl_accumulate": {
         "entry_threshold":  (50.0, 80.0),
@@ -524,6 +612,9 @@ class ProfileThreshold:
     max_consecutive_losses:     int
     consecutive_loss_size_mult: float
     allowed_regimes: List[str]
+    # [BIAS-FIX -- short regime whitelist] Padanan allowed_regimes utk short,
+    # dari ALLOWED_REGIMES_SHORT. Dibaca commander.py::decide() saat side="short".
+    allowed_regimes_short: List[str]
     param_bounds: ParameterBounds
     primary_trigger_type: PrimaryTriggerType
     meta_learner_allowed: bool
@@ -734,6 +825,7 @@ def _assemble_profile_threshold(profile_name: str) -> ProfileThreshold:
         max_consecutive_losses     = risk["max_consecutive_losses"],
         consecutive_loss_size_mult = risk["consecutive_loss_size_mult"],
         allowed_regimes       = ALLOWED_REGIMES[profile_name],
+        allowed_regimes_short = ALLOWED_REGIMES_SHORT[profile_name],
         param_bounds          = bounds,
         primary_trigger_type  = _PRIMARY_TRIGGER_MAP[profile_name],
         meta_learner_allowed  = perms["allowed"],

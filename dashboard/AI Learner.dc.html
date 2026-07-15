@@ -145,17 +145,42 @@
         </div>
       </div>
 
-      <!-- ATTRIBUTION + REGIME PERFORMANCE -->
+      <!-- PERFORMANCE SUMMARY (global, dari AttributionReport /analytics/attribution) -->
+      <div style="background:#111722;border:1px solid #1e2d45;border-radius:10px;padding:14px;margin-bottom:14px">
+        <div style="font-size:11px;font-weight:600;color:#8a9bba;text-transform:uppercase;letter-spacing:.5px;margin-bottom:10px">📊 Performance Summary (Global)</div>
+        <sc-if value="{{ summary.hasSummary }}" hint-placeholder-val="{{ false }}">
+          <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(110px,1fr));gap:10px;margin-bottom:8px">
+            <div><div style="font-size:9.5px;color:#4a5878;text-transform:uppercase;margin-bottom:2px">Total Trades</div><div style="font-family:'JetBrains Mono',monospace;font-weight:700;font-size:14px">{{ summary.totalTrades }}</div></div>
+            <div><div style="font-size:9.5px;color:#4a5878;text-transform:uppercase;margin-bottom:2px">Win Rate</div><div style="font-family:'JetBrains Mono',monospace;font-weight:700;font-size:14px;color:{{ summary.winColor }}">{{ summary.winRate }}</div></div>
+            <div><div style="font-size:9.5px;color:#4a5878;text-transform:uppercase;margin-bottom:2px">Profit Factor</div><div style="font-family:'JetBrains Mono',monospace;font-weight:700;font-size:14px">{{ summary.profitFactor }}</div></div>
+            <div><div style="font-size:9.5px;color:#4a5878;text-transform:uppercase;margin-bottom:2px">Avg Score</div><div style="font-family:'JetBrains Mono',monospace;font-weight:700;font-size:14px">{{ summary.avgScore }}</div></div>
+            <div><div style="font-size:9.5px;color:#4a5878;text-transform:uppercase;margin-bottom:2px">Trend</div><div style="font-family:'JetBrains Mono',monospace;font-weight:700;font-size:14px">{{ summary.trend }}</div></div>
+            <div><div style="font-size:9.5px;color:#4a5878;text-transform:uppercase;margin-bottom:2px">Best Regime</div><div style="font-family:'JetBrains Mono',monospace;font-weight:700;font-size:13px;text-transform:capitalize">{{ summary.bestRegime }}</div></div>
+            <div><div style="font-size:9.5px;color:#4a5878;text-transform:uppercase;margin-bottom:2px">Worst Regime</div><div style="font-family:'JetBrains Mono',monospace;font-weight:700;font-size:13px;text-transform:capitalize">{{ summary.worstRegime }}</div></div>
+          </div>
+          <sc-for list="{{ summary.warnings }}" as="w" hint-placeholder-count="0">
+            <div style="font-size:11px;color:#f0b429;margin-top:4px">⚠ {{ w }}</div>
+          </sc-for>
+          <sc-for list="{{ summary.insights }}" as="ins" hint-placeholder-count="0">
+            <div style="font-size:11px;color:#8a9bba;margin-top:4px">💡 {{ ins }}</div>
+          </sc-for>
+        </sc-if>
+        <sc-if value="{{ !summary.hasSummary }}" hint-placeholder-val="{{ true }}">
+          <div style="text-align:center;padding:12px;color:#4a5878;font-size:12px">Data attribution belum tersedia</div>
+        </sc-if>
+      </div>
+
+      <!-- ATTRIBUTION PER PROFIL + REGIME PERFORMANCE -->
       <div style="display:grid;grid-template-columns:{{ twoCol }};gap:10px;margin-bottom:14px">
         <div style="background:#111722;border:1px solid #1e2d45;border-radius:10px;overflow:hidden">
-          <div style="padding:12px 14px;border-bottom:1px solid #1e2d45;font-size:11px;font-weight:600;color:#8a9bba;text-transform:uppercase;letter-spacing:.5px">📊 Atribusi PnL per Profil</div>
+          <div style="padding:12px 14px;border-bottom:1px solid #1e2d45;font-size:11px;font-weight:600;color:#8a9bba;text-transform:uppercase;letter-spacing:.5px">📊 Atribusi per Profil</div>
           <div style="overflow-x:auto">
             <table style="width:100%;border-collapse:collapse;font-size:11px;min-width:380px">
               <thead><tr>
                 <th style="padding:8px 10px;text-align:left;font-size:9.5px;font-weight:600;color:#4a5878;text-transform:uppercase;border-bottom:1px solid #1e2d45;background:#0b0e11;white-space:nowrap">Profil</th>
                 <th style="padding:8px 10px;text-align:right;font-size:9.5px;font-weight:600;color:#4a5878;text-transform:uppercase;border-bottom:1px solid #1e2d45;background:#0b0e11;white-space:nowrap">Trades</th>
                 <th style="padding:8px 10px;text-align:right;font-size:9.5px;font-weight:600;color:#4a5878;text-transform:uppercase;border-bottom:1px solid #1e2d45;background:#0b0e11;white-space:nowrap">Win%</th>
-                <th style="padding:8px 10px;text-align:right;font-size:9.5px;font-weight:600;color:#4a5878;text-transform:uppercase;border-bottom:1px solid #1e2d45;background:#0b0e11;white-space:nowrap">PnL</th>
+                <th style="padding:8px 10px;text-align:right;font-size:9.5px;font-weight:600;color:#4a5878;text-transform:uppercase;border-bottom:1px solid #1e2d45;background:#0b0e11;white-space:nowrap">Profit Factor</th>
               </tr></thead>
               <tbody>
                 <sc-for list="{{ attributionRows }}" as="a" hint-placeholder-count="4">
@@ -163,11 +188,14 @@
                     <td style="padding:8px 10px;border-bottom:1px solid rgba(30,45,69,0.5);font-weight:600;white-space:nowrap">{{ a.profile }}</td>
                     <td style="padding:8px 10px;text-align:right;border-bottom:1px solid rgba(30,45,69,0.5);font-family:'JetBrains Mono',monospace;color:#8a9bba">{{ a.trades }}</td>
                     <td style="padding:8px 10px;text-align:right;border-bottom:1px solid rgba(30,45,69,0.5);font-family:'JetBrains Mono',monospace;color:{{ a.winColor }}">{{ a.winPct }}</td>
-                    <td style="padding:8px 10px;text-align:right;border-bottom:1px solid rgba(30,45,69,0.5);font-family:'JetBrains Mono',monospace;font-weight:600;color:{{ a.pnlColor }}">{{ a.pnl }}</td>
+                    <td style="padding:8px 10px;text-align:right;border-bottom:1px solid rgba(30,45,69,0.5);font-family:'JetBrains Mono',monospace;font-weight:600;color:{{ a.pfColor }}">{{ a.pf }}</td>
                   </tr>
                 </sc-for>
               </tbody>
             </table>
+            <sc-if value="{{ noAttributionRows }}" hint-placeholder-val="{{ true }}">
+              <div style="text-align:center;padding:16px;color:#4a5878;font-size:12px">Belum ada data trade per-profil</div>
+            </sc-if>
           </div>
         </div>
         <div style="background:#111722;border:1px solid #1e2d45;border-radius:10px;overflow:hidden">
@@ -178,7 +206,7 @@
                 <th style="padding:8px 10px;text-align:left;font-size:9.5px;font-weight:600;color:#4a5878;text-transform:uppercase;border-bottom:1px solid #1e2d45;background:#0b0e11;white-space:nowrap">Regime</th>
                 <th style="padding:8px 10px;text-align:right;font-size:9.5px;font-weight:600;color:#4a5878;text-transform:uppercase;border-bottom:1px solid #1e2d45;background:#0b0e11;white-space:nowrap">Trades</th>
                 <th style="padding:8px 10px;text-align:right;font-size:9.5px;font-weight:600;color:#4a5878;text-transform:uppercase;border-bottom:1px solid #1e2d45;background:#0b0e11;white-space:nowrap">Win%</th>
-                <th style="padding:8px 10px;text-align:right;font-size:9.5px;font-weight:600;color:#4a5878;text-transform:uppercase;border-bottom:1px solid #1e2d45;background:#0b0e11;white-space:nowrap">Avg PnL</th>
+                <th style="padding:8px 10px;text-align:right;font-size:9.5px;font-weight:600;color:#4a5878;text-transform:uppercase;border-bottom:1px solid #1e2d45;background:#0b0e11;white-space:nowrap">Net PnL% (Σ)</th>
               </tr></thead>
               <tbody>
                 <sc-for list="{{ regimeRows }}" as="r" hint-placeholder-count="3">
@@ -186,11 +214,14 @@
                     <td style="padding:8px 10px;border-bottom:1px solid rgba(30,45,69,0.5);font-weight:600;white-space:nowrap">{{ r.regime }}</td>
                     <td style="padding:8px 10px;text-align:right;border-bottom:1px solid rgba(30,45,69,0.5);font-family:'JetBrains Mono',monospace;color:#8a9bba">{{ r.trades }}</td>
                     <td style="padding:8px 10px;text-align:right;border-bottom:1px solid rgba(30,45,69,0.5);font-family:'JetBrains Mono',monospace;color:{{ r.winColor }}">{{ r.winPct }}</td>
-                    <td style="padding:8px 10px;text-align:right;border-bottom:1px solid rgba(30,45,69,0.5);font-family:'JetBrains Mono',monospace;font-weight:600;color:{{ r.pnlColor }}">{{ r.avgPnl }}</td>
+                    <td style="padding:8px 10px;text-align:right;border-bottom:1px solid rgba(30,45,69,0.5);font-family:'JetBrains Mono',monospace;font-weight:600;color:{{ r.pnlColor }}">{{ r.netPnl }}</td>
                   </tr>
                 </sc-for>
               </tbody>
             </table>
+            <sc-if value="{{ noRegimeRows }}" hint-placeholder-val="{{ true }}">
+              <div style="text-align:center;padding:16px;color:#4a5878;font-size:12px">Belum ada data cukup per-regime</div>
+            </sc-if>
           </div>
         </div>
       </div>
@@ -202,21 +233,26 @@
           <table style="width:100%;border-collapse:collapse;font-size:11px;min-width:500px">
             <thead><tr>
               <th style="padding:8px 10px;text-align:left;font-size:9.5px;font-weight:600;color:#4a5878;text-transform:uppercase;border-bottom:1px solid #1e2d45;background:#0b0e11;white-space:nowrap">Indikator</th>
-              <th style="padding:8px 10px;text-align:right;font-size:9.5px;font-weight:600;color:#4a5878;text-transform:uppercase;border-bottom:1px solid #1e2d45;background:#0b0e11;white-space:nowrap">Sinyal</th>
-              <th style="padding:8px 10px;text-align:right;font-size:9.5px;font-weight:600;color:#4a5878;text-transform:uppercase;border-bottom:1px solid #1e2d45;background:#0b0e11;white-space:nowrap">Akurasi%</th>
-              <th style="padding:8px 10px;text-align:right;font-size:9.5px;font-weight:600;color:#4a5878;text-transform:uppercase;border-bottom:1px solid #1e2d45;background:#0b0e11;white-space:nowrap">Avg PnL aktif</th>
+              <th style="padding:8px 10px;text-align:right;font-size:9.5px;font-weight:600;color:#4a5878;text-transform:uppercase;border-bottom:1px solid #1e2d45;background:#0b0e11;white-space:nowrap">Sampel</th>
+              <th style="padding:8px 10px;text-align:right;font-size:9.5px;font-weight:600;color:#4a5878;text-transform:uppercase;border-bottom:1px solid #1e2d45;background:#0b0e11;white-space:nowrap">Score Diff</th>
+              <th style="padding:8px 10px;text-align:right;font-size:9.5px;font-weight:600;color:#4a5878;text-transform:uppercase;border-bottom:1px solid #1e2d45;background:#0b0e11;white-space:nowrap">Correlation</th>
+              <th style="padding:8px 10px;text-align:right;font-size:9.5px;font-weight:600;color:#4a5878;text-transform:uppercase;border-bottom:1px solid #1e2d45;background:#0b0e11;white-space:nowrap">Signifikan</th>
             </tr></thead>
             <tbody>
               <sc-for list="{{ indicatorRows }}" as="i" hint-placeholder-count="5">
                 <tr>
-                  <td style="padding:8px 10px;border-bottom:1px solid rgba(30,45,69,0.5);font-weight:600;white-space:nowrap">{{ i.name }}</td>
-                  <td style="padding:8px 10px;text-align:right;border-bottom:1px solid rgba(30,45,69,0.5);font-family:'JetBrains Mono',monospace;color:#8a9bba">{{ i.signals }}</td>
-                  <td style="padding:8px 10px;text-align:right;border-bottom:1px solid rgba(30,45,69,0.5);font-family:'JetBrains Mono',monospace;color:{{ i.accColor }}">{{ i.accuracy }}</td>
-                  <td style="padding:8px 10px;text-align:right;border-bottom:1px solid rgba(30,45,69,0.5);font-family:'JetBrains Mono',monospace;font-weight:600;color:{{ i.pnlColor }}">{{ i.avgPnl }}</td>
+                  <td style="padding:8px 10px;border-bottom:1px solid rgba(30,45,69,0.5);font-weight:600;white-space:nowrap;text-transform:capitalize">{{ i.name }}</td>
+                  <td style="padding:8px 10px;text-align:right;border-bottom:1px solid rgba(30,45,69,0.5);font-family:'JetBrains Mono',monospace;color:#8a9bba">{{ i.sampleSize }}</td>
+                  <td style="padding:8px 10px;text-align:right;border-bottom:1px solid rgba(30,45,69,0.5);font-family:'JetBrains Mono',monospace;font-weight:600;color:{{ i.scoreDiffColor }}">{{ i.scoreDiff }}</td>
+                  <td style="padding:8px 10px;text-align:right;border-bottom:1px solid rgba(30,45,69,0.5);font-family:'JetBrains Mono',monospace;color:#8a9bba">{{ i.correlation }}</td>
+                  <td style="padding:8px 10px;text-align:right;border-bottom:1px solid rgba(30,45,69,0.5);font-family:'JetBrains Mono',monospace;color:{{ i.sigColor }}">{{ i.sigLabel }}</td>
                 </tr>
               </sc-for>
             </tbody>
           </table>
+          <sc-if value="{{ noIndicatorRows }}" hint-placeholder-val="{{ true }}">
+            <div style="text-align:center;padding:16px;color:#4a5878;font-size:12px">Belum ada data indikator yang cukup</div>
+          </sc-if>
         </div>
       </div>
 
@@ -224,6 +260,9 @@
       <div style="display:grid;grid-template-columns:{{ twoCol }};gap:10px">
         <div style="background:#111722;border:1px solid #1e2d45;border-radius:10px;padding:14px">
           <div style="font-size:11px;font-weight:600;color:#8a9bba;text-transform:uppercase;letter-spacing:.5px;margin-bottom:10px">⚙️ Executor Stats</div>
+          <sc-if value="{{ executorNoData }}" hint-placeholder-val="{{ false }}">
+            <div style="font-size:10.5px;color:#f0b429;background:rgba(240,180,41,0.08);border:1px solid rgba(240,180,41,0.3);border-radius:6px;padding:6px 8px;margin-bottom:8px">⚠ Belum ada order sejak bot terakhir start -- statistik executor reset tiap restart</div>
+          </sc-if>
           <sc-for list="{{ executorRows }}" as="e" hint-placeholder-count="4">
             <div style="display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px solid #1e2d45;font-size:11px">
               <span style="color:#4a5878">{{ e.label }}</span>
@@ -255,36 +294,51 @@
 
 function fmtUSD(v, d = 2) { if (v == null) return '—'; return '$' + Number(v).toLocaleString('en-US', { minimumFractionDigits: d, maximumFractionDigits: d }); }
 function signUSD(v) { if (v == null) return '—'; return (v >= 0 ? '+' : '') + fmtUSD(v); }
+function signPct(v) { if (v == null) return '—'; return (v >= 0 ? '+' : '') + Number(v).toFixed(2) + '%'; }
 
 function demoData() {
   return {
     suggestions: [
-      { param: 'REGIME_HYSTERESIS_BARS', old_value: 3, new_value: 4, reason: 'Terlalu banyak whipsaw di scalp_volatile pada regime volatile_expansion' },
-      { param: 'ATR_MULT_SL', old_value: 2.0, new_value: 2.2, reason: 'SL kena terlalu cepat pada 12 trade terakhir profile breakout_swift' },
+      { parameter_name: 'REGIME_HYSTERESIS_BARS', old_value: 3, new_value: 4, reason: 'Terlalu banyak whipsaw di scalp_volatile pada regime volatile_expansion' },
+      { parameter_name: 'ATR_MULT_SL', old_value: 2.0, new_value: 2.2, reason: 'SL kena terlalu cepat pada 12 trade terakhir profile breakout_swift' },
     ],
     history: [
-      { timestamp: Date.now() - 3600e3 * 5, parameter: 'RISK_PER_TRADE_PCT', old_value: '1.0', new_value: '0.8', reason: 'Drawdown mendekati limit', status: 'applied' },
-      { timestamp: Date.now() - 3600e3 * 30, parameter: 'MAX_OPEN_POSITIONS', old_value: '2', new_value: '3', reason: 'Equity naik, kapasitas risk lebih besar', status: 'applied' },
+      { timestamp: Date.now() - 3600e3 * 5, parameter_name: 'RISK_PER_TRADE_PCT', old_value: '1.0', new_value: '0.8', reason: 'Drawdown mendekati limit', outcome: 'improved' },
+      { timestamp: Date.now() - 3600e3 * 30, parameter_name: 'MAX_OPEN_POSITIONS', old_value: '2', new_value: '3', reason: 'Equity naik, kapasitas risk lebih besar', outcome: 'neutral' },
     ],
-    attribution: [
-      { profile: 'scalp_volatile', trades: 42, win_pct: 61.9, pnl: 312.4 },
-      { profile: 'breakout_swift', trades: 18, win_pct: 55.6, pnl: 148.2 },
-      { profile: 'mean_revert', trades: 36, win_pct: 52.8, pnl: -22.6 },
-    ],
-    regime_performance: [
-      { regime: 'trending', trades: 30, win_pct: 63.3, avg_pnl: 8.4 },
-      { regime: 'volatile_expansion', trades: 44, win_pct: 56.8, avg_pnl: 4.1 },
-      { regime: 'ranging', trades: 22, win_pct: 45.5, avg_pnl: -1.8 },
-    ],
-    indicator_effectiveness: [
-      { name: 'RSI', signals: 96, accuracy_pct: 58.3, avg_pnl: 3.2 },
-      { name: 'ADX', signals: 88, accuracy_pct: 61.4, avg_pnl: 4.8 },
-      { name: 'Volume Ratio', signals: 74, accuracy_pct: 55.4, avg_pnl: 2.1 },
-      { name: 'EMA Stack', signals: 102, accuracy_pct: 63.7, avg_pnl: 5.6 },
-    ],
-    executor: { orders_submitted: 96, orders_filled: 91, fill_rate_pct: 94.8, avg_slippage_pct: 0.04 },
+    // Bentuk AttributionReport asli dari /analytics/attribution (scope global)
+    attribution: {
+      total_trades: 96, sufficient_data: true, overall_win_rate: 58.3, overall_profit_factor: 1.62,
+      overall_avg_score: 64.2, win_rate_trend: 'improving', last_10_win_rate: 63.0, last_30_win_rate: 58.3,
+      best_regime: 'trending_bull', worst_regime: 'ranging', insights: ['Win rate membaik 5% dalam 10 trade terakhir'], warnings: [],
+      regime_performance: [
+        { regime: 'trending_bull', total_trades: 30, win_count: 19, loss_count: 11, gross_profit: 210.4, gross_loss: -84.2, is_significant: true },
+        { regime: 'volatile_expansion', total_trades: 44, win_count: 25, loss_count: 19, gross_profit: 168.9, gross_loss: -140.3, is_significant: true },
+        { regime: 'ranging', total_trades: 22, win_count: 10, loss_count: 12, gross_profit: 44.1, gross_loss: -84.5, is_significant: false },
+      ],
+    },
+    // Bentuk asli dari /analytics/attribution_by_profile: {profiles: {nama: AttributionReport}}
+    attribution_by_profile: {
+      scalp_volatile: { total_trades: 42, overall_win_rate: 61.9, overall_profit_factor: 1.71 },
+      breakout_swift: { total_trades: 18, overall_win_rate: 55.6, overall_profit_factor: 1.34 },
+      mean_revert:    { total_trades: 36, overall_win_rate: 52.8, overall_profit_factor: 0.91 },
+    },
+    // Bentuk asli dari /analytics/indicator_effectiveness: dict keyed by indicator_name
+    indicator_effectiveness: {
+      RSI:          { avg_score_in_wins: 68.4, avg_score_in_losses: 52.1, score_differential: 16.3, correlation: 0.31, sample_size: 96, is_significant: true },
+      ADX:          { avg_score_in_wins: 71.2, avg_score_in_losses: 55.8, score_differential: 15.4, correlation: 0.28, sample_size: 88, is_significant: true },
+      VOLUME_RATIO: { avg_score_in_wins: 60.5, avg_score_in_losses: 58.9, score_differential: 1.6, correlation: 0.05, sample_size: 74, is_significant: false },
+    },
+    // Bentuk asli dari /executor/stats (lihat engine/execution_base.py::get_stats()):
+    executor: {
+      total_orders: 96, filled_orders: 91, failed_orders: 5, fill_rate: 0.948,
+      fail_reasons: { slippage_guard: 3, min_amount: 2 },
+      avg_slippage_pct: 0.14, avg_fill_time_ms: 320, avg_fee_pct: 0.09,
+      avg_leverage_used: null,
+      iceberg_partial_fill_count: 1, limit_fallback_to_market_count: 4,
+    },
     shadow_trades: [
-      { symbol: 'DEXE/USDT', pnl: 6.2 }, { symbol: 'MMT/USDT', pnl: -1.4 },
+      { symbol: 'DEXE/USDT', unrealized_pnl_pct: 6.2 }, { symbol: 'MMT/USDT', unrealized_pnl_pct: -1.4 },
     ],
   };
 }
@@ -323,18 +377,25 @@ class Component extends DCLogic {
   }
 
   async fetchData() {
-    const [sugg, hist, attr, regPerf, indEff, exStats, shadow] = await Promise.all([
+    const [sugg, hist, attr, attrProf, indEff, exStats, shadow] = await Promise.all([
       this.apiGet('/meta_learner/suggestions'), this.apiGet('/meta_learner/history'),
-      this.apiGet('/analytics/attribution'), this.apiGet('/analytics/regime_performance'),
+      this.apiGet('/analytics/attribution'), this.apiGet('/analytics/attribution_by_profile'),
       this.apiGet('/analytics/indicator_effectiveness'), this.apiGet('/executor/stats'), this.apiGet('/shadow_trades'),
     ]);
     if (sugg || hist || attr) {
       this.setState({
         data: {
           suggestions: (sugg && sugg.suggestions) || [], history: (hist && hist.history) || [],
-          attribution: (attr && attr.attribution) || [], regime_performance: (regPerf && regPerf.regime_performance) || [],
-          indicator_effectiveness: (indEff && indEff.indicators) || [], executor: (exStats && exStats) || {},
-          shadow_trades: (shadow && shadow.trades) || [],
+          // /analytics/attribution mengembalikan SATU objek AttributionReport (scope global),
+          // bukan array per-profil -- tabel "per Regime" diambil dari report.regime_performance
+          // yang tertanam di dalamnya (bukan endpoint /analytics/regime_performance terpisah,
+          // karena saat ini keduanya selalu mengembalikan report global yang identik).
+          attribution: (attr && attr.attribution) || null,
+          // /analytics/attribution_by_profile: {profiles: {nama_profile: AttributionReport}}
+          attribution_by_profile: (attrProf && attrProf.profiles) || {},
+          indicator_effectiveness: (indEff && indEff.indicator_effectiveness) || {},
+          executor: (exStats && exStats) || {},
+          shadow_trades: (shadow && shadow.shadow_trades) || [],
         }, usingDemo: false, apiOnline: true,
       });
     } else {
@@ -357,37 +418,105 @@ class Component extends DCLogic {
     ];
 
     const d = this.state.data || demoData();
-    const suggestions = (d.suggestions || []).map(s => ({ param: s.param || s.parameter, oldVal: s.old_value, newVal: s.new_value, reason: s.reason }));
-    const historyRows = (d.history || []).map(h => ({
-      time: new Date(h.timestamp).toLocaleString('id-ID', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' }),
-      param: h.parameter, change: h.old_value + ' → ' + h.new_value,
-      status: (h.status || 'applied').toUpperCase(),
-      statusBg: h.status === 'applied' ? 'rgba(0,214,143,0.08)' : 'rgba(240,180,41,0.08)',
-      statusColor: h.status === 'applied' ? '#00d68f' : '#f0b429',
+    const suggestions = (d.suggestions || []).map(s => ({ param: s.parameter_name, oldVal: s.old_value, newVal: s.new_value, reason: s.reason }));
+    const OUTCOME_STYLE = {
+      improved: { bg: 'rgba(0,214,143,0.08)', color: '#00d68f' },
+      degraded: { bg: 'rgba(240,69,90,0.08)', color: '#f0455a' },
+      neutral:  { bg: 'rgba(240,180,41,0.08)', color: '#f0b429' },
+      pending:  { bg: 'rgba(138,155,186,0.08)', color: '#8a9bba' },
+    };
+    const historyRows = (d.history || []).map(h => {
+      const outcome = h.outcome || 'pending';
+      const st = OUTCOME_STYLE[outcome] || OUTCOME_STYLE.pending;
+      return {
+        time: new Date(h.timestamp).toLocaleString('id-ID', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' }),
+        param: h.parameter_name, change: h.old_value + ' → ' + h.new_value,
+        status: outcome.toUpperCase(),
+        statusBg: st.bg, statusColor: st.color,
+      };
+    });
+    // Ringkasan global -- dari AttributionReport tunggal (/analytics/attribution, scope global).
+    // Report ini TIDAK punya breakdown per-profil dan tidak ada nilai PnL dolar sama sekali,
+    // hanya win_rate/profit_factor/avg_score.
+    const attr = d.attribution;
+    const summary = attr ? {
+      hasSummary: true,
+      totalTrades: attr.total_trades ?? 0,
+      winRate: (attr.overall_win_rate || 0).toFixed(1) + '%',
+      winColor: (attr.overall_win_rate || 0) >= 50 ? '#00d68f' : '#f0455a',
+      profitFactor: (attr.overall_profit_factor || 0).toFixed(2),
+      avgScore: (attr.overall_avg_score || 0).toFixed(1),
+      trend: (attr.win_rate_trend || 'stable').toUpperCase(),
+      bestRegime: attr.best_regime ? String(attr.best_regime).replace(/_/g, ' ') : '—',
+      worstRegime: attr.worst_regime ? String(attr.worst_regime).replace(/_/g, ' ') : '—',
+      insights: attr.insights || [],
+      warnings: attr.warnings || [],
+      sufficientData: !!attr.sufficient_data,
+    } : { hasSummary: false, insights: [], warnings: [] };
+
+    // Atribusi per-profil -- dari /analytics/attribution_by_profile (endpoint baru, panggil
+    // compute_all_profiles() di engine). Tidak ada field PnL dolar di sini juga, jadi kolom
+    // terakhir pakai Profit Factor, bukan "PnL".
+    const attrProfile = d.attribution_by_profile || {};
+    const attributionRows = Object.entries(attrProfile)
+      .filter(([name]) => name !== 'global')
+      .map(([name, a]) => ({
+        profile: name.replace(/_/g, ' '), trades: a.total_trades ?? 0,
+        winPct: (a.overall_win_rate || 0).toFixed(1) + '%', winColor: (a.overall_win_rate || 0) >= 50 ? '#00d68f' : '#f0455a',
+        pf: (a.overall_profit_factor || 0).toFixed(2), pfColor: (a.overall_profit_factor || 0) >= 1 ? '#00d68f' : '#f0455a',
+      }));
+
+    // Performa per regime -- diambil dari report.regime_performance yang tertanam di dalam
+    // AttributionReport global (bukan endpoint /analytics/regime_performance terpisah, karena
+    // saat ini keduanya selalu mengembalikan report global yang identik).
+    // win_rate & profit_factor di RegimePerformance backend adalah @property, TIDAK ikut
+    // terserialisasi ke JSON -- dihitung ulang di sini dari win_count/total_trades.
+    // gross_profit/gross_loss adalah SUM dari realized_pnl_pct (persentase), bukan dolar.
+    const regimeRows = ((attr && attr.regime_performance) || []).map(r => {
+      const winPct = r.total_trades ? (r.win_count / r.total_trades * 100) : 0;
+      const netPct = (r.gross_profit || 0) + (r.gross_loss || 0);
+      return {
+        regime: (r.regime || '').replace(/_/g, ' '), trades: r.total_trades ?? 0,
+        winPct: winPct.toFixed(1) + '%', winColor: winPct >= 50 ? '#00d68f' : '#f0455a',
+        netPnl: signPct(netPct), pnlColor: netPct >= 0 ? '#00d68f' : '#f0455a',
+        sigLabel: r.is_significant ? 'signifikan' : 'sampel kecil',
+      };
+    });
+
+    // Efektivitas indikator -- dict keyed by indicator_name, field aslinya beda total dari
+    // yang diasumsikan sebelumnya (accuracy_pct/avg_pnl tidak pernah ada). score_differential
+    // = avg_score_in_wins - avg_score_in_losses: makin besar = makin prediktif.
+    const indEffDict = d.indicator_effectiveness || {};
+    const indicatorRows = Object.entries(indEffDict).map(([name, i]) => ({
+      name: (i.indicator_name || name).replace(/_/g, ' '),
+      sampleSize: i.sample_size ?? 0,
+      scoreDiff: (i.score_differential || 0).toFixed(1),
+      scoreDiffColor: (i.score_differential || 0) >= 10 ? '#00d68f' : (i.score_differential || 0) >= 0 ? '#f0b429' : '#f0455a',
+      correlation: (i.correlation || 0).toFixed(2),
+      sigLabel: i.is_significant ? 'Ya' : 'Tidak', sigColor: i.is_significant ? '#00d68f' : '#4a5878',
     }));
-    const attributionRows = (d.attribution || []).map(a => ({
-      profile: (a.profile || '').replace(/_/g, ' '), trades: a.trades,
-      winPct: (a.win_pct || 0).toFixed(1) + '%', winColor: (a.win_pct || 0) >= 50 ? '#00d68f' : '#f0455a',
-      pnl: signUSD(a.pnl), pnlColor: (a.pnl || 0) >= 0 ? '#00d68f' : '#f0455a',
-    }));
-    const regimeRows = (d.regime_performance || []).map(r => ({
-      regime: (r.regime || '').replace(/_/g, ' '), trades: r.trades,
-      winPct: (r.win_pct || 0).toFixed(1) + '%', winColor: (r.win_pct || 0) >= 50 ? '#00d68f' : '#f0455a',
-      avgPnl: signUSD(r.avg_pnl), pnlColor: (r.avg_pnl || 0) >= 0 ? '#00d68f' : '#f0455a',
-    }));
-    const indicatorRows = (d.indicator_effectiveness || []).map(i => ({
-      name: i.name, signals: i.signals,
-      accuracy: (i.accuracy_pct || 0).toFixed(1) + '%', accColor: (i.accuracy_pct || 0) >= 55 ? '#00d68f' : '#f0b429',
-      avgPnl: signUSD(i.avg_pnl), pnlColor: (i.avg_pnl || 0) >= 0 ? '#00d68f' : '#f0455a',
-    }));
+
+    // Executor stats -- get_stats() sekarang implementasi nyata di
+    // engine/execution_base.py::BaseOrderExecutionManager, shared spot &
+    // futures. Tidak ada queue_size (arsitektur ini tidak punya order queue).
+    // total_orders TIDAK menghitung signal yang ditolak risk manager (belum
+    // sempat jadi "attempt" di level executor) -- lihat catatan di kode.
     const ex = d.executor || {};
+    const executorHasData = [ex.total_orders, ex.fill_rate, ex.avg_fill_time_ms]
+      .some(v => v !== null && v !== undefined && v !== 0);
     const executorRows = [
-      { label: 'Orders Submitted', value: ex.orders_submitted ?? '—' },
-      { label: 'Orders Filled', value: ex.orders_filled ?? '—' },
-      { label: 'Fill Rate', value: (ex.fill_rate_pct ?? 0).toFixed(1) + '%' },
-      { label: 'Avg Slippage', value: (ex.avg_slippage_pct ?? 0).toFixed(3) + '%' },
+      { label: 'Total Orders', value: ex.total_orders ?? '—' },
+      { label: 'Filled Orders', value: ex.filled_orders ?? '—' },
+      { label: 'Failed Orders', value: ex.failed_orders ?? '—' },
+      { label: 'Fill Rate', value: ex.fill_rate != null ? (ex.fill_rate * 100).toFixed(1) + '%' : '—' },
+      { label: 'Avg Fill Time', value: ex.avg_fill_time_ms != null ? ex.avg_fill_time_ms.toFixed(0) + ' ms' : '—' },
+      { label: 'Avg Slippage', value: ex.avg_slippage_pct != null ? ex.avg_slippage_pct.toFixed(3) + '%' : '—' },
+      { label: 'Avg Fee', value: ex.avg_fee_pct != null ? ex.avg_fee_pct.toFixed(3) + '%' : '—' },
+      { label: 'Avg Leverage', value: ex.avg_leverage_used != null ? ex.avg_leverage_used.toFixed(1) + 'x' : '—' },
+      { label: 'Limit→Market Fallback', value: ex.limit_fallback_to_market_count ?? '—' },
+      { label: 'Iceberg Partial Fills', value: ex.iceberg_partial_fill_count ?? '—' },
     ];
-    const shadowRows = (d.shadow_trades || []).map(s => ({ symbol: s.symbol, pnl: signUSD(s.pnl), pnlColor: (s.pnl || 0) >= 0 ? '#00d68f' : '#f0455a' }));
+    const shadowRows = (d.shadow_trades || []).map(s => ({ symbol: s.symbol, pnl: signPct(s.unrealized_pnl_pct), pnlColor: (s.unrealized_pnl_pct || 0) >= 0 ? '#00d68f' : '#f0455a' }));
 
     const sidebarStyle = isMobile
       ? 'width:220px;flex-shrink:0;background:#111722;padding:12px 6px;display:flex;flex-direction:column;gap:2px;position:fixed;top:56px;bottom:0;left:0;z-index:120;transform:translateX(' + (this.state.sidebarOpen ? '0' : '-100%') + ');transition:transform .25s ease;box-shadow:0 0 40px rgba(0,0,0,0.6);overflow-y:auto'
@@ -405,7 +534,11 @@ class Component extends DCLogic {
       pendingLabel: suggestions.length + ' saran pending',
       hasSuggestions: suggestions.length > 0, noSuggestions: suggestions.length === 0, suggestions,
       hasHistory: historyRows.length > 0, hasNoHistory: historyRows.length === 0, historyRows,
-      attributionRows, regimeRows, indicatorRows, executorRows,
+      summary,
+      hasAttributionRows: attributionRows.length > 0, noAttributionRows: attributionRows.length === 0, attributionRows,
+      hasRegimeRows: regimeRows.length > 0, noRegimeRows: regimeRows.length === 0, regimeRows,
+      hasIndicatorRows: indicatorRows.length > 0, noIndicatorRows: indicatorRows.length === 0, indicatorRows,
+      executorRows, executorHasData, executorNoData: !executorHasData,
       hasShadow: shadowRows.length > 0, noShadow: shadowRows.length === 0, shadowRows,
     };
   }

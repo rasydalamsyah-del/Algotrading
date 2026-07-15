@@ -1405,7 +1405,7 @@ class TradingBot:
                 effective_threshold = base_threshold * threshold_mult
 
                 if total_score < effective_threshold:
-                    log.debug("[Gate4] %s skor %.1f < threshold %.1f — skip",
+                    log.debug("[ScoreThreshold] %s skor %.1f < threshold %.1f — skip",
                               symbol, total_score, effective_threshold)
                     return
 

@@ -66,6 +66,7 @@ from engine.core.models import SignalType, SignalEvent, ExitMode
 from future.risk_future import RiskManager
 from engine.risk_base import RiskAssessment, RiskDecision, HaltReason
 from future.execution_future import OrderExecutionManager
+from future import capital_allocator
 from shared_service.notifications import NotificationManager
 from engine.indicators.orderbook import WhaleDetector
 
@@ -152,11 +153,21 @@ class TradingBot:
 
         self._pipeline_active:      Set[str]        = set()
         self._queued_symbols:       Set[str]        = set()
-        self._invalidation_signals: Dict[str, Dict] = {}
+        # [BIAS-FIX -- whale invalidation per-side] Sebelumnya Dict[str, Dict]
+        # (key symbol saja) -- whale_sell_genuine (tekanan jual) memblokir
+        # SELURUH simbol dari Gate3, termasuk kandidat SHORT yang justru
+        # seharusnya DIKONFIRMASI oleh tekanan jual itu. Sekarang key
+        # (symbol, side) -- invalidasi long dan short independen.
+        self._invalidation_signals: Dict[Tuple[str, str], Dict] = {}
         self._gate3_queue:          asyncio.Queue   = asyncio.Queue()
         self._volume_ma:            Dict[str, float] = {}
         self._price_buffer:         Dict[str, list]  = {}
         self._last_candle_ts:       Dict[tuple, int]  = {}
+        # [CAPITAL-ALLOCATOR] Registry kandidat tertunda krn kehabisan
+        # kapasitas modal (slot/margin), di-key per symbol -- lihat
+        # future/capital_allocator.py utk desain lengkap.
+        self._pending_candidates:   Dict[str, capital_allocator.PendingCandidate] = {}
+        self._reconcile_lock:       asyncio.Lock = asyncio.Lock()
 
     @property
     def commander(self):
@@ -303,7 +314,18 @@ class TradingBot:
         # 'auto_scan_universe_futures', kalau true baru scan Binance
         # FUTURES (bukan spot), simpan ke universe_futures.json.
         from future.exchange_future import auto_scan_and_populate_futures
-        scanned = await auto_scan_and_populate_futures(self.db)
+        # [FIX] Validasi simbol hasil scan terhadap ccxt SEBELUM ditulis ke
+        # universe_futures.json/universe_overrides -- scan_binance_futures_
+        # universe() hit REST mentah, independen dari ccxt yang benar-benar
+        # dipakai bot utk OHLCV/ticker/order. Pakai is_symbol_supported()
+        # (resolusi pintar ex.market()), BUKAN get_market_info() (raw dict
+        # lookup) -- terbukti lewat pengujian get_market_info salah di kedua
+        # arah (reject simbol valid spt EVAA/USDT, terima simbol invalid spt
+        # BONK/USDT yg cuma ada di spot).
+        scanned = await auto_scan_and_populate_futures(
+            self.db,
+            is_valid_symbol=self.exchange.is_symbol_supported,
+        )
         if scanned:
             self.config["universe_watchlist"] = scanned
             log.info("universe_watchlist (futures) diupdate dari auto_scan: %d koin", len(scanned))
@@ -315,6 +337,13 @@ class TradingBot:
             api_passphrase=self.config.get("api_passphrase", ""),
             symbols=self.config["universe_watchlist"],
             testnet=self.config["testnet"],
+            # [FIX] WebSocketFeed di-reuse dari spot/ (lihat catatan impor di
+            # atas) yang defaultnya defaultType="spot" -- tanpa ini, feed
+            # ticker/orderbook futures diam-diam query market SPOT (banyak
+            # simbol kebetulan match nama, memberi kesan "jalan" padahal data
+            # salah pasar), dan simbol futures-only (mis. EVAA/USDT, tidak
+            # ada listing spot) gagal total dgn BadSymbol.
+            default_type="future",
         )
         await self.ws_feed.start()
         log.info("WebSocketFeed subscribe ke %d koin universe futures", len(self.config["universe_watchlist"]))
@@ -538,6 +567,29 @@ class TradingBot:
         )
 
         if not assessment.is_approved:
+            # [CAPITAL-ALLOCATOR] Real risk-check (ukuran Kelly sungguhan,
+            # bukan probe 1% di commander G4) gagal krn kapasitas -- ini
+            # checkpoint KEDUA registrasi (checkpoint pertama di
+            # run_gate3_worker menangani kasus gagal di G4 probe SEBELUM
+            # sampai ke sini sama sekali). Registrasi di sini otoritatif
+            # krn pakai ukuran order yang benar2 akan dieksekusi.
+            if assessment.decision == RiskDecision.REJECTED_INSUFFICIENT_CAPITAL:
+                # [CATATAN] candle_ts bisa None kalau signal ini berasal
+                # dari capital_allocator.reconcile_pending() (bukan siklus
+                # gate3 normal) -- AMAN krn simbol ini pasti SUDAH ada di
+                # registry dgn baseline asli (reconcile cuma re-attempt
+                # kandidat existing), jadi register_or_refresh() lewat
+                # jalur REFRESH (side sama) yang mengabaikan candle_ts
+                # baru ini sama sekali, bukan jalur REPLACE.
+                _default_tf = self.config.get("timeframe", "15m")
+                capital_allocator.register_or_refresh(
+                    self._pending_candidates, symbol, side,
+                    profile_name=str(signal.metadata.get("coin_profile", "universal")) if signal.metadata else "universal",
+                    profile_timeframe=str(signal.metadata.get("profile_timeframe") or _default_tf) if signal.metadata else _default_tf,
+                    candle_ts=int(signal.metadata.get("candle_ts") or 0) if signal.metadata else 0,
+                    price=price, atr=float(atr or 0), score=float(signal.total_score or 0),
+                    reason=assessment.reason,
+                )
             log.info("Risk REJECTED %s (%s): %s", symbol, side, assessment.reason)
             _reset_position_flag()
             return
@@ -618,6 +670,19 @@ class TradingBot:
                 )
             except Exception as e:
                 log.debug("notify_trade_opened gagal: %s", e)
+
+    async def _reconcile_pending_candidates(self) -> Dict:
+        """[CAPITAL-ALLOCATOR] Wrapper tipis: pegang _reconcile_lock supaya
+        dua trigger (close-event & polling fallback) yang hampir bersamaan
+        tidak sama-sama re-score kandidat yang sama secara paralel (sia-sia,
+        bukan soal keamanan data -- _handle_entry sudah aman thd double-entry
+        lewat _existing_pos check & _equity_lock sendiri)."""
+        async with self._reconcile_lock:
+            try:
+                return await capital_allocator.reconcile_pending(self)
+            except Exception as e:
+                log.error("[CapitalAllocator] reconcile_pending error: %s", e, exc_info=True)
+                return {"purged": 0, "attempted": None, "opened": False}
 
     async def _handle_close(self, signal: SignalEvent) -> None:
         async with self._closing_lock:
@@ -776,6 +841,18 @@ class TradingBot:
             except Exception as e:
                 log.debug("notify_trade_closed gagal: %s", e)
 
+        # [CAPITAL-ALLOCATOR PRASYARAT F -- WAJIB] Sebelum ini,
+        # _do_close_position() TIDAK PERNAH memperbarui risk_manager.
+        # _free_balance sama sekali -- itu cuma ter-update di
+        # run_portfolio_monitor() tiap SNAPSHOT_INTERVAL (900 detik).
+        # Trigger event-driven di bawah PERCUMA tanpa refresh eksplisit ini
+        # dulu, krn reconcile_pending() akan membaca margin yang masih basi
+        # sampai 15 menit kemudian. _do_close_position() adalah funnel
+        # TUNGGAL utk semua jalur close (strategy exit, SL/TP normal,
+        # liquidation-proximity emergency) via _close_position_market(),
+        # jadi satu hook ini menutup semua jalur sekaligus.
+        await self._refresh_portfolio()
+        await self._reconcile_pending_candidates()
 
     async def run_scanner_loop(self) -> None:
         """
@@ -864,24 +941,45 @@ class TradingBot:
                             self._whale_detectors[symbol] = WhaleDetector()
                         wd  = self._whale_detectors[symbol]
                         res = wd.analyze(symbol, bids, asks, {})
-                        ratio, confidence, thr_sell = res["ratio"], res["confidence"], res["thr_sell"]
+                        ratio, confidence = res["ratio"], res["confidence"]
+                        thr_sell, thr_buy = res["thr_sell"], res["thr_buy"]
 
                         danger_level = self._get_ob_danger_level(symbol, bids, asks, ratio, confidence)
+                        # [BIAS-FIX] whale_buy_genuine BARU -- thr_buy sudah
+                        # lama dihitung oleh WhaleDetector._dynamic_threshold()
+                        # tapi tidak pernah dibaca caller manapun. Mirror
+                        # persis whale_sell_genuine, arah dibalik (ratio>thr_buy
+                        # = bid-wall dominan = tekanan beli/akumulasi whale).
                         whale_sell_genuine = (ratio < thr_sell and confidence >= 0.5 and danger_level <= 4)
+                        whale_buy_genuine  = (ratio > thr_buy  and confidence >= 0.5 and danger_level <= 4)
 
+                        # [BIAS-FIX] Key (symbol, side) -- whale_sell_genuine
+                        # (tekanan jual) HANYA memblokir kandidat LONG (masuk
+                        # akal: jual dominan = buruk utk long), whale_buy_genuine
+                        # HANYA memblokir kandidat SHORT. Sebelumnya satu
+                        # whale_sell_genuine memblokir simbol utuh, termasuk
+                        # short yang justru dikonfirmasi oleh sinyal itu.
                         if whale_sell_genuine:
                             action = "skip_all" if danger_level <= 2 else "skip_gate3_only"
-                            self._invalidation_signals[symbol] = {
+                            self._invalidation_signals[(symbol, "long")] = {
                                 "reason": "whale_sell_genuine", "level": danger_level,
                                 "confidence": confidence, "ratio": ratio,
                                 "action": action, "source": "gate2", "timestamp": now,
                             }
+                        if whale_buy_genuine:
+                            action = "skip_all" if danger_level <= 2 else "skip_gate3_only"
+                            self._invalidation_signals[(symbol, "short")] = {
+                                "reason": "whale_buy_genuine", "level": danger_level,
+                                "confidence": confidence, "ratio": ratio,
+                                "action": action, "source": "gate2", "timestamp": now,
+                            }
+                        if whale_sell_genuine or whale_buy_genuine:
                             continue
 
-                        if symbol in self._invalidation_signals:
-                            age = now - self._invalidation_signals[symbol].get("timestamp", 0)
-                            if age > 60:
-                                del self._invalidation_signals[symbol]
+                        for _side_key in ((symbol, "long"), (symbol, "short")):
+                            sig = self._invalidation_signals.get(_side_key)
+                            if sig and (now - sig.get("timestamp", 0)) > 60:
+                                del self._invalidation_signals[_side_key]
 
                         if gate1_ok and not in_pipeline:
                             await self._maybe_enqueue_gate3(symbol)
@@ -922,11 +1020,30 @@ class TradingBot:
         except Exception:
             return 10
 
+    def _invalidation_blocks_side(self, symbol: str, side: str) -> bool:
+        """[BIAS-FIX helper] True kalau (symbol, side) sedang diinvalidasi
+        dgn action skip_all/skip_gate3_only. Dipakai di beberapa titik
+        _process_one utk cek per-side, bukan per-symbol."""
+        sig = self._invalidation_signals.get((symbol, side))
+        return bool(sig and sig.get("action") in ("skip_all", "skip_gate3_only"))
+
+    def _both_sides_blocked(self, symbol: str) -> bool:
+        """[BIAS-FIX helper] True hanya kalau LONG *dan* SHORT sama-sama
+        diinvalidasi -- dipakai utk fast-skip murah SEBELUM fetch OHLCV
+        (kalau cuma salah satu sisi yg diblokir, sisi lain tetap harus
+        dievaluasi, jadi tidak boleh skip total di sini)."""
+        return (
+            self._invalidation_blocks_side(symbol, "long")
+            and self._invalidation_blocks_side(symbol, "short")
+        )
+
     async def _maybe_enqueue_gate3(self, symbol: str) -> None:
-        """[REUSE VERBATIM]"""
+        """[BIAS-FIX] Sebelumnya skip enqueue kalau symbol PUNYA invalidation
+        APAPUN (long ATAU short) -- sekarang cuma skip kalau KEDUA sisi
+        diblokir, supaya sisi yang masih valid tetap sampai ke Gate3."""
         if symbol in self._pipeline_active:
             return
-        if symbol in self._invalidation_signals:
+        if self._both_sides_blocked(symbol):
             return
         import time as _t
         _tf = self.config.get("timeframe", "15m")
@@ -980,6 +1097,10 @@ class TradingBot:
         is_long = side != "short"
         ema_ok = (ema9 > ema21) if is_long else (ema9 < ema21)
         if not ema_ok:
+            log.debug(
+                "[Gate3] %s (%s) EMA tidak searah (ema9=%.6f ema21=%.6f) — skip",
+                symbol, side, ema9, ema21,
+            )
             return False
 
         try:
@@ -988,6 +1109,10 @@ class TradingBot:
             rsi_min = self.config.get("rsi_min", 45)
             rsi_max = self.config.get("rsi_max", 77)
         if not (rsi_min <= rsi <= rsi_max):
+            log.debug(
+                "[Gate3] %s (%s) RSI=%.1f di luar range [%d,%d] — skip",
+                symbol, side, rsi, rsi_min, rsi_max,
+            )
             return False
 
         if tf not in ("1d", "3d", "1w"):
@@ -996,8 +1121,16 @@ class TradingBot:
                     vwap_val = bar.get(vwap_col)
                     if vwap_val and float(vwap_val) > 0:
                         if is_long and close < float(vwap_val):
+                            log.debug(
+                                "[Gate3] %s (%s) di bawah VWAP (close=%.6f vwap=%.6f) — skip",
+                                symbol, side, close, float(vwap_val),
+                            )
                             return False
                         if not is_long and close > float(vwap_val):
+                            log.debug(
+                                "[Gate3] %s (%s) di atas VWAP (close=%.6f vwap=%.6f) — skip",
+                                symbol, side, close, float(vwap_val),
+                            )
                             return False
                         break
         return True
@@ -1025,10 +1158,13 @@ class TradingBot:
                     if symbol in self._closing_symbols:
                         return
 
-                inv = self._invalidation_signals.get(symbol)
-                if inv and inv.get("action") in ("skip_all", "skip_gate3_only"):
+                # [BIAS-FIX] Fast-skip murah SEBELUM fetch OHLCV -- cuma
+                # kalau KEDUA sisi diblokir (bukan symbol-level lagi).
+                # threshold_mult per-side dipindah ke dalam loop cand_side
+                # di bawah (dulu dihitung sekali di sini pakai `inv` yg
+                # sekarang sudah tidak simbol-level).
+                if self._both_sides_blocked(symbol):
                     return
-                threshold_mult = 1.2 if (inv and inv.get("action") == "monitor") else 1.0
 
                 from engine.profiles.registry import get_coin_profile, auto_classify_profile, _COIN_PROFILE_MAP, _PROFILE_CACHE
                 _base = symbol.split("/")[0]
@@ -1065,8 +1201,7 @@ class TradingBot:
                     for k in oldest[:250]:
                         del self._last_candle_ts[k]
 
-                inv = self._invalidation_signals.get(symbol)
-                if inv and inv.get("action") in ("skip_all", "skip_gate3_only"):
+                if self._both_sides_blocked(symbol):
                     return
 
                 cols = ["timestamp", "open", "high", "low", "close", "volume"]
@@ -1090,10 +1225,21 @@ class TradingBot:
                     return
 
                 # [FUTURES-SPECIFIC] Cek KEDUA arah, independen.
+                # [BIAS-FIX] Tambah filter _invalidation_blocks_side per sisi
+                # -- sisi yg sedang diblokir whale (mis. whale_sell_genuine
+                # utk "long") tidak masuk candidate_sides SAMA SEKALI,
+                # TANPA ikut membatalkan sisi lain yg tidak diblokir.
                 candidate_sides = []
-                if await self._check_gate3_direction(symbol, df, tf, "long", profile):
+                if (
+                    not self._invalidation_blocks_side(symbol, "long")
+                    and await self._check_gate3_direction(symbol, df, tf, "long", profile)
+                ):
                     candidate_sides.append("long")
-                if self.config.get("enable_short", True) and await self._check_gate3_direction(symbol, df, tf, "short", profile):
+                if (
+                    self.config.get("enable_short", True)
+                    and not self._invalidation_blocks_side(symbol, "short")
+                    and await self._check_gate3_direction(symbol, df, tf, "short", profile)
+                ):
                     candidate_sides.append("short")
 
                 if not candidate_sides:
@@ -1104,8 +1250,16 @@ class TradingBot:
                 atr   = float(bar.get("ATRr_14", 0))
                 log.info("[Gate3→Gate4] %s lolos arah=%s", symbol, candidate_sides)
 
-                inv = self._invalidation_signals.get(symbol)
-                if inv and inv.get("action") in ("skip_all",):
+                # [BIAS-FIX] Re-check per-side (bukan symbol-level) -- jaring
+                # pengaman race-condition (run_scanner_loop jalan sbg task
+                # terpisah, bisa menulis invalidation baru di antara
+                # candidate_sides selesai dihitung dan titik ini). Filter,
+                # bukan return blanket -- sisi lain yg masih valid tetap lanjut.
+                candidate_sides = [
+                    s for s in candidate_sides
+                    if (self._invalidation_signals.get((symbol, s)) or {}).get("action") != "skip_all"
+                ]
+                if not candidate_sides:
                     return
                 if not self.strategy or not hasattr(self.strategy, "get_scored_signal"):
                     return
@@ -1134,6 +1288,12 @@ class TradingBot:
 
                 # [FUTURES-SPECIFIC] Proses tiap arah kandidat secara independen.
                 for cand_side in candidate_sides:
+                    # [BIAS-FIX] threshold_mult dipindah ke sini (per cand_side)
+                    # -- dulu dihitung sekali di awal fungsi dari `inv` symbol-
+                    # level, sekarang dari invalidation (symbol, cand_side)
+                    # yang genuinely relevan utk sisi ini.
+                    _side_inv = self._invalidation_signals.get((symbol, cand_side))
+                    threshold_mult = 1.2 if (_side_inv and _side_inv.get("action") == "monitor") else 1.0
                     try:
                         scored = await self.strategy.get_scored_signal(
                             symbol=symbol, df=df, confirmation_df=confirmation_df,
@@ -1144,17 +1304,23 @@ class TradingBot:
                         log.debug("[Gate4] scored signal error %s (%s): %s", symbol, cand_side, e)
                         continue
                     if scored is None:
+                        log.debug("[Gate4] %s (%s) skor tidak tersedia — skip", symbol, cand_side)
                         continue
 
                     total_score = float(getattr(scored, "total_score", 0) or 0)
                     try:
                         from engine.profiles.thresholds import get_dynamic_threshold
                         _regime_val = scored.regime.value if scored.regime else "undefined"
-                        base_threshold = get_dynamic_threshold(profile.profile.value, _regime_val)
+                        # [BIAS-FIX] side=cand_side -- sebelumnya selalu matrix
+                        # long apapun cand_side-nya, akar penyebab short tidak
+                        # pernah lolos checkpoint ini walau lolos Gate3.
+                        base_threshold = get_dynamic_threshold(profile.profile.value, _regime_val, side=cand_side)
                     except Exception:
                         base_threshold = float(getattr(scored, "threshold_used", 65) or 65)
                     effective_threshold = base_threshold * threshold_mult
                     if total_score < effective_threshold:
+                        log.debug("[ScoreThreshold] %s (%s) skor %.1f < threshold %.1f — skip",
+                                  symbol, cand_side, total_score, effective_threshold)
                         continue
 
                     log.info("[Gate4→Gate5] %s (%s) lolos | score=%.1f threshold=%.1f",
@@ -1179,6 +1345,21 @@ class TradingBot:
                             )
                             if _cmd_decision.is_executable:
                                 _kelly_size_pct = _cmd_decision.position_size_pct
+                            elif _cmd_decision.capital_constrained:
+                                # [CAPITAL-ALLOCATOR] Checkpoint PERTAMA --
+                                # gagal di G4 probe (ukuran ~1%, bukan ukuran
+                                # Kelly sungguhan) krn kapasitas. _handle_entry
+                                # tidak akan pernah terpanggil siklus ini utk
+                                # cand_side ini -- registrasi di sini supaya
+                                # kandidat tidak hilang begitu saja.
+                                capital_allocator.register_or_refresh(
+                                    self._pending_candidates, symbol, cand_side,
+                                    profile_name=profile.profile.value if profile else "universal",
+                                    profile_timeframe=tf, candle_ts=confirmed_ts,
+                                    price=close, atr=atr, score=total_score,
+                                    reason=_cmd_decision.rejection_reason,
+                                )
+                                continue
                             else:
                                 log.info("[Gate4.5] Commander reject %s (%s): %s",
                                          symbol, cand_side, _cmd_decision.rejection_reason)
@@ -1187,7 +1368,10 @@ class TradingBot:
                             log.warning("[Gate4.5] Commander error %s (%s): %s — lanjut tanpa full gate",
                                         symbol, cand_side, _cmd_err)
 
-                    inv = self._invalidation_signals.get(symbol)
+                    # [BIAS-FIX] key (symbol, cand_side) -- ini sudah pakai
+                    # `continue` (skip cand_side ini saja), bukan `return`,
+                    # jadi cuma perlu fix key-nya jadi per-side.
+                    inv = self._invalidation_signals.get((symbol, cand_side))
                     if inv and inv.get("action") == "skip_all":
                         continue
 
@@ -1206,6 +1390,13 @@ class TradingBot:
                             "atr": atr, "coin_profile": getattr(profile, "profile", "universal"),
                             "pipeline_mode": "combined_stream_futures", "total_score": total_score,
                             "kelly_size_pct": _kelly_size_pct, "side": cand_side,
+                            # [CAPITAL-ALLOCATOR PRASYARAT] Dipakai _handle_entry()
+                            # utk registrasi PendingCandidate kalau ternyata gagal
+                            # di real risk-check karena kapasitas -- pakai `tf`
+                            # (bukan profile.timeframe langsung) krn `tf` sudah
+                            # resolve fallback dgn benar walau profile lookup
+                            # gagal (profile bisa None, lihat try/except di atas).
+                            "profile_timeframe": tf, "candle_ts": confirmed_ts,
                         },
                         total_score=total_score, regime=getattr(scored, "regime", "undefined"),
                         score_breakdown=getattr(scored, "score_breakdown", {}),
@@ -1524,6 +1715,15 @@ class TradingBot:
                         )
                     )
 
+                    # [ATG-EXIT-WIRING] trailing_reason dipindah ke SINI (sebelum
+                    # blok ATG, bukan sesudahnya spt sebelumnya) -- supaya guard
+                    # "not trailing_reason" di bawah bisa dipakai ATG utk cek
+                    # prioritas, persis pola spot/main_spot.py baris 1995-1997.
+                    # Logic-nya sendiri TIDAK berubah, cuma posisinya digeser.
+                    trailing_reason = None
+                    if self.strategy and hasattr(self.strategy, "check_trailing_exit"):
+                        trailing_reason = self.strategy.check_trailing_exit(pos.symbol, price)
+
                     # ── Adaptive Trade Guardian (ATG) ──
                     try:
                         from engine.intelligence.trade_guardian import check_atg
@@ -1557,12 +1757,29 @@ class TradingBot:
                             if _sl_improved:
                                 await self.db.update_position_sl(pos.symbol, _atg_result.new_sl)
                                 pos.stop_loss_price = _atg_result.new_sl
+
+                        # [ATG-EXIT-WIRING -- BARU] Layer 1 Composite Exit Score.
+                        # Sebelumnya _atg_result.should_exit/exit_reason dihitung
+                        # tapi TIDAK PERNAH dibaca di sini (beda dari spot/main_spot.py
+                        # baris 2052) -- ATG cuma pernah memperbaiki SL (Layer 2),
+                        # tidak pernah memicu close sendiri. Guard identik dgn spot:
+                        # SL/TP/trailing yang sudah aktif di siklus yang sama menang
+                        # duluan (ATG tidak override sinyal yang lebih "keras").
+                        # [KEPUTUSAN, beda dari spot secara sengaja] TIDAK memanggil
+                        # notify_sl_tp_hit() di sini -- 3 cabang sibling futures
+                        # (hit_sl/hit_tp/trailing_reason di bawah) juga tidak
+                        # memanggilnya, konsisten dgn pola futures yang sudah ada
+                        # (notifikasi generik notify_trade_closed() di
+                        # _do_close_position() tetap jalan otomatis utk semua kasus).
+                        if _atg_result.should_exit and not trailing_reason and not hit_sl and not hit_tp:
+                            log.info(
+                                "ATG EXIT [%s] @ %.6f | %s",
+                                pos.symbol, price, _atg_result.exit_reason,
+                            )
+                            await self._close_position_market(pos, price, _atg_result.exit_reason)
+                            continue
                     except Exception as _atg_err:
                         log.debug("ATG error [%s]: %s", pos.symbol, _atg_err)
-
-                    trailing_reason = None
-                    if self.strategy and hasattr(self.strategy, "check_trailing_exit"):
-                        trailing_reason = self.strategy.check_trailing_exit(pos.symbol, price)
 
                     if hit_sl:
                         await self._close_position_market(pos, price, f"Stop-loss hit @ {pos.stop_loss_price:.6f}")
@@ -1582,11 +1799,18 @@ class TradingBot:
         while self.is_running:
             try:
                 await self._refresh_portfolio()
+                # [CAPITAL-ALLOCATOR] Fallback/safety-net -- mekanisme UTAMA
+                # tetap trigger event-driven di _do_close_position(). Ini
+                # jaring pengaman kalau event-driven pernah gagal (crash
+                # antara close & reconcile, jalur close lain yg terlewat,
+                # dst) -- registry tetap ter-reconcile dlm waktu terburuk
+                # SNAPSHOT_INTERVAL (900 detik), bukan tak terbatas.
+                await self._reconcile_pending_candidates()
             except asyncio.CancelledError:
                 break
             except Exception as e:
                 log.error("Portfolio monitor error: %s", e)
-            await asyncio.sleep(30)
+            await asyncio.sleep(self.SNAPSHOT_INTERVAL)
 
     async def run_daily_summary(self) -> None:
         while self.is_running:

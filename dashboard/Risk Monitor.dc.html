@@ -231,7 +231,7 @@ function demoHealth() {
     current_drawdown_pct: 3.2, max_drawdown_pct: 15, daily_loss_pct: 1.1, daily_loss_limit_pct: 10,
     open_positions: 2, max_open_positions: 3, max_position_size_pct: 10, risk_per_trade_pct: 1,
     current_equity: 10450, initial_equity: 10000, peak_equity: 10620, free_balance: 8210.44,
-    trailing_atr_mult: 1.5, is_halted: false, halt_reason: null, trailing_active: true,
+    trailing_atr_mult: 1.5, is_halted: false, halt_reason: null, trailing_stop_enabled: true,
     atr_mult_sl: 2.0, atr_mult_tp: 3.5,
   };
 }
@@ -306,7 +306,20 @@ class Component extends DCLogic {
   async fetchData() {
     const h = await this.apiGet('/system_health');
     if (h) {
-      this.setState({ health: h, feed: h.feed_health || demoFeed(), usingDemo: false, apiOnline: true });
+      // API asli mengirim ws_feed_status: objek {symbol: {ticker_healthy, ticker_age_secs, ...}},
+      // bukan array feed_health yang diasumsikan sebelumnya -- transform di sini.
+      const wsFeed = h.ws_feed_status || {};
+      const feedEntries = Object.entries(wsFeed);
+      const feed = feedEntries.length
+        ? feedEntries.map(([symbol, f]) => ({
+            symbol,
+            feed_ok: !!f.ticker_healthy && !f.ticker_dead,
+            age_sec: f.ticker_age_secs,
+            last_price: f.last_price,
+            spread_pct: f.spread_pct,
+          }))
+        : demoFeed();
+      this.setState({ health: h, feed, usingDemo: false, apiOnline: true });
     } else {
       this.setState({
         health: demoHealth(), feed: demoFeed(), usingDemo: true, apiOnline: false,
@@ -384,7 +397,7 @@ class Component extends DCLogic {
       curDD: dd.toFixed(2) + '%', ddLimit: ddLimit + '%',
       dailyLoss: dl.toFixed(2) + '%', dailyLimit: dlLimit + '%',
       openPos, maxOpen,
-      trailingStatus: h.trailing_active ? 'ACTIVE' : 'OFF', trailMult: (h.trailing_atr_mult || 0) + '×',
+      trailingStatus: h.trailing_stop_enabled ? 'ACTIVE' : 'OFF', trailMult: (h.trailing_atr_mult || 0) + '×',
       paramRows,
       gaugeOffset, gaugePct: dd.toFixed(1) + '%',
       dailyBarLabel: dl.toFixed(2) + '% / ' + dlLimit + '%', dailyBarPct: Math.min(100, (dl / dlLimit) * 100),

@@ -73,6 +73,14 @@ class Trade(Base):
     realized_funding  = Column(Float,      nullable=True, default=0.0)
     notes             = Column(Text,        nullable=True)
 
+    # [EXECUTOR-STATS] Latensi signal->fill dalam ms. Sebelumnya cuma
+    # dititipkan sebagai teks di `notes` (mis. "latency_ms=123.45") lewat
+    # append_trade_note() -- tidak bisa diagregasi tanpa parsing regex.
+    # Kolom terstruktur ini dipakai get_stats() untuk avg_fill_time_ms.
+    # Baris lama (sebelum kolom ini ada) tetap NULL di sini, datanya masih
+    # bisa diambil dari `notes` sbg fallback (lihat get_stats()).
+    latency_ms        = Column(Float, nullable=True)
+
     __table_args__ = (
         Index("ix_trades_symbol_ts",      "symbol", "timestamp"),
         Index("ix_trades_symbol_profile", "symbol", "strategy_profile"),
@@ -261,6 +269,12 @@ class SignalScore(Base):
     # saat entry dan win rate, sebelum (kalau memang terbukti berguna)
     # disambungkan ke scoring/gate yang sesungguhnya.
     sentiment_score    = Column(Float,   nullable=True)
+    # [BIAS-FIX -- observability short] Sebelumnya TIDAK ADA kolom ini --
+    # baris skor long dan short tersimpan tanpa penanda arah, tidak bisa
+    # di-query terpisah utk audit "apakah short secara sistemik under-scored".
+    # Nullable + default None di kode (bukan default DB) supaya baris lama
+    # (pre-migrasi) tetap valid tanpa backfill.
+    side               = Column(String(5),  nullable=True)
 
     __table_args__ = (
         Index("ix_scores_symbol_ts",      "symbol", "timestamp"),
@@ -415,6 +429,7 @@ class DatabaseManager:
                     "fib_resistance REAL",
                     "signal_confidence REAL",
                     "sentiment_score REAL",
+                    "side VARCHAR(5)",
                 ]
                 for col in new_cols:
                     try:
@@ -423,6 +438,13 @@ class DatabaseManager:
                         ))
                     except Exception:
                         pass  # Kolom sudah ada
+                # Auto-migration trades — latency_ms (lihat get_stats())
+                try:
+                    await conn.execute(text(
+                        "ALTER TABLE trades ADD COLUMN latency_ms REAL"
+                    ))
+                except Exception:
+                    pass  # Kolom sudah ada
         log.info(
             "Database schema verified/created (%s). Tabel baru v7.0: "
             "market_regimes, signal_scores, performance_snapshots, parameter_history.",
@@ -645,6 +667,15 @@ class DatabaseManager:
                     realized_pnl=round(realized_pnl, 8),
                     realized_pnl_pct=round(realized_pnl_pct, 6),
                 )
+            )
+            await s.commit()
+
+    async def update_trade_latency(self, order_id: str, latency_ms: float) -> None:
+        async with self._session() as s:
+            await s.execute(
+                update(Trade)
+                .where(Trade.order_id == order_id)
+                .values(latency_ms=round(float(latency_ms), 2))
             )
             await s.commit()
 
@@ -1360,6 +1391,10 @@ class DatabaseManager:
         fib_resistance:     Optional[float] = None,
         signal_confidence:  Optional[float] = None,
         sentiment_score:    Optional[float] = None,
+        side:               Optional[str]   = "long",
+        # [BIAS-FIX] Default "long" -- semua caller lama (spot, dan future
+        # sebelum threading side ditambahkan di titik lain) tetap dapat
+        # perilaku identik persis dengan sebelum parameter ini ada.
     ) -> Optional[int]:
         try:
             async with self._session() as s:
@@ -1392,6 +1427,7 @@ class DatabaseManager:
                     fib_resistance=round(fib_resistance, 8) if fib_resistance else None,
                     signal_confidence=round(signal_confidence, 4) if signal_confidence else None,
                     sentiment_score=round(sentiment_score, 4) if sentiment_score is not None else None,
+                    side=side,
                 )
                 s.add(rec)
                 await s.commit()
@@ -1573,18 +1609,26 @@ class DatabaseManager:
                 "action_taken":      rec.action_taken,
                 "rejection_reason":  rec.rejection_reason,
                 "related_trade_id":  rec.related_trade_id,
+                "side":              getattr(rec, "side", None),
             }
             for rec in records
         ]
 
-    async def get_latest_signal_score(self, symbol: str) -> Optional[SignalScore]:
+    async def get_latest_signal_score(
+        self, symbol: str, side: Optional[str] = None
+    ) -> Optional[SignalScore]:
+        # [FUTURES-READY] side=None (default) -- TIDAK menambah filter WHERE
+        # sama sekali, query identik dgn sebelum parameter ini ada. Caller
+        # lama (spot, tidak side-aware) tidak terpengaruh. Futures panggil
+        # eksplisit side="long"/"short" utk universe/detail (lihat
+        # future/api_server_future.py) supaya skor long & short simbol yang
+        # sama tidak saling menimpa "row terakhir" satu sama lain.
         async with self._session() as s:
-            result = await s.execute(
-                select(SignalScore)
-                .where(SignalScore.symbol == symbol)
-                .order_by(desc(SignalScore.timestamp))
-                .limit(1)
-            )
+            q = select(SignalScore).where(SignalScore.symbol == symbol)
+            if side is not None:
+                q = q.where(SignalScore.side == side)
+            q = q.order_by(desc(SignalScore.timestamp)).limit(1)
+            result = await s.execute(q)
             return result.scalar_one_or_none()
 
     async def get_latest_regime(self, symbol: str) -> Optional[MarketRegimeRecord]:

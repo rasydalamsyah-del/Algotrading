@@ -146,52 +146,78 @@ def _check_primary_trigger(
             )
         return True, "Composite trigger terpenuhi"
 
-def _extract_indicator_scores(iset: IndicatorSet) -> Dict[str, Dict[str, float]]:
+def _pick_side_score(obj: Any, base_field: str, side: str) -> float:
+    """
+    [BIAS-FIX -- root cause, category score side-awareness] Selektor generik
+    dipakai SEMUA 24 sub-score kategori (trend/momentum/strength/volatility/
+    pattern/oscillator/structure/orderbook).
+
+    side="short": coba baca f"{base_field}_short" dulu. Kalau field itu
+    None/belum ada (kategori belum dapat batch mirror-nya, atau memang
+    genuinely direction-agnostic seperti adx/squeeze/atr yang TIDAK PERNAH
+    akan punya field _short), fallback ke field long biasa -- inilah yang
+    membuat rollout per-batch aman: kategori yang belum diperbaiki tetap
+    berperilaku identik dengan sebelum fix ini ada, tidak pernah crash
+    karena AttributeError, tidak pernah diam-diam pakai nilai kosong.
+
+    side="long" (default): SELALU baca field dasar langsung, tidak pernah
+    menyentuh field _short sama sekali -- long tidak mungkin berubah oleh
+    fix ini, di batch manapun.
+    """
+    if side == "short":
+        short_val = getattr(obj, base_field + "_short", None)
+        if short_val is not None:
+            return short_val
+    return getattr(obj, base_field)
+
+
+def _extract_indicator_scores(iset: IndicatorSet, side: str = "long") -> Dict[str, Dict[str, float]]:
     return {
         "trend": {
-            "ema_stack":  iset.trend.ema_stack_score,
-            "cross":      iset.trend.cross_score,
-            "supertrend": iset.trend.supertrend_score,
-            "vwap":       iset.trend.vwap_score,
+            "ema_stack":  _pick_side_score(iset.trend, "ema_stack_score", side),
+            "cross":      _pick_side_score(iset.trend, "cross_score", side),
+            "supertrend": _pick_side_score(iset.trend, "supertrend_score", side),
+            "vwap":       _pick_side_score(iset.trend, "vwap_score", side),
         },
         "momentum": {
-            "rsi":      iset.momentum.rsi_score,
-            "macd":     iset.momentum.macd_score,
-            "stochrsi": iset.momentum.stoch_score,
+            "rsi":      _pick_side_score(iset.momentum, "rsi_score", side),
+            "macd":     _pick_side_score(iset.momentum, "macd_score", side),
+            "stochrsi": _pick_side_score(iset.momentum, "stoch_score", side),
         },
         "strength": {
-            "adx":    iset.strength.adx_score,
-            "di":     iset.strength.di_score,
-            "volume": iset.strength.volume_score,
-            "mfi":    iset.strength.mfi_score,
+            "adx":    _pick_side_score(iset.strength, "adx_score", side),
+            "di":     _pick_side_score(iset.strength, "di_score", side),
+            "volume": _pick_side_score(iset.strength, "volume_score", side),
+            "mfi":    _pick_side_score(iset.strength, "mfi_score", side),
         },
         "volatility": {
-            "bb":      iset.volatility.bb_score,
-            "squeeze": iset.volatility.squeeze_score,
-            "atr":     iset.volatility.atr_score,
+            "bb":      _pick_side_score(iset.volatility, "bb_score", side),
+            "squeeze": _pick_side_score(iset.volatility, "squeeze_score", side),
+            "atr":     _pick_side_score(iset.volatility, "atr_score", side),
         },
         "pattern": {
-            "pattern_score": iset.patterns.pattern_score,
-            "context_score": iset.patterns.context_score,
+            "pattern_score": _pick_side_score(iset.patterns, "pattern_score", side),
+            "context_score": _pick_side_score(iset.patterns, "context_score", side),
         },
         "oscillator": {
-            "cci":            iset.oscillators.cci_score,
-            "williams":       iset.oscillators.williams_r_score,
-            "roc":            iset.oscillators.roc_score,
-            # [v2] field baru
+            "cci":            _pick_side_score(iset.oscillators, "cci_score", side),
+            "williams":       _pick_side_score(iset.oscillators, "williams_r_score", side),
+            "roc":            _pick_side_score(iset.oscillators, "roc_score", side),
+            # [v2] field baru -- sinyal mentah (string/float) utk validator.py,
+            # BUKAN skor 0-100, tidak relevan utk di-mirror side-aware di sini.
             "cci_trend":      iset.oscillators.cci_trend,
             "willr_trend":    iset.oscillators.willr_trend,
             "roc_crossover":  iset.oscillators.roc_crossover,
             "cci_divergence": iset.oscillators.cci_divergence,
         },
         "structure": {
-            "ichimoku":  iset.structure.ichimoku_score,
-            "sar":       iset.structure.sar_score,
-            "pivot":     iset.structure.pivot_score,
-            "fibonacci": iset.structure.fib_score,
+            "ichimoku":  _pick_side_score(iset.structure, "ichimoku_score", side),
+            "sar":       _pick_side_score(iset.structure, "sar_score", side),
+            "pivot":     _pick_side_score(iset.structure, "pivot_score", side),
+            "fibonacci": _pick_side_score(iset.structure, "fib_score", side),
         },
         "orderbook": {
-            "ob_score": iset.orderbook.orderbook_score,
+            "ob_score": _pick_side_score(iset.orderbook, "orderbook_score", side),
         },
     }
 
@@ -335,8 +361,8 @@ def score_signal(
         signal.add_validation_note(f"ERROR: Profile tidak dikenal: {profile_name}")
         return signal
 
-    # Dynamic threshold berdasarkan kombinasi profile × regime
-    dynamic_threshold = get_dynamic_threshold(profile_name, regime.value)
+    # Dynamic threshold berdasarkan kombinasi profile × regime × side
+    dynamic_threshold = get_dynamic_threshold(profile_name, regime.value, side=side)
     signal.threshold_used = dynamic_threshold
 
     if iset is None or not observation.primary_tf_valid:
@@ -345,7 +371,7 @@ def score_signal(
         reason = "Primary TF data tidak valid atau tidak tersedia"
         signal.scoring_narrative = f"❌ {reason}"
         signal.add_validation_note(reason)
-        _save_score_to_db(signal, action="SKIP_INVALID_DATA", db_manager=db_manager, main_loop=main_loop)
+        _save_score_to_db(signal, action="SKIP_INVALID_DATA", db_manager=db_manager, main_loop=main_loop, side=side)
         return signal
 
     # [FUTURES-READY] Hard block regime -- side-aware. Untuk long (default,
@@ -372,7 +398,7 @@ def score_signal(
                 f"Semua short position harus dipertimbangkan untuk exit."
             )
         signal.add_validation_note(f"Blocked by {blocking_regime.value} regime")
-        _save_score_to_db(signal, action="REJECT_OPPOSING_REGIME", db_manager=db_manager, main_loop=main_loop)
+        _save_score_to_db(signal, action="REJECT_OPPOSING_REGIME", db_manager=db_manager, main_loop=main_loop, side=side)
         return signal
 
     trigger_met, trigger_reason = _check_primary_trigger(profile_name, iset, profile_cfg, side=side)
@@ -383,10 +409,10 @@ def score_signal(
         signal.signal_type   = "hold"
         signal.scoring_narrative = f"❌ No-Trigger: {trigger_reason}"
         signal.add_validation_note(f"Primary trigger gagal: {trigger_reason}")
-        _save_score_to_db(signal, action="NO_TRIGGER", db_manager=db_manager, main_loop=main_loop)
+        _save_score_to_db(signal, action="NO_TRIGGER", db_manager=db_manager, main_loop=main_loop, side=side)
         return signal
 
-    indicator_scores = _extract_indicator_scores(iset)
+    indicator_scores = _extract_indicator_scores(iset, side=side)
     breakdown = _calc_weighted_breakdown(profile_name, indicator_scores, regime)
     total_score = breakdown.total()
     total_score = max(SCORE_MIN, min(SCORE_MAX, total_score))
@@ -499,11 +525,11 @@ def score_signal(
     )
 
     action = "EXECUTE_CANDIDATE" if signal.is_actionable else "HOLD"
-    _save_score_to_db(signal, action=action, db_manager=db_manager, main_loop=main_loop)
+    _save_score_to_db(signal, action=action, db_manager=db_manager, main_loop=main_loop, side=side)
 
     return signal
 
-def _save_score_to_db(signal: ScoredSignal, action: str, db_manager, main_loop=None) -> None:
+def _save_score_to_db(signal: ScoredSignal, action: str, db_manager, main_loop=None, side: str = "long") -> None:
     if db_manager is None:
         return
 
@@ -543,6 +569,7 @@ def _save_score_to_db(signal: ScoredSignal, action: str, db_manager, main_loop=N
                 fib_support=getattr(signal.observation.primary_tf_indicators, "nearest_fib_support", None) if signal.observation and signal.observation.primary_tf_indicators else None,
                 fib_resistance=getattr(signal.observation.primary_tf_indicators, "nearest_fib_resistance", None) if signal.observation and signal.observation.primary_tf_indicators else None,
                 signal_confidence=getattr(signal, "confidence", None),
+                side=side,
             )
 
         # [BUG-FIX] score_signal() dipanggil lewat run_in_executor() dari

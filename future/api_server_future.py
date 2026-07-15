@@ -1,19 +1,31 @@
 """
 future/api_server_future.py — REST API + Dashboard server untuk bot futures
 
-Diadaptasi dari spot/api_server_spot.py (2351 baris, ~45 endpoint). BUKAN
+Diadaptasi dari spot/api_server_spot.py (2385 baris, ~45 endpoint). BUKAN
 1:1 penuh -- endpoint ESENSIAL (status, balance/margin, positions dengan
 leverage/liquidation, trades, bot control, config) dibangun dan diadaptasi
 dengan benar untuk data model futures. Endpoint yang DIHILANGKAN dengan
 sengaja (bukan lupa):
 
 - /api/crosslearn/*, /api/shadow_trades: sistem deprecated permanen
-  (dikonfirmasi user), tidak relevan sama sekali di futures.
-- /api/meta_learner/*, /api/analytics/*, /api/forecast, /api/universe/*,
-  /api/stream (SSE), /api/diagnosa, /api/intelligence/*,
-  /api/candles/{symbol}/indicators: BELUM dibangun di pass ini -- fitur
-  "nice to have" untuk monitoring mendalam, bukan esensial untuk operasi/
-  keamanan dasar. Bisa ditambahkan di sesi terpisah kalau diperlukan.
+  (dikonfirmasi user), tidak relevan sama sekali di futures. shadow_trades
+  KHUSUS: dikonfirmasi dead code juga di spot (getattr(b,"_shadow_positions",{})
+  -- atribut itu tidak pernah di-assign di manapun di main_spot.py, endpoint
+  selalu return kosong), jadi sengaja TIDAK di-port sama sekali, bukan lupa.
+- /api/meta_learner/*, /api/analytics/*: BELUM dibangun -- butuh prasyarat
+  PerformanceAnalytics/MetaLearner di-instantiate dulu di main_future.py::
+  start() (saat ini self._analytics/self._meta_learner selalu None), di
+  luar scope sekadar port endpoint.
+- /api/forecast, /api/diagnosa: BELUM dibangun -- versi spot logic-nya
+  hardcode long-only (ema9>ema21>ema50, golden_cross), butuh keputusan
+  desain (long-only apa adanya vs bidirectional) sebelum di-port.
+- /api/stream (SSE), /api/candles/{symbol}/indicators: belum diprioritaskan.
+
+[BATCH 1 -- PORTING] /api/tickers, /api/intelligence/regime,
+/api/intelligence/scores(+{symbol}), /api/candles/{symbol} -- di-porting
+verbatim dari spot/api_server_spot.py, murni baca DB/ws_feed/exchange yang
+sudah shared (DatabaseManager, WebSocketFeed, BaseExchangeConnector), tidak
+ada konsep spot-only yang perlu disesuaikan.
 
 Perbedaan MENDASAR dari spot (bukan sekadar rename):
 - /api/balance: tampilkan free_margin/used_margin/unrealized_pnl (BUKAN
@@ -26,6 +38,7 @@ Perbedaan MENDASAR dari spot (bukan sekadar rename):
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import math
@@ -44,6 +57,8 @@ from fastapi.security import APIKeyHeader
 from pydantic import BaseModel
 
 from engine.risk_base import HaltReason
+from engine.profiles.thresholds import get_dynamic_threshold
+from engine.profiles.registry import select_profile_from_indicators
 
 if TYPE_CHECKING:
     from future.main_future import TradingBot
@@ -94,6 +109,27 @@ class _RateLimiter:
 
 
 _rate_limiter = _RateLimiter(max_calls=120, window_secs=60.0)
+
+
+class _MetricCache:
+    """[REUSE VERBATIM dari spot] Cache hasil get_metrics selama TTL detik.
+    Cegah kalkulasi Sharpe/Sortino/Calmar tiap request saat dashboard polling."""
+    def __init__(self, ttl: float = 10.0):
+        self._ttl    = ttl
+        self._ts:    float = 0.0
+        self._value: Optional[Dict] = None
+
+    def get(self) -> Optional[Dict]:
+        if self._value and (time.monotonic() - self._ts) < self._ttl:
+            return self._value
+        return None
+
+    def set(self, value: Dict) -> None:
+        self._value = value
+        self._ts    = time.monotonic()
+
+
+_metrics_cache = _MetricCache(ttl=10.0)
 
 
 def _check_rate_limit(request: Request) -> None:
@@ -288,10 +324,15 @@ def create_app(bot_getter) -> FastAPI:
           <li>POST /api/bot/panic 🔑 (tutup semua posisi darurat)</li>
           <li>POST /api/positions/{symbol}/close 🔑</li>
           <li>GET /api/logs 🔑</li>
+          <li>GET /api/tickers</li>
+          <li>GET /api/intelligence/regime 🔑</li>
+          <li>GET /api/intelligence/scores 🔑</li>
+          <li>GET /api/intelligence/scores/{symbol} 🔑</li>
+          <li>GET /api/candles/{symbol} 🔑</li>
         </ul>
         <p>🔑 = butuh header X-API-Key</p>
         <p style="color:#ff9800;">⚠️ Fitur belum tersedia di versi ini: meta_learner, analytics,
-        forecast, universe management, SSE stream, crosslearn/shadow_trades (deprecated).</p>
+        forecast, diagnosa, universe management, SSE stream, crosslearn/shadow_trades (deprecated).</p>
         </body></html>
         """
 
@@ -399,6 +440,9 @@ def create_app(bot_getter) -> FastAPI:
         health["market"] = "futures"
         health["default_leverage"] = b.config.get("default_leverage")
         health["margin_mode"] = b.config.get("margin_mode")
+        # [FIX] Sebelumnya cuma ada di /config/current -- Risk Monitor.dc.html
+        # terpaksa double-fetch. Sekarang disertakan langsung di sini juga.
+        health["max_position_size_pct"] = b.config.get("max_position_size_pct", 10.0)
         return health
 
     @app.get("/api/logs")
@@ -408,7 +452,14 @@ def create_app(bot_getter) -> FastAPI:
         if level:
             logs = [l for l in logs if l.level.upper() == level.upper()][:limit]
         return {"logs": [
-            {"timestamp": _iso(l.timestamp), "level": l.level, "source": l.source, "message": l.message}
+            # [BUG-FIX -- pre-existing, ditemukan lewat test dashboard_snapshot]
+            # l.source TIDAK ADA di BotLog model (engine/database.py:175-182,
+            # kolomnya "module") -- endpoint ini crash AttributeError setiap
+            # kali ada baris log (selalu ada di produksi). Ganti ke l.module
+            # (field asli), key JSON tetap "source" (kontrak existing, TIDAK
+            # diubah -- beda dari spot yang key JSON-nya "module", tapi
+            # mengubah nama key API di luar scope bug-fix ini).
+            {"timestamp": _iso(l.timestamp), "level": l.level, "source": l.module, "message": l.message}
             for l in logs
         ], "count": len(logs)}
 
@@ -529,5 +580,506 @@ def create_app(bot_getter) -> FastAPI:
         except Exception as e:
             log.error("Manual close error [%s]: %s", symbol, e)
             return {"success": False, "error": str(e)}
+
+    # ══════════════════════════════════════════════════════════════════════
+    # BATCH 1 -- di-porting verbatim dari spot/api_server_spot.py (murni
+    # baca DB/ws_feed/exchange shared, tidak ada konsep spot-only).
+    # ══════════════════════════════════════════════════════════════════════
+
+    @app.get("/api/metrics")
+    async def get_metrics(_: str = Depends(verify_api_key)):
+        """[v8 PERF, REUSE dari spot] Hasil di-cache 10 detik -- cegah
+        kalkulasi berat tiap request. Blok attribution_summary/indicator_summary
+        di-guard `hasattr(b, "analytics")` -- di futures ini SELALU None
+        (PerformanceAnalytics belum di-wire ke main_future.py::start(), lihat
+        catatan docstring atas file), jadi blok itu otomatis di-skip aman
+        (bukan error) sampai wiring-nya ditambahkan di sesi terpisah."""
+        cached = _metrics_cache.get()
+        if cached:
+            return {**cached, "_cached": True}
+
+        b      = bot()
+        rm     = b.risk_manager
+        trades = await b.db.get_recent_trades(limit=500)
+        closed = [t for t in trades if t.realized_pnl is not None]
+        pnl_list = [float(t.realized_pnl) for t in closed]
+
+        snaps    = await b.db.get_equity_curve(limit=500)
+        eq_curve = [float(s.total_equity) for s in snaps]
+        max_dd   = rm.compute_max_drawdown(eq_curve)
+
+        initial       = b.config.get("initial_capital", 1.0)
+        last_eq       = eq_curve[-1] if eq_curve else initial
+        total_ret_pct = (last_eq - initial) / initial * 100
+
+        annualized_ret_pct = total_ret_pct
+        if len(snaps) >= 2 and initial > 0 and last_eq > 0:
+            days_spanned = (snaps[-1].timestamp - snaps[0].timestamp).total_seconds() / 86400.0
+            if days_spanned >= 1:
+                growth_factor = last_eq / initial
+                if growth_factor > 0:
+                    annualized_ret_pct = (
+                        (growth_factor ** (365.0 / days_spanned)) - 1
+                    ) * 100
+
+        attribution_summary = {}
+        indicator_summary   = {}
+        if getattr(b, "_analytics", None):
+            try:
+                snap = await b.db.get_latest_snapshot(scope="global", lookback_days=30)
+                if snap:
+                    attribution_summary = {
+                        "best_regime":   snap.get("best_regime"),
+                        "worst_regime":  snap.get("worst_regime"),
+                        "lookback_days": snap.get("lookback_days"),
+                        "computed_at":   _iso(snap.get("computed_at")),
+                    }
+                indicator_eff = await b.db.get_indicator_effectiveness(lookback_days=30)
+                indicator_summary = indicator_eff or {}
+            except Exception as e:
+                log.warning("Tidak bisa ambil analytics summary: %s", e)
+
+        pf_raw = rm.compute_profit_factor(pnl_list)
+        result = {
+            "total_trades":         len(closed),
+            "win_rate_pct":         round(rm.compute_win_rate(pnl_list),              4),
+            "total_pnl":            round(sum(pnl_list),                               6),
+            "avg_pnl_per_trade":    round(rm.compute_expectancy(pnl_list),             6),
+            "profit_factor":        9999.0 if math.isinf(pf_raw) else round(pf_raw,   4),
+            "expectancy":           round(rm.compute_expectancy(pnl_list),             6),
+            "avg_win_loss_ratio":   round(rm.compute_avg_win_loss_ratio(pnl_list),     4),
+            "max_drawdown_pct":     round(max_dd,                                      4),
+            "current_drawdown_pct": round(rm.current_drawdown_pct,                    4),
+            "sharpe_ratio":         round(rm.compute_sharpe_ratio(pnl_list),           4),
+            "sortino_ratio":        round(rm.compute_sortino_ratio(pnl_list),          4),
+            "calmar_ratio":         round(rm.compute_calmar_ratio(annualized_ret_pct, max_dd), 4),
+            "total_fees":           round(sum(t.fee_cost or 0 for t in trades),        6),
+            "open_positions":       len(await b.db.get_open_positions()),
+            "daily_loss_pct":       round(rm.daily_loss_pct,                           4),
+            "daily_loss_limit_pct": rm.daily_loss_limit_pct,
+            "halt_reason":          rm.halt_reason,
+            "attribution_summary":  attribution_summary,
+            "indicator_summary":    indicator_summary,
+            "timestamp":            _iso(_utcnow()),
+            "_cached":              False,
+        }
+        _metrics_cache.set(result)
+        return result
+
+    @app.get("/api/tickers")
+    async def get_tickers():
+        b = bot()
+        return {"tickers": b.ws_feed.live_tickers if b.ws_feed else {}}
+
+    @app.get("/api/intelligence/regime")
+    async def get_intelligence_regime(_: str = Depends(verify_api_key)):
+        b        = bot()
+        universe = b.config.get("universe_watchlist", [])
+
+        regimes: list = []
+        for symbol in universe:
+            try:
+                row = await b.db.get_latest_regime(symbol)
+                if row:
+                    regimes.append({
+                        "symbol":       symbol,
+                        "regime":       row.regime,
+                        "confidence":   round(row.regime_confidence, 4),
+                        "adx":          row.adx_value,
+                        "atr_pct":      row.atr_pct,
+                        "bb_width":     row.bb_width,
+                        "last_updated": _iso(row.timestamp),
+                    })
+                else:
+                    regimes.append({
+                        "symbol": symbol, "regime": "undefined",
+                        "confidence": 0.0, "last_updated": None,
+                    })
+            except Exception as e:
+                log.warning("get_intelligence_regime [%s]: %s", symbol, e)
+                regimes.append({"symbol": symbol, "regime": "undefined", "error": str(e)})
+
+        regime_counts: Dict[str, int] = {}
+        for r in regimes:
+            key = r.get("regime", "undefined")
+            regime_counts[key] = regime_counts.get(key, 0) + 1
+
+        return {
+            "regimes":        regimes,
+            "summary":        regime_counts,
+            "universe_count": len(universe),
+            "timestamp":      _iso(_utcnow()),
+        }
+
+    def _score_side_block(row) -> Dict[str, Any]:
+        """[BIAS-FIX] Blok field lengkap utk satu row SignalScore (satu side).
+        row=None -> default kosong (identik dgn perilaku lama saat belum ada
+        skor sama sekali)."""
+        if not row:
+            return {
+                "total_score": None, "breakdown": {}, "regime": "undefined",
+                "trigger_met": False, "action_taken": None, "last_updated": None,
+            }
+        return {
+            "total_score": row.total_score,
+            "breakdown": {
+                "trend":      row.trend_score,
+                "momentum":   row.momentum_score,
+                "strength":   row.strength_score,
+                "volatility": row.volatility_score,
+                "pattern":    row.pattern_score,
+            },
+            "regime":       row.regime,
+            "trigger_met":  row.trigger_met,
+            "action_taken": row.action_taken,
+            "last_updated": _iso(row.timestamp),
+        }
+
+    def _pick_best_block(long_block: Dict[str, Any], short_block: Dict[str, Any]) -> Dict[str, Any]:
+        """[BIAS-FIX] "Sisi terkuat" = total_score lebih tinggi (None
+        dianggap paling rendah). Kalau dua-duanya None, keduanya identik
+        (default kosong) jadi hasilnya sama saja -- pakai long_block."""
+        ls = long_block["total_score"]
+        ss = short_block["total_score"]
+        if ls is None and ss is None:
+            return long_block
+        if ls is None:
+            return short_block
+        if ss is None:
+            return long_block
+        return long_block if ls >= ss else short_block
+
+    @app.get("/api/intelligence/scores")
+    async def get_intelligence_scores(_: str = Depends(verify_api_key)):
+        """[BIAS-FIX] Sebelumnya get_latest_signal_score(symbol) tanpa side
+        cuma menampilkan "sisi mana pun yang terakhir dihitung" -- sekarang
+        panggil 2x (long & short), tampilkan sisi TERKUAT (skor tertinggi)
+        di field top-level (backward-compat dgn dashboard/Watchlist.dc.html
+        yang baca sc.total_score/sc.regime flat), plus breakdown lengkap
+        per-side di "long"/"short"."""
+        b        = bot()
+        universe = b.config.get("universe_watchlist", [])
+
+        scores: list = []
+        for symbol in universe:
+            try:
+                row_long  = await b.db.get_latest_signal_score(symbol, side="long")
+                row_short = await b.db.get_latest_signal_score(symbol, side="short")
+                long_block  = _score_side_block(row_long)
+                short_block = _score_side_block(row_short)
+                best_block  = _pick_best_block(long_block, short_block)
+
+                scores.append({
+                    "symbol": symbol,
+                    **best_block,
+                    "long":  long_block,
+                    "short": short_block,
+                })
+            except Exception as e:
+                log.warning("get_intelligence_scores [%s]: %s", symbol, e)
+                scores.append({"symbol": symbol, "error": str(e)})
+
+        scores.sort(key=lambda x: (x.get("total_score") is not None, x.get("total_score") or 0), reverse=True)
+
+        return {"scores": scores, "count": len(scores), "timestamp": _iso(_utcnow())}
+
+    def _score_side_detail(row, side: str) -> Optional[Dict[str, Any]]:
+        """[BIAS-FIX] Blok detail lengkap utk satu row SignalScore (satu
+        side), termasuk entry_threshold/above_threshold yang sekarang
+        dihitung side-aware (get_dynamic_threshold(..., side=side) -- bug
+        family yang sama dgn get_latest_signal_score). row=None -> None
+        (dibedakan dari _score_side_block's row=None -> dict kosong, krn di
+        sini caller perlu tahu apakah side ini punya data sama sekali utk
+        404 check)."""
+        if not row:
+            return None
+        try:
+            _regime  = row.regime if row.regime else "undefined"
+            _profile = row.strategy_profile or "trend_follow"
+            entry_threshold = get_dynamic_threshold(_profile, _regime, side=side)
+        except Exception:
+            entry_threshold = 70.0
+        return {
+            "total_score":     row.total_score,
+            "entry_threshold": entry_threshold,
+            "above_threshold": (
+                row.total_score >= entry_threshold
+                if row.total_score is not None else False
+            ),
+            "breakdown": {
+                "trend":      row.trend_score,
+                "momentum":   row.momentum_score,
+                "strength":   row.strength_score,
+                "volatility": row.volatility_score,
+                "pattern":    row.pattern_score,
+            },
+            "regime":           row.regime,
+            "trigger_met":      row.trigger_met,
+            "action_taken":     row.action_taken,
+            "rejection_reason": row.rejection_reason,
+            "profile":          row.strategy_profile,
+            "narrative":        getattr(row, "narrative", None),
+            "last_updated":     _iso(row.timestamp),
+        }
+
+    def _pick_best_detail(long_detail, short_detail) -> Dict[str, Any]:
+        """[BIAS-FIX] Sama prinsipnya dgn _pick_best_block: sisi dgn
+        total_score lebih tinggi jadi field top-level (backward-compat).
+        Dipanggil HANYA setelah dipastikan minimal satu sisi tidak None."""
+        if long_detail is None:
+            return short_detail
+        if short_detail is None:
+            return long_detail
+        ls = long_detail["total_score"]
+        ss = short_detail["total_score"]
+        if ls is None and ss is None:
+            return long_detail
+        if ls is None:
+            return short_detail
+        if ss is None:
+            return long_detail
+        return long_detail if ls >= ss else short_detail
+
+    @app.get("/api/intelligence/scores/{symbol:path}")
+    async def get_intelligence_score_detail(symbol: str, _: str = Depends(verify_api_key)):
+        """[BIAS-FIX] Sebelumnya get_latest_signal_score(symbol) tanpa side
+        cuma menampilkan "sisi mana pun yang terakhir dihitung", dan
+        entry_threshold dihitung tanpa side (bug family sama). Sekarang
+        panggil 2x (long & short), tampilkan sisi TERKUAT di top-level
+        (backward-compat, walau belum ada dashboard konsumen nyata utk
+        endpoint ini), plus "long"/"short" nested berisi detail lengkap
+        masing-masing sisi (termasuk entry_threshold side-aware sendiri-
+        sendiri)."""
+        b = bot()
+
+        row_long  = await b.db.get_latest_signal_score(symbol, side="long")
+        row_short = await b.db.get_latest_signal_score(symbol, side="short")
+        if not row_long and not row_short:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Belum ada score untuk {symbol}. Bot mungkin belum menganalisis coin ini."
+            )
+
+        long_detail  = _score_side_detail(row_long, "long")
+        short_detail = _score_side_detail(row_short, "short")
+        best_detail  = _pick_best_detail(long_detail, short_detail)
+
+        history_rows = await b.db.get_signal_scores(symbol=symbol, limit=96)
+        history = [
+            {
+                "timestamp":   _iso(r["timestamp"]),
+                "total_score": r["total_score"],
+                "regime":      r["regime"],
+                "trigger_met": r["trigger_met"],
+                "action":      r["action_taken"],
+                "side":        r.get("side"),
+            }
+            for r in history_rows
+        ]
+
+        return {
+            "symbol": symbol,
+            **best_detail,
+            "long":         long_detail,
+            "short":        short_detail,
+            "history_24h":  history,
+            "timestamp":    _iso(_utcnow()),
+        }
+
+    @app.get("/api/candles/{symbol:path}")
+    async def get_candles(symbol: str, timeframe: str = "15m", limit: int = 100, _: str = Depends(verify_api_key)):
+        b = bot()
+
+        if not b.exchange or not b.exchange.is_connected:
+            raise HTTPException(status_code=503, detail="Exchange belum terhubung")
+
+        try:
+            raw     = await b.exchange.fetch_ohlcv(symbol, timeframe, limit=limit)
+            candles = [
+                {
+                    "timestamp":    bar[0],
+                    "open":         bar[1],
+                    "high":         bar[2],
+                    "low":          bar[3],
+                    "close":        bar[4],
+                    "volume":       bar[5],
+                    "quote_volume": bar[6] if len(bar) > 6 else None,
+                }
+                for bar in raw
+            ]
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"OHLCV error: {e}")
+
+        trades  = await b.db.get_recent_trades(limit=200)
+        markers = [
+            {
+                "timestamp": t.timestamp.timestamp() * 1000 if t.timestamp else None,
+                "price":     t.executed_price,
+                "side":      t.side,
+                "origin":    t.signal_origin,
+                "slippage":  t.slippage_pct,
+                "fee":       t.fee_cost,
+            }
+            for t in trades
+            if t.symbol == symbol and t.executed_price
+        ]
+
+        return {"candles": candles, "markers": markers}
+
+    @app.get("/api/dashboard_snapshot")
+    async def get_dashboard_snapshot(_: str = Depends(verify_api_key)):
+        """[v8 PERF, REUSE dari spot] Semua data dashboard dalam satu call --
+        parallel asyncio.gather. Panggil closure lokal get_status/get_balance/
+        get_metrics/get_logs yang sudah didefinisikan di atas (bukan
+        duplikasi logic).
+
+        [PENYESUAIAN dari spot -- BUKAN copy-paste literal] get_logs() di
+        futures signature-nya (limit, level, _) -- BEDA dari spot (limit, _)
+        saja. Panggilan positional get_logs(20, _) ala spot akan salah
+        mengikat `_` ke parameter `level`, bukan ke auth dependency -- di
+        sini WAJIB pakai keyword get_logs(limit=20, _=_)."""
+        b = bot()
+
+        positions, trades, snaps = await asyncio.gather(
+            b.db.get_open_positions(),
+            b.db.get_recent_trades(limit=120),
+            b.db.get_equity_curve(limit=300),
+        )
+
+        health = (
+            b.risk_manager.get_system_health()
+            if b.risk_manager
+            else {"risk_status": "initializing", "halted": False,
+                  "halt_reason": "", "drawdown_pct": 0.0}
+        )
+        feed_st = b.ws_feed.get_feed_status() if b.ws_feed else {}
+        return {
+            "status":  await get_status(),
+            "balance": await get_balance(_),
+            "metrics": await get_metrics(_),
+            "system_health": {
+                **health,
+                "strategy_active": b.strategy.is_active if b.strategy else False,
+                "strategy_name":   b.strategy.name if b.strategy else None,
+                "ws_feed_status":  feed_st,
+                "timestamp":       _iso(_utcnow()),
+            },
+            "positions": {
+                "positions": [_pos_dict(p) for p in positions],
+                "count":     len(positions),
+            },
+            "tickers": {"tickers": b.ws_feed.live_tickers if b.ws_feed else {}},
+            "logs": await get_logs(limit=20, _=_),
+            "equity_curve": {
+                "curve": [
+                    {
+                        "timestamp":     _iso(s.timestamp),
+                        "equity":        s.total_equity,
+                        "drawdown":      s.drawdown_pct,
+                        "daily_pnl":     s.daily_pnl,
+                        "daily_pnl_pct": s.daily_pnl_pct,
+                    }
+                    for s in snaps
+                ]
+            },
+            "trades": {"trades": [_trade_dict(t) for t in trades], "count": len(trades)},
+        }
+
+    @app.get("/api/executor/stats")
+    async def get_executor_stats(_: str = Depends(verify_api_key)):
+        """[EXECUTOR-STATS] Fill rate, slippage, fee, latency, leverage dari
+        BaseOrderExecutionManager.get_stats() -- shared verbatim dgn spot
+        lewat engine/execution_base.py, tidak ada implementasi terpisah di
+        sini. avg_leverage_used relevan khusus utk futures (Trade.leverage
+        selalu None di baris spot, otomatis diabaikan tanpa cek market_type)."""
+        b = bot()
+        if not b.executor:
+            raise HTTPException(status_code=503, detail="Executor belum aktif")
+        try:
+            stats = await b.executor.get_stats()
+            stats["timestamp"] = _iso(_utcnow())
+            return stats
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=str(e))
+
+    @app.get("/api/universe/detail")
+    async def get_universe_detail(_: str = Depends(verify_api_key)):
+        """[FUTURES] Acuan: spot/api_server_spot.py get_universe_detail().
+        Beda dari spot: baca universe_futures.json (bukan universe.json), dan
+        side-aware -- symbol yang sama bisa punya skor long DAN short
+        berbeda (lihat get_latest_signal_score(side=...)), jadi ditampilkan
+        terpisah (total_score_long/short) bukan cuma "row terakhir" yang
+        kebetulan side mana pun. projected_leverage: estimasi leverage yang
+        akan dipakai RiskManager.compute_adaptive_leverage() kalau sisi
+        terkuat (skor tertinggi antara long/short) entry sekarang -- data
+        forward-looking, bukan dari trade historis."""
+        b = bot()
+        try:
+            universe_path = os.path.join(
+                os.path.dirname(os.path.dirname(__file__)), "universe_futures.json"
+            )
+            try:
+                with open(universe_path, "r", encoding="utf-8") as f:
+                    udata = json.load(f)
+                coins      = udata.get("symbols", [])
+                scanned_at = udata.get("scanned_at", "")
+            except Exception:
+                coins = [{"symbol": s, "volume_24h": 0}
+                         for s in b.config.get("universe_watchlist", [])]
+                scanned_at = ""
+
+            result = []
+            for c in coins:
+                symbol = c["symbol"]
+                vol    = c.get("volume_24h", 0)
+                try:
+                    row        = await b.db.get_latest_regime(symbol)
+                    regime     = row.regime if row else "undefined"
+                    confidence = round(row.regime_confidence, 4) if row else 0.0
+                    adx        = row.adx_value if row else 0.0
+                    atr_pct    = row.atr_pct if row else 0.5
+                    profile    = select_profile_from_indicators(
+                        symbol=symbol, adx=adx or 20.0,
+                        atr_pct=atr_pct or 0.5, regime=regime,
+                    )
+
+                    score_long  = await b.db.get_latest_signal_score(symbol, side="long")
+                    score_short = await b.db.get_latest_signal_score(symbol, side="short")
+                    total_score_long  = score_long.total_score  if score_long  else None
+                    trigger_met_long  = score_long.trigger_met  if score_long  else False
+                    total_score_short = score_short.total_score if score_short else None
+                    trigger_met_short = score_short.trigger_met if score_short else False
+
+                    projected_leverage = None
+                    if b.risk_manager:
+                        candidates = [s for s in (total_score_long, total_score_short) if s is not None]
+                        projected_leverage = b.risk_manager.compute_adaptive_leverage(
+                            base_leverage=b.config.get("default_leverage", 10),
+                            atr_pct=atr_pct, regime=regime, profile_name=profile,
+                            score=max(candidates) if candidates else None,
+                        )
+                except Exception:
+                    regime = "undefined"; confidence = 0.0
+                    profile = "scalp_volatile"
+                    total_score_long = None;  trigger_met_long  = False
+                    total_score_short = None; trigger_met_short = False
+                    projected_leverage = None
+                result.append({
+                    "symbol":             symbol,
+                    "volume_24h":         vol,
+                    "volume_m":           round(vol / 1_000_000, 2),
+                    "profile":            profile,
+                    "regime":             regime,
+                    "confidence":         confidence,
+                    "total_score_long":   total_score_long,
+                    "trigger_met_long":   trigger_met_long,
+                    "total_score_short":  total_score_short,
+                    "trigger_met_short":  trigger_met_short,
+                    "projected_leverage": projected_leverage,
+                })
+            return {"universe": result, "total": len(result),
+                    "scanned_at": scanned_at, "timestamp": _iso(_utcnow())}
+        except Exception as e:
+            return {"error": str(e)}
 
     return app

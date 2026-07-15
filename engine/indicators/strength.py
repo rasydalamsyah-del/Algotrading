@@ -177,11 +177,16 @@ def _score_adx(adx_val: float) -> float:
     excess = min(adx_val - ADX_VERY_STRONG, 30.0)
     return clamp_score(70.0 - excess * 0.8)
 
-def _score_di(plus_di: float, minus_di: float) -> float:
+def _score_di(plus_di: float, minus_di: float, side: str = "long") -> float:
+    # [BIAS-FIX -- Batch 2] Sebelumnya cuma ukur dominasi +DI (bullish
+    # directional movement) -- minus_di dominan (bearish, ideal utk short)
+    # selalu diskor RENDAH. side="short": ratio dihitung dari minus_di,
+    # bukan komplemen (100-x) -- swap peran plus_di/minus_di langsung di
+    # rumus yang sama, formula tidak berubah.
     total = plus_di + minus_di
     if total < 1e-9:
         return SCORE_NEUTRAL
-    ratio = plus_di / total
+    ratio = (minus_di / total) if side == "short" else (plus_di / total)
     return clamp_score(5.0 + ratio * 90.0)
 
 def calculate_adx(
@@ -201,6 +206,7 @@ def calculate_adx(
                 minus_di=None,
                 adx_score=SCORE_NEUTRAL,
                 di_score=SCORE_NEUTRAL,
+                di_score_short=SCORE_NEUTRAL,
                 composite_score=SCORE_NEUTRAL,
             )
 
@@ -215,6 +221,7 @@ def calculate_adx(
             minus_di=None,
             adx_score=SCORE_NEUTRAL,
             di_score=SCORE_NEUTRAL,
+            di_score_short=SCORE_NEUTRAL,
             composite_score=SCORE_NEUTRAL,
         )
 
@@ -259,6 +266,7 @@ def calculate_adx(
             minus_di=None,
             adx_score=SCORE_NEUTRAL,
             di_score=SCORE_NEUTRAL,
+            di_score_short=SCORE_NEUTRAL,
             composite_score=SCORE_NEUTRAL,
         )
 
@@ -268,10 +276,13 @@ def calculate_adx(
 
     adx_score = _score_adx(adx_val)
     di_score  = _score_di(plus_di_val, minus_di_val)
+    # [BIAS-FIX -- Batch 2] adx_score TIDAK disentuh (genuinely direction-
+    # agnostic, dikonfirmasi -- cuma ukur kekuatan trend, bukan arahnya).
+    di_score_short = _score_di(plus_di_val, minus_di_val, side="short")
 
     log.debug(
-        "adx: adx=%.1f DI+=%.1f DI-=%.1f → adx_score=%.1f di_score=%.1f",
-        adx_val, plus_di_val, minus_di_val, adx_score, di_score,
+        "adx: adx=%.1f DI+=%.1f DI-=%.1f → adx_score=%.1f di_score=%.1f/%.1f(short)",
+        adx_val, plus_di_val, minus_di_val, adx_score, di_score, di_score_short,
     )
 
     return StrengthIndicators(
@@ -280,6 +291,7 @@ def calculate_adx(
         minus_di=minus_di_val,
         adx_score=adx_score,
         di_score=di_score,
+        di_score_short=di_score_short,
         composite_score=clamp_score((adx_score + di_score) / 2),
     )
 
@@ -314,6 +326,7 @@ def _score_volume(
     spike: bool,
     climax: bool,
     obv_trend_str: str,
+    side: str = "long",
 ) -> float:
     if ratio < VOLUME_RATIO_WEAK:
         t    = ratio / VOLUME_RATIO_WEAK
@@ -337,10 +350,21 @@ def _score_volume(
 
     score = base
 
-    if obv_trend_str == "rising":
-        score += 8.0
-    elif obv_trend_str == "falling":
-        score -= 8.0
+    # [BIAS-FIX -- Batch 2] Cuma term OBV-trend ini yang directional (bukan
+    # magnitude) -- base (ratio ladder di atas) dan climax penalty di bawah
+    # TIDAK disentuh, tetap sama utk kedua sisi (magnitude/kualitas sinyal,
+    # bukan arah). side="short": OBV falling (distribusi, bearish) yang
+    # dapat bonus, rising yang kena penalti -- swap langsung, bukan 100-x.
+    if side == "short":
+        if obv_trend_str == "falling":
+            score += 8.0
+        elif obv_trend_str == "rising":
+            score -= 8.0
+    else:
+        if obv_trend_str == "rising":
+            score += 8.0
+        elif obv_trend_str == "falling":
+            score -= 8.0
 
     if climax:
         score -= VOLUME_CLIMAX_PENALTY
@@ -365,6 +389,7 @@ def calculate_volume_analysis(
                 obv_trend="flat",
                 volume_climax=False,
                 volume_score=SCORE_NEUTRAL,
+                volume_score_short=SCORE_NEUTRAL,
                 composite_score=SCORE_NEUTRAL,
             )
 
@@ -384,6 +409,7 @@ def calculate_volume_analysis(
             obv_trend="flat",
             volume_climax=False,
             volume_score=SCORE_NEUTRAL,
+            volume_score_short=SCORE_NEUTRAL,
             composite_score=SCORE_NEUTRAL,
         )
 
@@ -400,6 +426,7 @@ def calculate_volume_analysis(
             obv_trend="flat",
             volume_climax=False,
             volume_score=SCORE_NEUTRAL,
+            volume_score_short=SCORE_NEUTRAL,
             composite_score=SCORE_NEUTRAL,
         )
 
@@ -414,10 +441,13 @@ def calculate_volume_analysis(
     obv_val     = float(obv_series.iloc[-1])
     obv_trend_str = _obv_trend(obv_series)
     score = _score_volume(ratio, spike, climax, obv_trend_str)
+    # [BIAS-FIX -- Batch 2] Cuma term OBV-trend yang di-mirror; base ratio
+    # ladder & climax penalty magnitude-only, sama utk kedua sisi.
+    score_short = _score_volume(ratio, spike, climax, obv_trend_str, side="short")
 
     log.debug(
-        "volume: ratio=%.2fx spike=%s climax=%s obv_trend=%s → score=%.1f",
-        ratio, spike, climax, obv_trend_str, score,
+        "volume: ratio=%.2fx spike=%s climax=%s obv_trend=%s → score=%.1f/%.1f(short)",
+        ratio, spike, climax, obv_trend_str, score, score_short,
     )
 
     return StrengthIndicators(
@@ -427,6 +457,7 @@ def calculate_volume_analysis(
         obv_trend=obv_trend_str,
         volume_climax=bool(climax),
         volume_score=score,
+        volume_score_short=score_short,
         composite_score=score,
     )
 
@@ -492,7 +523,15 @@ def _detect_mfi_rsi_divergence(
 
     return diff
 
-def _score_mfi(mfi_val: float, mfi_rsi_div: float) -> float:
+def _score_mfi(mfi_val: float, mfi_rsi_div: float, side: str = "long") -> float:
+    # [BIAS-FIX -- Batch 3, input-reflection] Teknik sama persis dgn
+    # _score_rsi() -- MFI_OVERSOLD(20)/MFI_OVERBOUGHT(80) persis simetris
+    # 100-, mfi_rsi_div ikut pola asymmetric-bonus/penalty yg sama dgn
+    # divergence RSI/MACD (>0 favor bullish, <0 favor bearish).
+    if side == "short":
+        mfi_val     = 100.0 - mfi_val
+        mfi_rsi_div = -mfi_rsi_div
+
     if mfi_val <= MFI_OVERSOLD:
         if mfi_val <= 20.0:
             base = 50.0
@@ -550,6 +589,7 @@ def calculate_money_flow(
                 mfi=None,
                 mfi_divergence=0.0,
                 mfi_score=SCORE_NEUTRAL,
+                mfi_score_short=SCORE_NEUTRAL,
                 composite_score=SCORE_NEUTRAL,
             )
 
@@ -562,6 +602,7 @@ def calculate_money_flow(
             mfi=None,
             mfi_divergence=0.0,
             mfi_score=SCORE_NEUTRAL,
+            mfi_score_short=SCORE_NEUTRAL,
             composite_score=SCORE_NEUTRAL,
         )
 
@@ -572,16 +613,18 @@ def calculate_money_flow(
     rsi_series = rsi_series if use_external else _calc_rsi(df["close"], period)
     mfi_div = _detect_mfi_rsi_divergence(mfi_series, rsi_series)
     score = _score_mfi(mfi_val, mfi_div)
+    score_short = _score_mfi(mfi_val, mfi_div, side="short")
 
     log.debug(
-        "mfi: val=%.1f div=%.2f → score=%.1f",
-        mfi_val, mfi_div, score,
+        "mfi: val=%.1f div=%.2f → score=%.1f/%.1f(short)",
+        mfi_val, mfi_div, score, score_short,
     )
 
     return StrengthIndicators(
         mfi=mfi_val,
         mfi_divergence=mfi_div,
         mfi_score=score,
+        mfi_score_short=score_short,
         composite_score=score,
     )
 

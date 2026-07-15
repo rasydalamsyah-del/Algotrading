@@ -292,6 +292,10 @@ def is_tradeable_regime(
     confidence: float,
     allowed_regimes: Optional[list] = None,
     min_confidence: float = REGIME_MIN_CONFIDENCE_TO_TRADE,
+    side: str = "long",
+    # [BIAS-FIX] Default "long" -- semua caller lama (spot, dan future
+    # sebelum threading side ditambahkan di titik lain) tetap dapat
+    # perilaku identik persis dengan sebelum parameter ini ada.
 ) -> Tuple[bool, str]:
     if confidence < min_confidence:
         return False, (
@@ -311,10 +315,19 @@ def is_tradeable_regime(
     # Pakai allows_long sebagai satu sumber kebenaran: otomatis ikut kalau
     # daftar regime yang diizinkan long berubah di masa depan, tidak perlu
     # sinkronkan manual di 2 tempat berbeda.
-    if not regime.allows_long:
+    #
+    # [BIAS-FIX -- short regime gate] Sebelumnya SELALU cek allows_long
+    # apapun side-nya -- akibatnya regime trending_bear (ideal utk short)
+    # SELALU tertolak di sini bahkan utk kandidat short, karena tidak ada
+    # padanan allows_short yang pernah dicek. Sekarang pilih properti sesuai
+    # side; allows_long tetap satu-satunya sumber kebenaran utk long (tidak
+    # berubah), allows_short (baru) sumber kebenaran utk short.
+    is_long = side != "short"
+    regime_ok = regime.allows_long if is_long else regime.allows_short
+    if not regime_ok:
         return False, (
-            f"Regime '{regime.value}' tidak mengizinkan posisi long "
-            f"(allows_long=False)."
+            f"Regime '{regime.value}' tidak mengizinkan posisi {side} "
+            f"(allows_{side}=False)."
         )
 
     return True, f"Regime {regime.value} OK (confidence={confidence:.2f})"

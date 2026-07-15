@@ -4,9 +4,9 @@ cd "$SCRIPT_DIR" || exit 1
 
 [ -f "$SCRIPT_DIR/venv/bin/activate" ] && source "$SCRIPT_DIR/venv/bin/activate"
 
-BOT_PID=$(pgrep -f "python.*spot/main_spot.py" | head -1)
-TG_PID=$(pgrep -f "python.*shared_service/telegram_bot.py" | head -1)
-BOT_FUT_PID=$(pgrep -f "python.*future/main_future.py" | head -1)
+BOT_PID=$(pgrep -f "python3 -m spot.main_spot" | head -1)
+TG_PID=$(pgrep -f "python3 -m shared_service.telegram_bot" | head -1)
+BOT_FUT_PID=$(pgrep -f "python3 -m future.main_future" | head -1)
 
 echo "=== System Process ==="
 [ -n "$BOT_PID" ] && echo "✅ Core Bot (spot)   : RUNNING (PID: $BOT_PID)" || echo "❌ Core Bot (spot)   : OFFLINE"
@@ -16,7 +16,7 @@ echo "=== System Process ==="
 if [ -n "$BOT_PID" ]; then
     echo ""
     echo "=== Status API Spot (FastAPI, port 8000) ==="
-    curl -s http://127.0.0.1:8000/api/status 2>/dev/null | python -c "
+    _KEY=$(grep -oP '(?<=^DASHBOARD_API_KEY=).*' "$SCRIPT_DIR/.env"); curl -s -H "X-API-Key: $_KEY" http://127.0.0.1:8000/api/status 2>/dev/null | python3 -c "
 import sys, json
 try:
     d = json.load(sys.stdin)
@@ -30,7 +30,7 @@ except:
 " 2>/dev/null || echo "API tidak terjangkau."
     echo ""
     echo "=== Portfolio Summary (Spot) ==="
-    curl -s http://127.0.0.1:8000/api/balance 2>/dev/null | python -c "
+    curl -s -H "X-API-Key: $_KEY" http://127.0.0.1:8000/api/balance 2>/dev/null | python3 -c "
 import sys, json
 try:
     d = json.load(sys.stdin)
@@ -47,7 +47,7 @@ if [ -n "$BOT_FUT_PID" ]; then
     echo ""
     echo "=== Status API Futures (FastAPI, port 8001) ==="
     _FUT_API_KEY=$(grep -oP '(?<=^DASHBOARD_API_KEY_FUTURES=).*' "$SCRIPT_DIR/.env" 2>/dev/null || grep -oP '(?<=^DASHBOARD_API_KEY=).*' "$SCRIPT_DIR/.env" 2>/dev/null)
-    curl -s http://127.0.0.1:8001/api/status 2>/dev/null | python -c "
+    curl -s http://127.0.0.1:8001/api/status 2>/dev/null | python3 -c "
 import sys, json
 try:
     d = json.load(sys.stdin)
@@ -61,7 +61,7 @@ except:
 " 2>/dev/null || echo "API tidak terjangkau."
     echo ""
     echo "=== Portfolio Summary (Futures) ==="
-    curl -s -H "X-API-Key: $_FUT_API_KEY" http://127.0.0.1:8001/api/balance 2>/dev/null | python -c "
+    curl -s -H "X-API-Key: $_FUT_API_KEY" http://127.0.0.1:8001/api/balance 2>/dev/null | python3 -c "
 import sys, json
 try:
     d = json.load(sys.stdin)

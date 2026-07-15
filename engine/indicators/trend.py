@@ -77,6 +77,51 @@ _EMA_STACK_PAIRS: Tuple[Tuple[int, int, int], ...] = (
 def _calc_ema(series: pd.Series, period: int) -> pd.Series:
     return series.ewm(span=period, adjust=False).mean()
 
+def _score_ema_stack(
+    ema_values: Dict[int, Optional[float]], side: str = "long"
+) -> Optional[float]:
+    """
+    [BIAS-FIX -- Batch 5] side="short": tiap pair reward fast<slow (bukan
+    fast>slow), gap_adj dibalik tandanya (setara dgn negasi gap_pct sebelum
+    clamp -- clamp range simetris & ekspresi pre-clamp linear di gap_pct,
+    jadi clamp(-x,-M,M) == -clamp(x,-M,M) selalu berlaku). Return None kalau
+    tidak ada pair valid sama sekali -- caller yang tangani fallback netral.
+    """
+    stack_score = 0.0
+    available_weight = 0.0
+    valid_pairs = 0
+
+    for fast_p, slow_p, weight_idx in _EMA_STACK_PAIRS:
+        fast_val = ema_values.get(fast_p)
+        slow_val = ema_values.get(slow_p)
+
+        if fast_val is None or slow_val is None:
+            continue
+
+        weight = EMA_STACK_WEIGHTS[weight_idx]
+        available_weight += weight
+        is_aligned = (fast_val < slow_val) if side == "short" else (fast_val > slow_val)
+        if is_aligned:
+            stack_score += weight
+        valid_pairs += 1
+
+    if valid_pairs == 0:
+        return None
+
+    normalized = (stack_score / available_weight * 100) if available_weight > 0 else 0.0
+
+    ema9  = ema_values.get(9)
+    ema21 = ema_values.get(21)
+    gap_adj = 0.0
+    if ema9 is not None and ema21 is not None and ema21 > 0:
+        gap_pct = (ema9 - ema21) / ema21 * 100
+        gap_adj = min(EMA_GAP_BONUS_MAX, max(-EMA_GAP_BONUS_MAX, gap_pct * EMA_GAP_BONUS_MAX))
+        if side == "short":
+            gap_adj = -gap_adj
+
+    return clamp_score(normalized + gap_adj)
+
+
 def calculate_ema_stack(
     df: pd.DataFrame,
     errors: Optional[List[str]] = None,
@@ -91,6 +136,7 @@ def calculate_ema_stack(
     if close is None or len(close) < 2:
         errors.append("ema_stack: kolom 'close' tidak tersedia atau data < 2 bar")
         result.ema_stack_score = SCORE_NEUTRAL
+        result.ema_stack_score_short = SCORE_NEUTRAL
         return result
 
     n = len(close)
@@ -114,47 +160,36 @@ def calculate_ema_stack(
     result.ema100 = ema_values.get(100)
     result.ema200 = ema_values.get(200)
 
-    stack_score = 0.0
-    available_weight = 0.0
-    valid_pairs = 0
-
-    for fast_p, slow_p, weight_idx in _EMA_STACK_PAIRS:
-        fast_val = ema_values.get(fast_p)
-        slow_val = ema_values.get(slow_p)
-
-        if fast_val is None or slow_val is None:
-            continue
-
-        weight = EMA_STACK_WEIGHTS[weight_idx]
-        available_weight += weight
-        if fast_val > slow_val:
-            stack_score += weight
-        valid_pairs += 1
-
-    if valid_pairs == 0:
-        errors.append("ema_stack: tidak ada pair EMA yang bisa dihitung")
-        result.ema_stack_score = SCORE_NEUTRAL
-        return result
-
     # [FIX] Selalu normalisasi ke basis 0-100 via available_weight, terlepas dari jumlah
     # valid_pairs. Versi lama hanya normalize kalau valid_pairs >= 3, sehingga saat 2 pair
     # valid + keduanya bull: score=60, tapi saat 3 pair valid + semua bull: score=100 —
     # inkonsisten untuk kondisi market yang identik tapi data lebih pendek.
-    normalized = (stack_score / available_weight * 100) if available_weight > 0 else 0.0
-
     # [FIX] Pakai 'is not None' bukan truthiness check — ema9/ema21 bisa bernilai 0.0
     # (harga crypto sangat kecil) sehingga 'if result.ema9' → False meski nilainya valid.
     # [IMPROVE] Simetriskan gap_bonus/gap_penalty: bull dapat bonus +EMA_GAP_BONUS_MAX,
     # bear dapat penalti ekuivalen sehingga skor mencerminkan kekuatan gap secara konsisten.
-    gap_adj = 0.0
-    if result.ema9 is not None and result.ema21 is not None and result.ema21 > 0:
-        gap_pct = (result.ema9 - result.ema21) / result.ema21 * 100
-        # Positif (bull gap): +0..+EMA_GAP_BONUS_MAX | Negatif (bear gap): -0..-EMA_GAP_BONUS_MAX
-        gap_adj = min(EMA_GAP_BONUS_MAX, max(-EMA_GAP_BONUS_MAX, gap_pct * EMA_GAP_BONUS_MAX))
+    score = _score_ema_stack(ema_values, side="long")
+    if score is None:
+        errors.append("ema_stack: tidak ada pair EMA yang bisa dihitung")
+        result.ema_stack_score = SCORE_NEUTRAL
+        result.ema_stack_score_short = SCORE_NEUTRAL
+        return result
 
-    raw = clamp_score(normalized + gap_adj)
-    result.ema_stack_score = raw
+    result.ema_stack_score = score
+    result.ema_stack_score_short = _score_ema_stack(ema_values, side="short")
     return result
+
+def _score_supertrend_direction(direction: Optional[int], side: str = "long") -> float:
+    # [BIAS-FIX -- Batch 5] direction in {1,-1} only -- mirror(direction) =
+    # -direction, reuse formula SAMA (BULL_SCORE if direction==1 else
+    # BEAR_SCORE). Mekanis identik dgn "swap constant mapping" krn cuma ada
+    # 2 kemungkinan nilai.
+    if direction is None:
+        return SCORE_NEUTRAL
+    if side == "short":
+        direction = -direction
+    return SUPERTREND_BULL_SCORE if direction == 1 else SUPERTREND_BEAR_SCORE
+
 
 def _calculate_supertrend_raw(
     df: pd.DataFrame,
@@ -249,7 +284,7 @@ def _calculate_supertrend_raw(
 
     last_value     = float(supertrend[-1])
     last_direction = int(direction[-1])
-    score = SUPERTREND_BULL_SCORE if last_direction == 1 else SUPERTREND_BEAR_SCORE
+    score = _score_supertrend_direction(last_direction)
 
     return last_value, last_direction, score
 
@@ -269,8 +304,47 @@ def calculate_supertrend(
     out.supertrend_value = st_val
     out.supertrend_direction = st_dir
     out.supertrend_score = clamp_score(st_score)
+    out.supertrend_score_short = clamp_score(_score_supertrend_direction(st_dir, side="short"))
     out.composite_score = out.supertrend_score
     return out
+
+def _score_cross(
+    golden_bars_ago: Optional[int],
+    dead_bars_ago: Optional[int],
+    gap_pct: float,
+    lookback: int,
+    side: str = "long",
+) -> float:
+    """
+    [BIAS-FIX -- Batch 5] side="short": swap golden_bars_ago<->dead_bars_ago
+    dan negasi gap_pct, lalu jalankan cabang logic yang SAMA PERSIS di bawah
+    tanpa modifikasi -- terverifikasi manual: swap membuat cabang mana yang
+    aktif (anchor 65+ vs 35-) terbalik dgn benar, dan gap_pct yg dinegasi
+    otomatis memberi tanda yg benar ke gap_bonus/gap_penalty di cabang
+    manapun yang akhirnya jalan.
+    """
+    if side == "short":
+        golden_bars_ago, dead_bars_ago = dead_bars_ago, golden_bars_ago
+        gap_pct = -gap_pct
+
+    if golden_bars_ago is None and dead_bars_ago is None:
+        if gap_pct > 0:
+            return clamp_score(50.0 + min(15.0, gap_pct * 5))
+        else:
+            return clamp_score(50.0 + max(-15.0, gap_pct * 5))
+
+    gc = golden_bars_ago if golden_bars_ago is not None else lookback + 1
+    dc = dead_bars_ago   if dead_bars_ago   is not None else lookback + 1
+
+    if gc < dc:
+        recency_bonus = max(0.0, 20.0 - gc * 0.5)
+        gap_bonus     = clamp_score(min(15.0, max(0.0, gap_pct * 5)))
+        return clamp_score(65.0 + recency_bonus + gap_bonus)
+    else:
+        recency_bonus = max(0.0, 20.0 - dc * 0.5)
+        gap_penalty   = clamp_score(min(15.0, max(0.0, -gap_pct * 5)))
+        return clamp_score(35.0 - recency_bonus - gap_penalty)
+
 
 def calculate_golden_dead_cross(
     df: pd.DataFrame,
@@ -278,7 +352,7 @@ def calculate_golden_dead_cross(
     slow_period: int = 21,
     lookback: int = 50,
     errors: Optional[List[str]] = None,
-) -> Tuple[Optional[int], Optional[int], float]:
+) -> Tuple[Optional[int], Optional[int], float, float]:
     if errors is None:
         errors = []
 
@@ -287,7 +361,7 @@ def calculate_golden_dead_cross(
         errors.append(
             f"golden_dead_cross: data hanya {len(df)} bar, butuh {min_bars}"
         )
-        return None, None, SCORE_NEUTRAL
+        return None, None, SCORE_NEUTRAL, SCORE_NEUTRAL
 
     close = df["close"]
     fast_ema = _calc_ema(close, fast_period)
@@ -318,32 +392,52 @@ def calculate_golden_dead_cross(
     current_close = last_close if last_close > 0 else 1.0
     gap_pct = (current_diff / current_close) * 100
 
-    if golden_bars_ago is None and dead_bars_ago is None:
-        # [BUG-FIX] Sebelumnya anchor 55.0 (positif) vs 45.0 (negatif) —
-        # menyebabkan lompatan skor 10 poin persis di gap_pct=0 (terbukti:
-        # gap_pct=+0.0001 -> 55.0005, gap_pct=0.0/-0.0001 -> ~45.0). Anchor
-        # sekarang 50.0 (netral murni) di kedua cabang, slope (5/%) dan cap
-        # (±15) dipertahankan sama — gap_pct=0 = tidak ada info arah sama
-        # sekali, jadi netral persis adalah anchor yang benar.
-        if gap_pct > 0:
-            score = clamp_score(50.0 + min(15.0, gap_pct * 5))
-        else:
-            score = clamp_score(50.0 + max(-15.0, gap_pct * 5))
-        return None, None, score
+    # [BUG-FIX] Sebelumnya anchor 55.0 (positif) vs 45.0 (negatif) —
+    # menyebabkan lompatan skor 10 poin persis di gap_pct=0 (terbukti:
+    # gap_pct=+0.0001 -> 55.0005, gap_pct=0.0/-0.0001 -> ~45.0). Anchor
+    # sekarang 50.0 (netral murni) di kedua cabang, slope (5/%) dan cap
+    # (±15) dipertahankan sama — gap_pct=0 = tidak ada info arah sama
+    # sekali, jadi netral persis adalah anchor yang benar.
+    score = _score_cross(golden_bars_ago, dead_bars_ago, gap_pct, lookback, side="long")
+    score_short = _score_cross(golden_bars_ago, dead_bars_ago, gap_pct, lookback, side="short")
 
-    gc = golden_bars_ago if golden_bars_ago is not None else lookback + 1
-    dc = dead_bars_ago   if dead_bars_ago   is not None else lookback + 1
+    return golden_bars_ago, dead_bars_ago, score, score_short
 
-    if gc < dc:
-        recency_bonus = max(0.0, 20.0 - gc * 0.5)
-        gap_bonus     = clamp_score(min(15.0, max(0.0, gap_pct * 5)))
-        score = clamp_score(65.0 + recency_bonus + gap_bonus)
+def _score_vwap_zone(
+    last_close: float,
+    vwap_val: float,
+    upper_1: float,
+    upper_2: float,
+    lower_1: float,
+    lower_2: float,
+    side: str = "long",
+) -> float:
+    """
+    [BIAS-FIX -- Batch 5] side="short": cerminkan last_close di sekitar
+    vwap_val (last_close' = 2*vwap_val - last_close), lalu jalankan ladder
+    6-zona yang SAMA PERSIS tanpa modifikasi. Exact krn upper_1/2 & lower_1/2
+    dibangun simetris (vwap ± 1std, vwap ± 2std) -- reflection ini
+    memetakan tiap zona persis ke zona mirrornya (upper_2 <-> lower_2, dst).
+    """
+    if side == "short":
+        last_close = 2.0 * vwap_val - last_close
+
+    # Scoring VWAP: trend-following di zona tengah, mean-reversion di ekstrem.
+    if last_close >= upper_2:
+        score = 30.0
+    elif last_close >= upper_1:
+        score = 55.0
+    elif last_close >= vwap_val:
+        score = 72.0
+    elif last_close >= lower_1:
+        score = 45.0
+    elif last_close >= lower_2:
+        score = 35.0
     else:
-        recency_bonus = max(0.0, 20.0 - dc * 0.5)
-        gap_penalty   = clamp_score(min(15.0, max(0.0, -gap_pct * 5)))
-        score = clamp_score(35.0 - recency_bonus - gap_penalty)
+        score = 65.0
 
-    return golden_bars_ago, dead_bars_ago, score
+    return clamp_score(score)
+
 
 def calculate_vwap_multiday(
     df: pd.DataFrame,
@@ -424,20 +518,9 @@ def calculate_vwap_multiday(
     # Zona lower band  (>= lower_1):  slight bearish    → 45
     # Di bawah lower_1 (>= lower_2):  bearish           → 35
     # Ekstrem oversold  (< lower_2):  bullish reversal  → 65  ← mean-reversion mirror dari >= upper_2
-    if last_close >= upper_2:
-        score = 30.0
-    elif last_close >= upper_1:
-        score = 55.0
-    elif last_close >= vwap_val:
-        score = 72.0
-    elif last_close >= lower_1:
-        score = 45.0
-    elif last_close >= lower_2:
-        score = 35.0
-    else:
-        score = 65.0  # extreme oversold — mean-reversion bias (simetri dengan >= upper_2 → 30)
+    score = _score_vwap_zone(last_close, vwap_val, upper_1, upper_2, lower_1, lower_2, side="long")
 
-    return vwap_val, bands, clamp_score(score)
+    return vwap_val, bands, score
 
 def calculate_vwap(
     df: pd.DataFrame,
@@ -451,6 +534,16 @@ def calculate_vwap(
     out.vwap_upper_2 = bands.get("upper_2")
     out.vwap_lower_2 = bands.get("lower_2")
     out.vwap_score = vwap_score
+    if vwap_val is not None:
+        last_close = float(df["close"].iloc[-1])
+        out.vwap_score_short = _score_vwap_zone(
+            last_close, vwap_val,
+            bands.get("upper_1"), bands.get("upper_2"),
+            bands.get("lower_1"), bands.get("lower_2"),
+            side="short",
+        )
+    else:
+        out.vwap_score_short = SCORE_NEUTRAL
     out.composite_score = vwap_score
     return out
 
@@ -471,6 +564,7 @@ def score_trend(
     result.ema100 = ema_result.ema100
     result.ema200 = ema_result.ema200
     result.ema_stack_score = ema_result.ema_stack_score
+    result.ema_stack_score_short = ema_result.ema_stack_score_short
     ema_ok = result.ema9 is not None and result.ema21 is not None
 
     # [BUG-FIX] Sebelumnya "cross_ok = True" di-hardcode, TIDAK PERNAH mengecek
@@ -488,10 +582,11 @@ def score_trend(
     # `errors` -- kalau calculate_golden_dead_cross menambah error baru
     # (artinya data tidak cukup), cross_ok=False, dikecualikan dari bobot.
     errors_before_cross = len(errors)
-    gc_bars, dc_bars, cross_score = calculate_golden_dead_cross(df, errors=errors)
+    gc_bars, dc_bars, cross_score, cross_score_short = calculate_golden_dead_cross(df, errors=errors)
     result.golden_cross_bars_ago = gc_bars
     result.dead_cross_bars_ago   = dc_bars
     result.cross_score           = cross_score
+    result.cross_score_short     = cross_score_short
     cross_ok = len(errors) == errors_before_cross
 
     # Supertrend aktif untuk semua TF termasuk 1D — adaptive multiplier handle perbedaan volatilitas
@@ -499,11 +594,13 @@ def score_trend(
     result.supertrend_value     = st_val
     result.supertrend_direction = st_dir
     result.supertrend_score     = st_score
+    result.supertrend_score_short = _score_supertrend_direction(st_dir, side="short")
     st_ok = st_val is not None
 
     skip_vwap = timeframe in ("1d", "3d", "1w")
     if skip_vwap:
         result.vwap_score = SCORE_NEUTRAL
+        result.vwap_score_short = SCORE_NEUTRAL
         vwap_ok = False
     else:
         vwap_val, bands, vwap_score = calculate_vwap_multiday(df, errors)
@@ -513,6 +610,16 @@ def score_trend(
         result.vwap_upper_2 = bands.get("upper_2")
         result.vwap_lower_2 = bands.get("lower_2")
         result.vwap_score   = vwap_score
+        if vwap_val is not None:
+            last_close = float(df["close"].iloc[-1])
+            result.vwap_score_short = _score_vwap_zone(
+                last_close, vwap_val,
+                bands.get("upper_1"), bands.get("upper_2"),
+                bands.get("lower_1"), bands.get("lower_2"),
+                side="short",
+            )
+        else:
+            result.vwap_score_short = SCORE_NEUTRAL
         vwap_ok = vwap_val is not None
 
     raw_weights = {

@@ -241,8 +241,8 @@ function calcDuration(entryTime) {
 function demoPositions() {
   const now = Date.now();
   return [
-    { symbol: 'ALT/USDT', side: 'long', entry_price: 0.402, current_price: 0.412, amount: 1200, unrealized_pnl: 22.4, unrealized_pnl_pct: 2.49, stop_loss_price: 0.394, take_profit_price: 0.44, entry_time: new Date(now - 3600e3 * 1.4).toISOString(), signal_origin: 'scalp_volatile|RIDE_WAVE', is_closing: false },
-    { symbol: 'SUI/USDT', side: 'long', entry_price: 4.21, current_price: 4.31, amount: 65, unrealized_pnl: 16.5, unrealized_pnl_pct: 2.37, stop_loss_price: 4.05, take_profit_price: 4.55, entry_time: new Date(now - 3600e3 * 0.6).toISOString(), signal_origin: 'breakout_swift|QUICK_EXIT', is_closing: false },
+    { symbol: 'ALT/USDT', side: 'long', entry_price: 0.402, current_price: 0.412, amount: 1200, unrealized_pnl: 22.4, unrealized_pnl_pct: 2.49, stop_loss_price: 0.394, take_profit_price: 0.44, entry_time: new Date(now - 3600e3 * 1.4).toISOString(), profile: 'scalp_volatile', is_closing: false },
+    { symbol: 'SUI/USDT', side: 'long', entry_price: 4.21, current_price: 4.31, amount: 65, unrealized_pnl: 16.5, unrealized_pnl_pct: 2.37, stop_loss_price: 4.05, take_profit_price: 4.55, entry_time: new Date(now - 3600e3 * 0.6).toISOString(), profile: 'breakout_swift', is_closing: false },
   ];
 }
 
@@ -354,8 +354,7 @@ class Component extends DCLogic {
 
     const rows = positions.map(p => {
       const pnl = p.unrealized_pnl || 0;
-      const [profRaw, mode] = (p.signal_origin || '').split('|');
-      const prof = (profRaw || 'scalp_volatile').replace(/_/g, ' ');
+      const prof = (p.profile || 'scalp_volatile').replace(/_/g, ' ');
       const isBE = p.stop_loss_price && p.entry_price && p.stop_loss_price >= p.entry_price;
       return {
         symbol: p.symbol, detailHref: 'Coin Detail.dc.html?symbol=' + encodeURIComponent(p.symbol), profile: prof,

@@ -664,9 +664,10 @@ def score_pattern(
 
     if len(df) < 3:
         errors.append("score_pattern: butuh minimal 3 bar untuk deteksi pattern")
-        result.pattern_score   = SCORE_NEUTRAL
-        result.context_score   = SCORE_NEUTRAL
-        result.composite_score = SCORE_NEUTRAL
+        result.pattern_score       = SCORE_NEUTRAL
+        result.pattern_score_short = SCORE_NEUTRAL
+        result.context_score       = SCORE_NEUTRAL
+        result.composite_score     = SCORE_NEUTRAL
         return result
 
     vol_confirmed = _is_volume_confirmed(df)
@@ -743,6 +744,14 @@ def score_pattern(
         )
 
     result.pattern_score = pattern_score
+    # [BIAS-FIX -- Batch 1, Class B] _score_single_pattern() SUDAH mirror-
+    # symmetric (bearish pattern = 50-magnitude, bullish = 50+magnitude
+    # dgn magnitude yang SAMA persis, dikonfirmasi dari konstruksi
+    # _BASE_SCORES: tiap entry bearish = -(entry_bullish_pasangannya - 50)).
+    # Karena itu 100-x adalah mirror yang PERSIS BENAR di sini -- bukan
+    # sekadar pendekatan -- beda dgn kategori lain (trend/oscillator/dst)
+    # yang butuh reformulasi cabang, bukan komplemen sederhana.
+    result.pattern_score_short = clamp_score(100.0 - pattern_score)
 
     context_score_map = {
         PatternContext.NEAR_SUPPORT:    70.0,

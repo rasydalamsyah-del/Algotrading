@@ -230,8 +230,11 @@ class RiskManager(BaseRiskManager):
                 f"{symbol} sedang di-halt karena loss >= {self._max_loss_per_symbol}%.",
             )
         if is_opening_new and self._open_positions_count >= self._max_open_positions:
+            # [CAPITAL-ALLOCATOR PRASYARAT] Slot habis = soal kapasitas,
+            # bukan sinyal jelek -- kandidat ini layak ditunggu sampai ada
+            # posisi lain yang tutup (beda dari REJECTED biasa).
             return RiskAssessment(
-                RiskDecision.REJECTED,
+                RiskDecision.REJECTED_INSUFFICIENT_CAPITAL,
                 f"Max open positions reached: "
                 f"{self._open_positions_count}/{self._max_open_positions}",
             )
@@ -268,8 +271,11 @@ class RiskManager(BaseRiskManager):
         # futures = margin bebas (lihat FutureExchangeConnector.fetch_balance),
         # BUKAN saldo currency spot biasa.
         if required_margin > self._free_balance * 0.99:
+            # [CAPITAL-ALLOCATOR PRASYARAT] Margin kurang = soal kapasitas,
+            # bukan sinyal jelek -- kandidat ini layak ditunggu sampai
+            # margin bebas bertambah (beda dari REJECTED biasa).
             return RiskAssessment(
-                RiskDecision.REJECTED,
+                RiskDecision.REJECTED_INSUFFICIENT_CAPITAL,
                 f"Margin tidak cukup: butuh ${required_margin:.2f}, "
                 f"tersedia ${self._free_balance:.2f}",
             )

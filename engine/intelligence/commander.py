@@ -30,6 +30,7 @@ from engine.core.models import (
     clamp_score,
 )
 from engine.intelligence.classifier import is_tradeable_regime
+from engine.risk_base import RiskDecision
 
 log = logging.getLogger("intelligence.commander")
 
@@ -167,12 +168,18 @@ def _refine_sl_tp(
 def _gate_score_and_trigger(
     signal: ScoredSignal,
     decision: TradeDecision,
+    side: str = "long",
+    # [BIAS-FIX] Default "long" -- caller lama tetap dapat perilaku identik.
+    # Checkpoint threshold KEDUA (independen dari checkpoint di run_gate3_worker
+    # main_future.py) -- kalau tidak ikut di-side-aware-kan, short yang lolos
+    # checkpoint pertama akan tertahan lagi di sini pakai matrix long.
 ) -> bool:
     from engine.profiles.thresholds import get_dynamic_threshold
     try:
         min_score = get_dynamic_threshold(
             signal.strategy_profile,
-            signal.regime.value if signal.regime else "undefined"
+            signal.regime.value if signal.regime else "undefined",
+            side=side,
         )
     except Exception:
         min_score = signal.threshold_used
@@ -196,12 +203,15 @@ def _gate_regime(
     decision: TradeDecision,
     allowed_regimes: List[str],
     min_confidence: float = REGIME_MIN_CONFIDENCE_TO_TRADE,
+    side: str = "long",
+    # [BIAS-FIX] Default "long" -- caller lama tetap dapat perilaku identik.
 ) -> bool:
     tradeable, reason = is_tradeable_regime(
         regime=signal.regime,
         confidence=signal.regime_confidence,
         allowed_regimes=allowed_regimes,
         min_confidence=min_confidence,
+        side=side,
     )
     if not tradeable:
         decision.add_gate_failed("G2_REGIME", reason)
@@ -299,6 +309,15 @@ async def _gate_risk_manager(
         )
 
         if not assessment.is_approved:
+            # [FUTURES-READY -- capital_allocator prasyarat] Bedakan reject
+            # krn kehabisan kapasitas (slot/margin) dari reject biasa --
+            # decision.capital_constrained dibaca run_gate3_worker (futures)
+            # utk tahu kandidat ini layak diregistrasi sbg "pending", bukan
+            # dibuang permanen. Tidak mengubah return tuple (False, 0.0)
+            # -- caller lama (decide()) yang belum tahu field ini tetap
+            # dapat perilaku identik (REJECT keras).
+            if assessment.decision == RiskDecision.REJECTED_INSUFFICIENT_CAPITAL:
+                decision.capital_constrained = True
             decision.add_gate_failed(
                 "G4_RISK",
                 assessment.reason or "Risk manager rejected",
@@ -503,7 +522,15 @@ async def decide(
     try:
         from engine.profiles.thresholds import get_profile_thresholds
         profile_cfg = get_profile_thresholds(signal.strategy_profile)
-        allowed_regimes     = profile_cfg.allowed_regimes
+        # [BIAS-FIX] Pilih whitelist regime sesuai side -- sebelumnya SELALU
+        # profile_cfg.allowed_regimes (long-only) apapun side-nya, jadi short
+        # di trending_bear selalu tertolak G2_REGIME walau allows_short sudah
+        # benar (whitelist ini dicek TERPISAH & LEBIH DULU dari allows_long/short
+        # di is_tradeable_regime()).
+        allowed_regimes     = (
+            profile_cfg.allowed_regimes if side != "short"
+            else profile_cfg.allowed_regimes_short
+        )
         max_spread_pct      = float(
             max_spread_pct_override
             if max_spread_pct_override is not None
@@ -522,7 +549,7 @@ async def decide(
         decision.decision_narrative = _build_narrative(decision, "REJECT — supertrend bearish + tren kuat")
         return decision
 
-    if not _gate_score_and_trigger(signal, decision):
+    if not _gate_score_and_trigger(signal, decision, side=side):
         # Trigger not met is a hard reject (not "wait for better score").
         decision.action           = DecisionAction.REJECT if not signal.trigger_met else DecisionAction.WAIT
         decision.rejection_reason = decision.gates_failed[-1] if decision.gates_failed else "Score/trigger tidak terpenuhi"
@@ -538,7 +565,7 @@ async def decide(
         if min_regime_confidence is not None
         else float(getattr(profile_cfg, "min_regime_confidence", REGIME_MIN_CONFIDENCE_TO_TRADE))
     )
-    if not _gate_regime(signal, decision, allowed_regimes, min_confidence=min_conf):
+    if not _gate_regime(signal, decision, allowed_regimes, min_confidence=min_conf, side=side):
         decision.action           = DecisionAction.WAIT
         decision.rejection_reason = decision.gates_failed[-1] if decision.gates_failed else "Regime tidak diizinkan"
         decision.decision_narrative = _build_narrative(decision, "WAIT — regime tidak favorable")
@@ -558,9 +585,22 @@ async def decide(
         entry_price=entry_price,
     )
     if not risk_ok:
-        decision.action           = DecisionAction.REJECT
+        # [FUTURES-READY -- capital_allocator prasyarat] Kehabisan kapasitas
+        # (slot/margin) dipetakan ke WAIT (retry-worthy), bukan REJECT keras
+        # -- konsisten dgn pemakaian WAIT lain di fungsi ini (regime belum
+        # cocok, spread lebar: kondisi yg bisa membaik, bukan sinyal jelek
+        # permanen). Kegagalan risk-manager lain (halted/drawdown/dst) tetap
+        # REJECT seperti sebelumnya -- capital_constrained hanya True utk
+        # kasus kapasitas spesifik.
+        decision.action = (
+            DecisionAction.WAIT if decision.capital_constrained else DecisionAction.REJECT
+        )
         decision.rejection_reason = decision.gates_failed[-1]
-        decision.decision_narrative = _build_narrative(decision, "REJECT — risk manager block")
+        decision.decision_narrative = _build_narrative(
+            decision,
+            "WAIT — kapasitas modal penuh (kandidat layak, tunggu slot/margin)"
+            if decision.capital_constrained else "REJECT — risk manager block",
+        )
         return decision
 
     kelly_size = await _gate_kelly_sizing(signal, decision, approved_size, profile_cfg, db_manager)

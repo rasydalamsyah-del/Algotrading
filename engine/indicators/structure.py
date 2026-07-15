@@ -157,12 +157,21 @@ def calculate_ichimoku(df: pd.DataFrame) -> dict:
 
     return result
 
-def score_ichimoku(data: dict, current_price: float) -> float:
+def score_ichimoku(data: dict, current_price: float, side: str = "long") -> float:
+    # [BIAS-FIX -- Batch 6] side="short": setiap term diidentifikasi label/
+    # perbandingan mana yang "selaras dgn arah ini" (good_pvc/is_aligned/
+    # good_cross), lalu swap yang mana memicu bonus -- pola sama dgn
+    # ema_stack_score (Batch 5), bukan input-reflection (tidak ada nilai
+    # tunggal utk dicerminkan di sini, cuma label/perbandingan diskrit).
+    is_short = side == "short"
     score = 50.0
+
     pvc = data.get("price_vs_cloud")
-    if pvc == "above":
+    good_pvc = "below" if is_short else "above"
+    bad_pvc  = "above" if is_short else "below"
+    if pvc == good_pvc:
         score += 20.0
-    elif pvc == "below":
+    elif pvc == bad_pvc:
         score -= 20.0
     elif pvc == "inside":
         score += 0.0  # netral, pasar ragu
@@ -170,24 +179,29 @@ def score_ichimoku(data: dict, current_price: float) -> float:
     tenkan = data.get("tenkan")
     kijun  = data.get("kijun")
     if tenkan and kijun:
-        if tenkan > kijun:
+        is_aligned = (tenkan < kijun) if is_short else (tenkan > kijun)
+        if is_aligned:
             score += 8.0
         else:
             score -= 8.0
-        if current_price > tenkan:
+        price_aligned_tenkan = (current_price < tenkan) if is_short else (current_price > tenkan)
+        if price_aligned_tenkan:
             score += 5.0
-        if current_price > kijun:
+        price_aligned_kijun = (current_price < kijun) if is_short else (current_price > kijun)
+        if price_aligned_kijun:
             score += 5.0
 
     tk_cross = data.get("tk_cross")
-    if tk_cross == "bullish":
+    good_cross = "bearish" if is_short else "bullish"
+    bad_cross  = "bullish" if is_short else "bearish"
+    if tk_cross == good_cross:
         score += 10.0
-    elif tk_cross == "bearish":
+    elif tk_cross == bad_cross:
         score -= 10.0
 
-    # Cloud thickness: tebal = support kuat
+    # Cloud thickness: tebal = support kuat (long) / resistance kuat (short)
     ct = data.get("cloud_thickness")
-    if ct and pvc == "above":
+    if ct and pvc == good_pvc:
         score += min(ct / current_price * 500, 5.0)  # maks +5
 
     return clamp_score(score)
@@ -251,13 +265,26 @@ def calculate_sar(df: pd.DataFrame,
     return float(sar), direction
 
 def score_sar(sar_value: Optional[float], sar_direction: Optional[str],
-              current_price: float) -> float:
+              current_price: float, side: str = "long") -> float:
+    # [BIAS-FIX -- Batch 6] gap_pct (jarak price dari SAR) dihitung SAMA utk
+    # kedua sisi -- selalu positif by construction, tergantung sar_direction
+    # AKTUAL, bukan side. Yang di-swap cuma FORMULA mana (reward 3-tier vs
+    # penalty 2-tier) yang dipakai utk arah mana -- literal "swap arah up/
+    # down yang dipakai", side="long" (good_direction="up") identik persis
+    # dgn formula asli.
     if sar_value is None or sar_direction is None:
         return 50.0
+
     if sar_direction == "up":
         # Titik di bawah harga = uptrend
         gap_pct = (current_price - sar_value) / current_price * 100
-        # Makin dekat ke SAR = makin rentan reversal
+    else:
+        # SAR di atas harga = downtrend
+        gap_pct = (sar_value - current_price) / current_price * 100
+
+    good_direction = "down" if side == "short" else "up"
+    if sar_direction == good_direction:
+        # Makin lebar gap = makin kuat trend konfirmasi arah ini
         if gap_pct > 3.0:
             return clamp_score(72.0 + min(gap_pct - 3.0, 5.0) * 1.5)
         elif gap_pct > 1.0:
@@ -265,8 +292,6 @@ def score_sar(sar_value: Optional[float], sar_direction: Optional[str],
         else:
             return clamp_score(55.0)  # terlalu dekat, waspada
     else:
-        # SAR di atas harga = downtrend
-        gap_pct = (sar_value - current_price) / current_price * 100
         if gap_pct > 3.0:
             return clamp_score(28.0 - min(gap_pct - 3.0, 5.0) * 1.5)
         else:
@@ -410,38 +435,57 @@ def calculate_pivot_points(df: pd.DataFrame) -> dict:
 
     return result
 
-def score_pivot(data: dict, current_price: float) -> float:
+def score_pivot(data: dict, current_price: float, side: str = "long") -> float:
+    # [BIAS-FIX -- Batch 6] side="short": role-swap (bukan input-reflection,
+    # pola sama dgn score_ichimoku) -- nearest_support & nearest_resistance
+    # TIDAK berjarak simetris dari pivot secara umum (r1-p = p-l, p-s1 = h-p,
+    # cuma sama kalau close persis di tengah high-low), jadi mirror harga
+    # literal di sekitar pivot TIDAK menghasilkan pasangan (support,
+    # resistance) yang sama seperti menukar mana yg "dekat = ideal entry"
+    # vs "dekat = mentok". Yang ditukar: untuk short, resistance berperan
+    # sbg level "ideal entry" (ex-support), support berperan sbg level
+    # "mentok/ruang gerak" (ex-resistance) -- threshold & besaran bonus/
+    # penalty tiap tier dipertahankan identik dgn versi long.
     if data.get("pivot") is None:
         return 50.0
+    is_short = side == "short"
     score = 50.0
     pivot = data["pivot"]
     ns    = data.get("nearest_support")
     nr    = data.get("nearest_resistance")
 
-    if current_price >= pivot:
+    above_pivot = current_price >= pivot
+    if above_pivot != is_short:
         score += 10.0
     else:
         score -= 10.0
 
-    # Seberapa dekat ke support (bagus buat entry)
-    if ns and current_price > 0:
-        dist_support_pct = (current_price - ns) / current_price * 100
-        if dist_support_pct < 1.0:
-            score += 12.0   # sangat dekat support = zona ideal entry
-        elif dist_support_pct < 2.0:
-            score += 6.0
-        elif dist_support_pct > 5.0:
-            score -= 5.0    # terlalu jauh dari support
+    near_level = nr if is_short else ns   # "ideal entry" level
+    far_level  = ns if is_short else nr   # "mentok / ruang gerak" level
 
-    # Seberapa dekat ke resistance (kalau terlalu dekat, upside terbatas)
-    if nr and current_price > 0:
-        dist_resist_pct = (nr - current_price) / current_price * 100
-        if dist_resist_pct < 1.0:
-            score -= 15.0   # hampir mentok resistance
-        elif dist_resist_pct < 2.0:
+    # Seberapa dekat ke level "ideal entry" (support utk long, resistance utk short)
+    if near_level and current_price > 0:
+        dist_near_pct = (current_price - near_level) / current_price * 100
+        if is_short:
+            dist_near_pct = -dist_near_pct
+        if dist_near_pct < 1.0:
+            score += 12.0   # sangat dekat = zona ideal entry
+        elif dist_near_pct < 2.0:
+            score += 6.0
+        elif dist_near_pct > 5.0:
+            score -= 5.0    # terlalu jauh dari level ideal entry
+
+    # Seberapa dekat ke level "mentok" (resistance utk long, support utk short)
+    if far_level and current_price > 0:
+        dist_far_pct = (far_level - current_price) / current_price * 100
+        if is_short:
+            dist_far_pct = -dist_far_pct
+        if dist_far_pct < 1.0:
+            score -= 15.0   # hampir mentok
+        elif dist_far_pct < 2.0:
             score -= 7.0
-        elif dist_resist_pct > 4.0:
-            score += 5.0    # ruang gerak ke atas masih besar
+        elif dist_far_pct > 4.0:
+            score += 5.0    # ruang gerak masih besar
 
     return clamp_score(score)
 
@@ -568,17 +612,35 @@ def calculate_fibonacci(df: pd.DataFrame) -> dict:
 
     return result
 
-def score_fibonacci(data: dict, current_price: float) -> float:
+def score_fibonacci(data: dict, current_price: float, side: str = "long") -> float:
+    # [BIAS-FIX -- Batch 6, fungsi 4/4] side="short": role-swap, pola sama
+    # persis dgn score_pivot -- nearest_fib_support/resistance TIDAK
+    # simetris di sekitar harga scr umum (level FIB_LEVELS 0.236/0.786 TIDAK
+    # saling melengkapi ke 1.0 spt 0.382/0.618/0.500, jadi "uptrend" fib set
+    # bukan reflection sempurna dari "downtrend" fib set -- diverifikasi
+    # empiris dulu, bukan diasumsikan). near_level = level "ideal entry"
+    # (support utk long, resistance utk short), far_level = level "mentok"
+    # (resistance utk long, support utk short). Bonus golden-ratio (fib_618)
+    # tetap dicek murni dari fib_618 vs current_price (angka absolut, tidak
+    # tergantung side), tapi cuma dievaluasi di cabang near_level -- SAMA
+    # persis dgn perilaku asli (yg juga cuma cek golden ratio di cabang ns,
+    # tidak pernah di cabang nr) supaya long byte-identical persis.
     if data.get("fib_swing_high") is None:
         return 50.0
+    is_short = side == "short"
     score = 50.0
     ns = data.get("nearest_fib_support")
     nr = data.get("nearest_fib_resistance")
+    fib618 = data.get("fib_618")
 
-    if ns and current_price > 0:
-        dist_pct = (current_price - ns) / current_price * 100
+    near_level = nr if is_short else ns   # "ideal entry"
+    far_level  = ns if is_short else nr   # "mentok / ruang gerak"
+
+    if near_level and current_price > 0:
+        dist_pct = (current_price - near_level) / current_price * 100
+        if is_short:
+            dist_pct = -dist_pct
         # 61.8% adalah golden ratio — bonus ekstra
-        fib618 = data.get("fib_618")
         if fib618 and abs(current_price - fib618) / current_price < 0.005:
             score += 15.0   # tepat di golden ratio
         elif dist_pct < 0.5:
@@ -588,8 +650,10 @@ def score_fibonacci(data: dict, current_price: float) -> float:
         elif dist_pct > 6.0:
             score -= 5.0
 
-    if nr and current_price > 0:
-        dist_pct = (nr - current_price) / current_price * 100
+    if far_level and current_price > 0:
+        dist_pct = (far_level - current_price) / current_price * 100
+        if is_short:
+            dist_pct = -dist_pct
         if dist_pct < 1.0:
             score -= 12.0
         elif dist_pct < 2.0:
@@ -930,6 +994,7 @@ def score_structure(df: pd.DataFrame, errors: Optional[List[str]] = None):
         result.cloud_thickness = ich["cloud_thickness"]
         result.tk_cross        = ich["tk_cross"]
         result.ichimoku_score  = score_ichimoku(ich, current_price)
+        result.ichimoku_score_short = score_ichimoku(ich, current_price, side="short")
     except Exception as exc:
         if errors is not None:
             errors.append(f"ichimoku: {exc}")
@@ -940,6 +1005,7 @@ def score_structure(df: pd.DataFrame, errors: Optional[List[str]] = None):
         result.sar_value       = sar_val
         result.sar_direction   = sar_dir
         result.sar_score       = score_sar(sar_val, sar_dir, current_price)
+        result.sar_score_short = score_sar(sar_val, sar_dir, current_price, side="short")
     except Exception as exc:
         if errors is not None:
             errors.append(f"sar: {exc}")
@@ -959,6 +1025,7 @@ def score_structure(df: pd.DataFrame, errors: Optional[List[str]] = None):
         result.price_vs_pivot     = piv["price_vs_pivot"]
         result.pivot_period       = piv["pivot_period"]
         result.pivot_score        = score_pivot(piv, current_price)
+        result.pivot_score_short  = score_pivot(piv, current_price, side="short")
     except Exception as exc:
         if errors is not None:
             errors.append(f"pivot: {exc}")
@@ -980,6 +1047,7 @@ def score_structure(df: pd.DataFrame, errors: Optional[List[str]] = None):
         result.fib_ext_1272           = fib["fib_ext_1272"]
         result.fib_ext_1618           = fib["fib_ext_1618"]
         result.fib_score              = score_fibonacci(fib, current_price)
+        result.fib_score_short        = score_fibonacci(fib, current_price, side="short")
     except Exception as exc:
         if errors is not None:
             errors.append(f"fibonacci: {exc}")

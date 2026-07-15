@@ -191,12 +191,28 @@ def _rsi_zone_exit(rsi: pd.Series) -> Optional[str]:
         return "overbought_exit"
     return None
 
+_ZONE_EXIT_MIRROR = {"oversold_exit": "overbought_exit", "overbought_exit": "oversold_exit"}
+
+
 def _score_rsi(
     rsi_val: float,
     slope: float,
     divergence: float,
     zone_exit: Optional[str],
+    side: str = "long",
 ) -> float:
+    # [BIAS-FIX -- Batch 3, input-reflection] side="short": transform SEMUA
+    # input ke titik cerminnya (RSI midpoint=50, slope=turunan seri yg
+    # dicerminkan, divergence dikonfirmasi via _detect_rsi_divergence
+    # (>0 bullish/<0 bearish), zone_exit swap krn RSI_OVERSOLD(30) &
+    # RSI_OVERBOUGHT(70) persis simetris 100- ) -- lalu jalankan formula
+    # yang SAMA PERSIS di bawah, tidak diduplikasi/direformulasi.
+    if side == "short":
+        rsi_val    = 100.0 - rsi_val
+        slope      = -slope
+        divergence = -divergence
+        zone_exit  = _ZONE_EXIT_MIRROR.get(zone_exit, zone_exit)
+
     if rsi_val <= RSI_OVERSOLD_EXTREME:
         base = 45.0
     elif rsi_val <= RSI_OVERSOLD:
@@ -262,6 +278,7 @@ def calculate_rsi_enhanced(
             rsi_divergence=0.0,
             rsi_zone_exit=None,
             rsi_score=SCORE_NEUTRAL,
+            rsi_score_short=SCORE_NEUTRAL,
             composite_score=SCORE_NEUTRAL,
         )
 
@@ -276,6 +293,7 @@ def calculate_rsi_enhanced(
             rsi_divergence=0.0,
             rsi_zone_exit=None,
             rsi_score=SCORE_NEUTRAL,
+            rsi_score_short=SCORE_NEUTRAL,
             composite_score=SCORE_NEUTRAL,
         )
 
@@ -293,10 +311,11 @@ def calculate_rsi_enhanced(
     divergence = _detect_rsi_divergence(close, rsi_series)
     zone_exit = _rsi_zone_exit(rsi_series)
     score = _score_rsi(rsi_val, slope, divergence, zone_exit)
+    score_short = _score_rsi(rsi_val, slope, divergence, zone_exit, side="short")
 
     log.debug(
-        "rsi: val=%.1f slope=%.2f div=%.2f zone=%s → score=%.1f",
-        rsi_val, slope, divergence, zone_exit, score,
+        "rsi: val=%.1f slope=%.2f div=%.2f zone=%s → score=%.1f/%.1f(short)",
+        rsi_val, slope, divergence, zone_exit, score, score_short,
     )
 
     return MomentumIndicators(
@@ -305,6 +324,7 @@ def calculate_rsi_enhanced(
         rsi_divergence=divergence,
         rsi_zone_exit=zone_exit,
         rsi_score=score,
+        rsi_score_short=score_short,
         composite_score=score,
     )
 
@@ -350,7 +370,24 @@ def _score_macd(
     zero_cross: bool,
     bearish_zero_cross: bool,
     divergence: float,
+    side: str = "long",
 ) -> float:
+    # [BIAS-FIX -- Batch 3, input-reflection] side="short": negasi hist/
+    # hist_prev/macd_line/signal_line (menegasi histogram/garis MACD scr
+    # matematis membalik hist_positive & hist_rising via logic PEMBANDING
+    # yang SUDAH ADA, tidak perlu flip manual terpisah), swap boolean
+    # zero_cross<->bearish_zero_cross (terbukti dari definisi masing2:
+    # negasi macd_line mengubah salah satu kondisi persis jadi yang lain),
+    # negasi divergence (sign convention dikonfirmasi via
+    # _detect_macd_divergence: >0 bullish/<0 bearish).
+    if side == "short":
+        hist       = -hist
+        hist_prev  = -hist_prev if hist_prev is not None else None
+        macd_line  = -macd_line
+        signal_line = -signal_line
+        zero_cross, bearish_zero_cross = bearish_zero_cross, zero_cross
+        divergence = -divergence
+
     hist_rising = (
         hist_prev is not None
         and not np.isnan(hist_prev)
@@ -407,6 +444,7 @@ def calculate_macd_enhanced(
             macd_zero_cross=False,
             macd_divergence=0.0,
             macd_score=SCORE_NEUTRAL,
+            macd_score_short=SCORE_NEUTRAL,
             composite_score=SCORE_NEUTRAL,
         )
 
@@ -423,6 +461,7 @@ def calculate_macd_enhanced(
             macd_zero_cross=False,
             macd_divergence=0.0,
             macd_score=SCORE_NEUTRAL,
+            macd_score_short=SCORE_NEUTRAL,
             composite_score=SCORE_NEUTRAL,
         )
 
@@ -458,10 +497,16 @@ def calculate_macd_enhanced(
         curr_macd, curr_sig,
         zero_cross, bearish_zero_cross, divergence,
     )
+    score_short = _score_macd(
+        curr_hist, hist_prev,
+        curr_macd, curr_sig,
+        zero_cross, bearish_zero_cross, divergence,
+        side="short",
+    )
 
     log.debug(
-        "macd: line=%.5f sig=%.5f hist=%.5f zero_cross=%s div=%.2f → score=%.1f",
-        curr_macd, curr_sig, curr_hist, zero_cross, divergence, score,
+        "macd: line=%.5f sig=%.5f hist=%.5f zero_cross=%s div=%.2f → score=%.1f/%.1f(short)",
+        curr_macd, curr_sig, curr_hist, zero_cross, divergence, score, score_short,
     )
 
     return MomentumIndicators(
@@ -472,6 +517,7 @@ def calculate_macd_enhanced(
         macd_zero_cross=zero_cross,
         macd_divergence=divergence,
         macd_score=score,
+        macd_score_short=score_short,
         composite_score=score,
     )
 
@@ -509,12 +555,29 @@ def _detect_stoch_zone(k_val: float, d_val: float) -> str:
         return "overbought"
     return "neutral"
 
+_KD_CROSS_MIRROR = {"bullish": "bearish", "bearish": "bullish"}
+_STOCH_ZONE_MIRROR = {"oversold": "overbought", "overbought": "oversold", "neutral": "neutral"}
+
+
 def _score_stochrsi(
     k: float,
     d: float,
     kd_cross: Optional[str],
     zone: str,
+    side: str = "long",
 ) -> float:
+    # [BIAS-FIX -- Batch 3, input-reflection] side="short": cerminkan k/d
+    # (midpoint 50), swap kd_cross bullish<->bearish (mengikuti negasi k/d),
+    # swap zone oversold<->overbought (STOCH_OVERSOLD=20 & OVERBOUGHT=80
+    # persis simetris 100-, dikonfirmasi). Perbandingan k>d/k<d di bagian
+    # bawah TIDAK perlu ditangani terpisah -- otomatis kebalik krn k,d
+    # sendiri sudah ditransformasi sebelum sampai ke situ.
+    if side == "short":
+        k        = 100.0 - k
+        d        = 100.0 - d
+        kd_cross = _KD_CROSS_MIRROR.get(kd_cross, kd_cross)
+        zone     = _STOCH_ZONE_MIRROR.get(zone, zone)
+
     if k <= STOCH_OVERSOLD:
         base = 55.0
     elif k <= 50.0:
@@ -566,6 +629,7 @@ def calculate_stochastic_rsi(
             stoch_kd_cross=None,
             stoch_zone="neutral",
             stoch_score=SCORE_NEUTRAL,
+            stoch_score_short=SCORE_NEUTRAL,
             composite_score=SCORE_NEUTRAL,
         )
 
@@ -580,6 +644,7 @@ def calculate_stochastic_rsi(
             stoch_kd_cross=None,
             stoch_zone="neutral",
             stoch_score=SCORE_NEUTRAL,
+            stoch_score_short=SCORE_NEUTRAL,
             composite_score=SCORE_NEUTRAL,
         )
 
@@ -600,6 +665,7 @@ def calculate_stochastic_rsi(
             stoch_kd_cross=None,
             stoch_zone="neutral",
             stoch_score=SCORE_NEUTRAL,
+            stoch_score_short=SCORE_NEUTRAL,
             composite_score=SCORE_NEUTRAL,
         )
 
@@ -611,10 +677,11 @@ def calculate_stochastic_rsi(
     kd_cross = _detect_kd_cross(combined["k"], combined["d"])
     zone = _detect_stoch_zone(k_val, d_val)
     score = _score_stochrsi(k_val, d_val, kd_cross, zone)
+    score_short = _score_stochrsi(k_val, d_val, kd_cross, zone, side="short")
 
     log.debug(
-        "stochrsi: k=%.1f d=%.1f cross=%s zone=%s → score=%.1f",
-        k_val, d_val, kd_cross, zone, score,
+        "stochrsi: k=%.1f d=%.1f cross=%s zone=%s → score=%.1f/%.1f(short)",
+        k_val, d_val, kd_cross, zone, score, score_short,
     )
 
     return MomentumIndicators(
@@ -623,6 +690,7 @@ def calculate_stochastic_rsi(
         stoch_kd_cross=kd_cross,
         stoch_zone=zone,
         stoch_score=score,
+        stoch_score_short=score_short,
         composite_score=score,
     )
 

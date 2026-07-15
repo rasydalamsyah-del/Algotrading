@@ -369,8 +369,8 @@ function demoSnapshot() {
     balance: { total_equity: eqCurve[eqCurve.length - 1], free_balance: 8210.44, daily_pnl: 64.2, daily_pnl_pct: 0.63, open_pnl: 38.9 },
     positions: {
       positions: [
-        { symbol: 'ALT/USDT', entry_price: 0.402, current_price: 0.412, unrealized_pnl: 22.4, unrealized_pnl_pct: 2.49, signal_origin: 'scalp_volatile' },
-        { symbol: 'SUI/USDT', entry_price: 4.21, current_price: 4.31, unrealized_pnl: 16.5, unrealized_pnl_pct: 2.37, signal_origin: 'breakout_swift' },
+        { symbol: 'ALT/USDT', entry_price: 0.402, current_price: 0.412, unrealized_pnl: 22.4, unrealized_pnl_pct: 2.49, profile: 'scalp_volatile' },
+        { symbol: 'SUI/USDT', entry_price: 4.21, current_price: 4.31, unrealized_pnl: 16.5, unrealized_pnl_pct: 2.37, profile: 'breakout_swift' },
       ],
     },
     status: { watchlist: ['BTC/USDT', 'ETH/USDT', 'SOL/USDT', 'ALT/USDT', 'SUI/USDT', 'PEPE/USDT'], uptime_display: '4j 12m' },
@@ -489,7 +489,9 @@ class Component extends DCLogic {
     const b = snap.balance || {};
     const positions = (snap.positions && snap.positions.positions) || [];
     const status = snap.status || {};
-    const curve = (snap.equity_curve && snap.equity_curve.curve) || [];
+    const curveRaw = (snap.equity_curve && snap.equity_curve.curve) || [];
+    // API asli mengembalikan array of objects {timestamp, equity, ...}, bukan angka mentah
+    const curve = curveRaw.map(pt => (pt && typeof pt === 'object') ? pt.equity : pt);
     const tickers = (snap.tickers && snap.tickers.tickers) || {};
     const logs = (snap.logs && snap.logs.logs) || [];
 
@@ -534,7 +536,7 @@ class Component extends DCLogic {
     const positionsRows = positions.map(p => {
       const pnl = p.unrealized_pnl || 0;
       return {
-        symbol: p.symbol, profile: (p.signal_origin || '—').replace(/_/g, ' '),
+        symbol: p.symbol, profile: (p.profile || '—').replace(/_/g, ' '),
         entry: fmtUSD(p.entry_price), now: fmtUSD(p.current_price),
         pnl: signUSD(pnl) + ' (' + signPct(p.unrealized_pnl_pct) + ')',
         pnlColor: pnl >= 0 ? '#00d68f' : '#f0455a',

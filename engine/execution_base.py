@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 import time
 import uuid
 from dataclasses import replace
@@ -57,6 +58,11 @@ class BaseOrderExecutionManager:
 
     _SIGNAL_ORIGIN_MAX = 490
 
+    # [EXECUTOR-STATS] Fallback parsing utk Trade.notes lama (pre-migration
+    # latency_ms column, lihat get_stats()) -- pola "latency_ms=123.45" yang
+    # dititipkan append_trade_note() sebelum kolom terstruktur ada.
+    _LATENCY_NOTE_RE = re.compile(r"latency_ms=([\d.]+)")
+
     def __init__(
         self,
         exchange:          BaseExchangeConnector,
@@ -70,6 +76,114 @@ class BaseOrderExecutionManager:
         self.on_trade_executed = on_trade_executed
         self.max_slippage_pct  = max_slippage_pct
         self.ws_feed           = ws_feed
+
+        # [EXECUTOR-STATS] Counter in-memory murni, reset tiap restart proses
+        # (sengaja tidak dipersist ke bot_state -- lihat diskusi get_stats()).
+        # total_orders/filled_orders/fail_reasons cuma disentuh di dalam
+        # execute_signal() sendiri (satu unit akuntansi = satu signal),
+        # supaya tidak dobel-hitung dengan chunk iceberg atau fallback limit.
+        self._exec_stats: Dict[str, Any] = {
+            "total_orders":  0,
+            "filled_orders": 0,
+            "fail_reasons":  {},
+            "by_side": {
+                "buy":  {"total_orders": 0, "filled_orders": 0},
+                "sell": {"total_orders": 0, "filled_orders": 0},
+            },
+            "iceberg_partial_fill_count":     0,
+            "limit_fallback_to_market_count": 0,
+        }
+
+    def _record_fail(self, reason: str) -> None:
+        reasons = self._exec_stats["fail_reasons"]
+        reasons[reason] = reasons.get(reason, 0) + 1
+
+    def _record_success(self, side: str) -> None:
+        self._exec_stats["filled_orders"] += 1
+        by_side = self._exec_stats["by_side"].setdefault(
+            side, {"total_orders": 0, "filled_orders": 0}
+        )
+        by_side["filled_orders"] += 1
+
+    def _parse_latency_from_notes(self, notes: Optional[str]) -> Optional[float]:
+        if not notes:
+            return None
+        m = self._LATENCY_NOTE_RE.search(notes)
+        if not m:
+            return None
+        try:
+            return float(m.group(1))
+        except ValueError:
+            return None
+
+    async def get_stats(self, trade_window: int = 500) -> Dict[str, Any]:
+        """
+        Statistik operasional executor: gabungan counter in-memory (percobaan
+        sejak proses ini start -- fill_rate, fail_reasons, dst) dan agregasi
+        dari `trade_window` trade TERISI paling akhir di DB (slippage, fee,
+        latency, leverage -- data yang cuma ada di row Trade yang BERHASIL).
+        Shared verbatim oleh spot & futures lewat base class ini.
+        """
+        total  = self._exec_stats["total_orders"]
+        filled = self._exec_stats["filled_orders"]
+        failed = total - filled
+        fill_rate = (filled / total) if total > 0 else None
+
+        by_side_summary: Dict[str, Any] = {}
+        for side_key, counts in self._exec_stats["by_side"].items():
+            s_total  = counts["total_orders"]
+            s_filled = counts["filled_orders"]
+            s_fill_rate = (s_filled / s_total) if s_total > 0 else None
+            by_side_summary[side_key] = {
+                "total_orders":  s_total,
+                "filled_orders": s_filled,
+                "fill_rate":     round(s_fill_rate, 4) if s_fill_rate is not None else None,
+            }
+
+        trades = await self.db.get_recent_trades(limit=trade_window)
+
+        slippage_all: List[float] = []
+        slippage_by_side: Dict[str, List[float]] = {"buy": [], "sell": []}
+        fee_pct_all: List[float] = []
+        latency_all: List[float] = []
+        leverage_all: List[float] = []
+
+        for t in trades:
+            if t.slippage_pct is not None:
+                v = abs(t.slippage_pct)
+                slippage_all.append(v)
+                slippage_by_side.setdefault(t.side, []).append(v)
+            if t.cost:
+                fee_pct_all.append((t.fee_cost or 0.0) / t.cost * 100)
+            lat = t.latency_ms
+            if lat is None:
+                lat = self._parse_latency_from_notes(t.notes)
+            if lat is not None:
+                latency_all.append(lat)
+            if t.leverage is not None:
+                leverage_all.append(t.leverage)
+
+        def _avg(values: List[float]) -> Optional[float]:
+            return round(sum(values) / len(values), 4) if values else None
+
+        return {
+            "total_orders":  total,
+            "filled_orders": filled,
+            "failed_orders": failed,
+            "fill_rate":     round(fill_rate, 4) if fill_rate is not None else None,
+            "fail_reasons":  dict(self._exec_stats["fail_reasons"]),
+            "avg_slippage_pct": _avg(slippage_all),
+            "avg_slippage_pct_by_side": {
+                k: _avg(v) for k, v in slippage_by_side.items()
+            },
+            "avg_fill_time_ms": _avg(latency_all),
+            "avg_fee_pct":      _avg(fee_pct_all),
+            "avg_leverage_used": _avg(leverage_all),
+            "iceberg_partial_fill_count":     self._exec_stats["iceberg_partial_fill_count"],
+            "limit_fallback_to_market_count": self._exec_stats["limit_fallback_to_market_count"],
+            "by_side":      by_side_summary,
+            "trade_window": len(trades),
+        }
 
     async def execute_signal(
         self,
@@ -93,10 +207,18 @@ class BaseOrderExecutionManager:
         price  = signal.price
         amount = assessment.approved_size
 
+        # [EXECUTOR-STATS] Titik ini = executor resmi "menerima" signal
+        # (sudah lolos risk-approval) -- baseline attempt utk fill_rate.
+        self._exec_stats["total_orders"] += 1
+        self._exec_stats["by_side"].setdefault(
+            side, {"total_orders": 0, "filled_orders": 0}
+        )["total_orders"] += 1
+
         if not amount or amount <= 0:
             log.error(
                 "Amount tidak valid=%.8f untuk %s — abort.", amount or 0, symbol
             )
+            self._record_fail("amount_invalid")
             return None
 
         if price is None or price <= 0:
@@ -108,6 +230,7 @@ class BaseOrderExecutionManager:
                 "ERROR", "execution",
                 f"Signal price invalid {symbol}: price={price} — order dibatalkan.",
             )
+            self._record_fail("price_invalid")
             return None
 
         # [BUG-FIX] Sebelumnya: validasi min_amount/min_cost di bawah memakai
@@ -165,6 +288,7 @@ class BaseOrderExecutionManager:
                 f"Slippage guard: {symbol} spread={spread_pct:.4f}% "
                 f"depth={depth_slip:.4f}% > max={_max_slip}%",
             )
+            self._record_fail("slippage_guard")
             return None
 
         log.info(
@@ -186,6 +310,7 @@ class BaseOrderExecutionManager:
                     "ERROR", "execution",
                     f"Min amount tidak terpenuhi {symbol}: {amount:.8f} < {min_amount:.8f}",
                 )
+                self._record_fail("min_amount")
                 return None
             order_cost = amount * price
             if min_cost and order_cost < min_cost:
@@ -197,6 +322,7 @@ class BaseOrderExecutionManager:
                     "ERROR", "execution",
                     f"Min cost tidak terpenuhi {symbol}: {order_cost:.4f} < {min_cost:.4f} USDT",
                 )
+                self._record_fail("min_cost")
                 return None
         # ── End Market Filter ──────────────────────────────────────────────
         use_market  = (spread_pct is None) or (spread_pct < self.SPREAD_THRESHOLD_PCT)
@@ -230,9 +356,18 @@ class BaseOrderExecutionManager:
         if primary_trade is not None:
             lat_ms = (time.monotonic() - t_start) * 1000
             log.info("Signal-to-fill latency: %s %.2f ms", symbol, lat_ms)
-            await self.db.append_trade_note(
-                primary_trade.id, f"latency_ms={lat_ms:.2f}"
-            )
+            # [EXECUTOR-STATS] Kolom terstruktur (Trade.latency_ms), bukan lagi
+            # dititipkan sebagai teks di notes -- lihat catatan di
+            # engine/database.py::Trade.latency_ms untuk alasan lengkap.
+            await self.db.update_trade_latency(primary_trade.order_id, lat_ms)
+            self._record_success(side)
+        else:
+            # [EXECUTOR-STATS] Catch-all tunggal utk kegagalan yang terjadi DI
+            # DALAM _execute_market/_execute_limit/_execute_iceberg (exception
+            # exchange, verify_order_filled gagal, iceberg 0/N chunk, dst).
+            # Detail spesifiknya tetap tertelusuri manual lewat bot_logs --
+            # sengaja tidak dipecah lebih halus di sini (lihat diskusi).
+            self._record_fail("execution_failed")
 
         return primary_trade
 
@@ -479,6 +614,7 @@ class BaseOrderExecutionManager:
                 )
                 return None
             
+            self._exec_stats["limit_fallback_to_market_count"] += 1
             return await self._execute_market(signal, assessment, side, amount)
 
         except Exception as e:
@@ -743,7 +879,10 @@ class BaseOrderExecutionManager:
                 f"|iceberg_avg_price={weighted_avg_price:.8f}"
                 f"|chunks={len(done)}/{chunk_count}"
             )
-    
+
+        if 0 < len(done) < chunk_count:
+            self._exec_stats["iceberg_partial_fill_count"] += 1
+
         return done
 
     async def _process_fill(

@@ -55,6 +55,17 @@ class RiskDecision(Enum):
     APPROVED = "approved"
     REJECTED = "rejected"
     MODIFIED = "modified"
+    # [FUTURES-READY -- capital_allocator prasyarat] Reject KHUSUS karena
+    # kehabisan kapasitas (slot max_open_positions ATAU margin tidak cukup),
+    # BEDA dari REJECTED biasa (halted/drawdown/daily-loss/symbol-halt/
+    # leverage invalid/dst -- itu semua "jangan trade sama sekali sekarang",
+    # bukan soal kapasitas). Kandidat yang gagal dgn kode ini genuinely
+    # bagus, cuma tidak ada ruang -- layak ditunggu/dicoba lagi begitu ada
+    # posisi lain yang tutup. Kandidat yang gagal dgn REJECTED biasa TIDAK
+    # layak ditunggu (kondisi portfolio-level yang menutupnya, bukan
+    # kapasitas per-posisi). is_approved TETAP False untuk nilai ini --
+    # tidak mengubah perilaku existing manapun yang cuma cek is_approved.
+    REJECTED_INSUFFICIENT_CAPITAL = "rejected_insufficient_capital"
 
 
 @dataclass

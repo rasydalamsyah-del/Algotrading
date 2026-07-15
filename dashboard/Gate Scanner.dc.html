@@ -51,10 +51,10 @@
         <div style="font-family:'Space Grotesk',sans-serif;font-weight:700;font-size:16px;margin-bottom:18px">⚙ Koneksi Bot</div>
 
         <label style="font-size:11px;color:#8b93a7;display:block;margin-bottom:5px">API Base URL</label>
-        <input value="{{ apiBaseInput }}" oninput="{{ onApiBaseInput }}" style="width:100%;background:#111426;border:1px solid rgba(255,255,255,0.09);border-radius:8px;padding:9px 12px;color:#e7e9ef;font-family:'JetBrains Mono',monospace;font-size:12px;outline:none;margin-bottom:14px;box-sizing:border-box" />
+        <input value="{{ apiBaseInput }}" oninput="{{ onApiBaseInput }}" onblur="{{ onApiBaseBlur }}" style="width:100%;background:#111426;border:1px solid rgba(255,255,255,0.09);border-radius:8px;padding:9px 12px;color:#e7e9ef;font-family:'JetBrains Mono',monospace;font-size:12px;outline:none;margin-bottom:14px;box-sizing:border-box" />
 
         <label style="font-size:11px;color:#8b93a7;display:block;margin-bottom:5px">Dashboard API Key</label>
-        <input type="password" value="{{ apiKeyInput }}" oninput="{{ onApiKeyInput }}" placeholder="DASHBOARD_API_KEY dari .env" style="width:100%;background:#111426;border:1px solid rgba(255,255,255,0.09);border-radius:8px;padding:9px 12px;color:#e7e9ef;font-family:'JetBrains Mono',monospace;font-size:12px;outline:none;margin-bottom:14px;box-sizing:border-box" />
+        <input type="password" value="{{ apiKeyInput }}" oninput="{{ onApiKeyInput }}" onblur="{{ onApiKeyBlur }}" placeholder="DASHBOARD_API_KEY dari .env" style="width:100%;background:#111426;border:1px solid rgba(255,255,255,0.09);border-radius:8px;padding:9px 12px;color:#e7e9ef;font-family:'JetBrains Mono',monospace;font-size:12px;outline:none;margin-bottom:14px;box-sizing:border-box" />
 
         <label style="font-size:11px;color:#8b93a7;display:block;margin-bottom:5px">Refresh Interval</label>
         <select value="{{ refreshSecInput }}" onchange="{{ onRefreshInput }}" style="width:100%;background:#111426;border:1px solid rgba(255,255,255,0.09);border-radius:8px;padding:9px 12px;color:#e7e9ef;font-size:12px;outline:none;margin-bottom:18px">
@@ -335,6 +335,19 @@ class Component extends DCLogic {
   stopProp = (e) => e.stopPropagation();
   onApiBaseInput = (e) => this.setState({ apiBaseInput: e.target.value });
   onApiKeyInput = (e) => this.setState({ apiKeyInput: e.target.value });
+  // Auto-commit ke apiBase/apiKey saat kolom kehilangan fokus, supaya apiBase
+  // tetap satu-satunya sumber kebenaran yang dipakai semua fungsi (apiGet,
+  // fetchData) -- tidak perlu klik Simpan & Refresh dulu.
+  onApiBaseBlur = () => {
+    const base = this.state.apiBaseInput.trim().replace(/\/$/, '');
+    try { localStorage.setItem('gs_api_base', base); } catch (e) {}
+    this.setState({ apiBase: base, apiBaseInput: base });
+  };
+  onApiKeyBlur = () => {
+    const key = this.state.apiKeyInput.trim();
+    try { localStorage.setItem('gs_api_key', key); } catch (e) {}
+    this.setState({ apiKey: key, apiKeyInput: key });
+  };
   onRefreshInput = (e) => this.setState({ refreshSecInput: e.target.value });
   onSearchInput = (e) => this.setState({ search: e.target.value, searchInput: e.target.value });
   onSortChange = (e) => this.setState({ sortBy: e.target.value });
@@ -483,8 +496,8 @@ class Component extends DCLogic {
       settingsOpen: this.state.settingsOpen,
       toggleSettings: this.toggleSettings,
       stopProp: this.stopProp,
-      apiBaseInput: this.state.apiBaseInput, onApiBaseInput: this.onApiBaseInput,
-      apiKeyInput: this.state.apiKeyInput, onApiKeyInput: this.onApiKeyInput,
+      apiBaseInput: this.state.apiBaseInput, onApiBaseInput: this.onApiBaseInput, onApiBaseBlur: this.onApiBaseBlur,
+      apiKeyInput: this.state.apiKeyInput, onApiKeyInput: this.onApiKeyInput, onApiKeyBlur: this.onApiKeyBlur,
       refreshSecInput: this.state.refreshSecInput, onRefreshInput: this.onRefreshInput,
       saveSettings: this.saveSettings,
       usingDemo: this.state.usingDemo, demoMessage: this.state.demoMessage, retryFetch: this.retryFetch,
