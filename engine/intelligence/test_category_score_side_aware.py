@@ -50,7 +50,7 @@ from engine.indicators.structure import (
 )
 from engine.indicators.orderbook import (
     _score_imbalance, _score_whale, _score_absorption,
-    calculate_orderbook, score_orderbook_data, reset_state,
+    calculate_orderbook, score_orderbook, score_orderbook_data, reset_state,
     IMBALANCE_BULL, IMBALANCE_BEAR,
 )
 
@@ -2340,13 +2340,15 @@ class TestBatch7ImbalanceScoreShort(unittest.TestCase):
         self.assertNotEqual(ind.imbalance_score, ind.imbalance_score_short)
         self.assertAlmostEqual(ind.imbalance_score + ind.imbalance_score_short, 100.0, places=6)
 
-    def test_extract_indicator_scores_ob_score_still_fallback_composite_not_wired_yet(self):
-        """[CAKUPAN] orderbook_score (composite) & scorer.py 'ob_score' BELUM
-        disentuh di batch/fungsi ini -- whale_score & absorption_score
-        (fungsi 2/3 & 3/3 Batch 7) belum side-aware, jadi composite tetap
-        fallback ke long utk SEMENTARA. Ini bukti disengaja (bukan bug lupa
-        wiring) -- akan diperbaiki setelah whale & absorption selesai,
-        seperti pola 'assert lama jadi stale, diperbaiki' di Batch 6."""
+    def test_extract_indicator_scores_ob_score_now_wired_side_aware(self):
+        """[UPDATE -- wiring composite Batch 7 SELESAI] Assert lama di sini
+        menegaskan 'ob_score' fallback ke long krn composite belum wired --
+        itu sudah stale. score_orderbook() sekarang side-aware penuh (baca
+        imbalance_score_short/whale_score_short/absorption_score_short via
+        suffix), jadi scorer.py 'ob_score' (_pick_side_score(iset.orderbook,
+        "orderbook_score", side)) otomatis ikut beda antara long/short tanpa
+        perlu ubah scorer.py sama sekali. Book di sini bid-heavy (imbalance
+        condong long) -> ob_score long harus LEBIH TINGGI dari short."""
         reset_state("SCORERWIREOB/USDT")
         ob = _make_synthetic_book(bid_qty_mult=3.0, ask_qty_mult=1.0)
         ob["symbol"] = "SCORERWIREOB/USDT"
@@ -2358,7 +2360,8 @@ class TestBatch7ImbalanceScoreShort(unittest.TestCase):
         long_result = _extract_indicator_scores(iset, side="long")
         short_result = _extract_indicator_scores(iset, side="short")
 
-        self.assertEqual(long_result["orderbook"]["ob_score"], short_result["orderbook"]["ob_score"])
+        self.assertNotEqual(long_result["orderbook"]["ob_score"], short_result["orderbook"]["ob_score"])
+        self.assertGreater(long_result["orderbook"]["ob_score"], short_result["orderbook"]["ob_score"])
 
 
 def _make_book_with_wall(wall_side="bid", wall_mult=15.0, n=20, seed=1,
@@ -2588,10 +2591,12 @@ class TestBatch7WhaleScoreShort(unittest.TestCase):
         self.assertNotEqual(ind.whale_score, ind.whale_score_short)
         self.assertAlmostEqual(ind.whale_score + ind.whale_score_short, 100.0, places=6)
 
-    def test_extract_indicator_scores_ob_score_still_fallback_composite_not_wired_yet(self):
-        """[CAKUPAN] Sama spt catatan di TestBatch7ImbalanceScoreShort --
-        absorption_score (fungsi 3/3 Batch 7) belum side-aware, composite
-        tetap fallback ke long utk SEMENTARA, disengaja bukan lupa."""
+    def test_extract_indicator_scores_ob_score_now_wired_side_aware(self):
+        """[UPDATE -- wiring composite Batch 7 SELESAI] Sama spt catatan di
+        TestBatch7ImbalanceScoreShort -- composite sekarang side-aware
+        penuh, assert lama 'fallback ke long' sudah stale. Book di sini
+        punya whale wall di bid -> ob_score long harus LEBIH TINGGI dari
+        short."""
         reset_state("SCORERWIREWHALEOB/USDT")
         ob = _make_book_with_wall(wall_side="bid")
         ob["symbol"] = "SCORERWIREWHALEOB/USDT"
@@ -2603,7 +2608,8 @@ class TestBatch7WhaleScoreShort(unittest.TestCase):
         long_result = _extract_indicator_scores(iset, side="long")
         short_result = _extract_indicator_scores(iset, side="short")
 
-        self.assertEqual(long_result["orderbook"]["ob_score"], short_result["orderbook"]["ob_score"])
+        self.assertNotEqual(long_result["orderbook"]["ob_score"], short_result["orderbook"]["ob_score"])
+        self.assertGreater(long_result["orderbook"]["ob_score"], short_result["orderbook"]["ob_score"])
 
 
 def _absorption_wall_book(big=True):
@@ -2780,12 +2786,14 @@ class TestBatch7AbsorptionScoreShort(unittest.TestCase):
         self.assertNotEqual(ind.absorption_score, ind.absorption_score_short)
         self.assertAlmostEqual(ind.absorption_score + ind.absorption_score_short, 100.0, places=6)
 
-    def test_extract_indicator_scores_ob_score_still_fallback_composite_not_wired_yet(self):
-        """[CAKUPAN -- BATCH 7 KOMPLIT 3/3] absorption_score adalah fungsi
-        TERAKHIR dari 3 sub-score Batch 7 yg perlu jadi side-aware. Composite
-        score_orderbook()/'ob_score' scorer.py MASIH fallback ke long di
-        sini -- wiring composite adalah langkah terpisah berikutnya (semua
-        3 sub-score sudah siap dipakai composite sekarang)."""
+    def test_extract_indicator_scores_ob_score_now_wired_side_aware(self):
+        """[UPDATE -- BATCH 7 KOMPLIT, composite WIRED] Assert lama di sini
+        menandai composite masih fallback ke long krn wiring composite belum
+        dikerjakan -- itu sekarang stale, sudah diperbaiki. score_orderbook()
+        sudah side-aware penuh (imbalance+whale+absorption semua baca versi
+        _short via suffix). Book ini: ask wall diserap (absorbed_ask=True,
+        breakout signal) -> absorption_score condong long -> ob_score long
+        harus LEBIH TINGGI dari short."""
         sym = "SCORERWIREABSOB/USDT"
         reset_state(sym)
         calculate_orderbook(_absorption_wall_book(big=True), symbol=sym)
@@ -2798,7 +2806,274 @@ class TestBatch7AbsorptionScoreShort(unittest.TestCase):
         long_result = _extract_indicator_scores(iset, side="long")
         short_result = _extract_indicator_scores(iset, side="short")
 
-        self.assertEqual(long_result["orderbook"]["ob_score"], short_result["orderbook"]["ob_score"])
+        self.assertNotEqual(long_result["orderbook"]["ob_score"], short_result["orderbook"]["ob_score"])
+        self.assertGreater(long_result["orderbook"]["ob_score"], short_result["orderbook"]["ob_score"])
+
+
+class TestBatch7OrderbookScoreCompositeShort(unittest.TestCase):
+    """orderbook category, WIRING COMPOSITE (langkah terakhir Batch 7):
+    score_orderbook() -- gabungan imbalance(40%)+whale(25%)+absorption(20%)
+    +spread(10%)+liquidity(5%) -- sekarang menerima side dan membaca
+    imbalance_score{suffix}/whale_score{suffix}/absorption_score{suffix}.
+    spread_score, liquidity_score, spoofing_confidence dipakai IDENTIK di
+    kedua sisi (arah-agnostic, dikonfirmasi Tahap 0 & fuzz 20rb kasus di
+    bawah) -- TIDAK ada versi _short utk ketiganya, dan itu benar.
+
+    [PENTING -- gate bid_ask_imbalance] score_orderbook() punya guard
+    `if data.get("bid_ask_imbalance") is None: return 50.0` di AWAL,
+    SEBELUM suffix dipilih -- guard ini sama utk long maupun short (bukan
+    fallback per-side). Artinya kalau order book kosong/tidak valid,
+    KEDUA sisi netral 50.0, bukan cuma salah satu.
+
+    [Simetri] BUKAN sum-to-100 seperti imbalance_score (spread_score &
+    liquidity_score tidak dipasangkan long/short, jadi long+short komposit
+    TIDAK konstan 100 secara umum). Yang genuinely benar & diverifikasi:
+    role-swap MANUAL -- tukar imbalance/whale/absorption (base<->_short)
+    sendiri di data dict, spread/liquidity/spoofing_confidence TETAP sama,
+    lalu score_orderbook(swapped, 'long') == score_orderbook(original,
+    'short') PERSIS (dan sebaliknya). Diverifikasi 20000 kasus fuzy acak,
+    0 mismatch -- lihat test_role_swap_manual_reconstruction_fuzz."""
+
+    # ── 1. Long regression ──────────────────────────────────────────────────
+
+    def test_long_score_unchanged_static_scenario(self):
+        """Skenario imbalance-dominan dari checkpoint sesi: imb 90/10,
+        whale/absorption netral 50, spread 80 (default), liquidity 50
+        (default), spoof 1.0 (tanpa penalti) -> long harus 69.0 PERSIS
+        (36 + 12.5 + 10 + 8 + 2.5)."""
+        data = {
+            "bid_ask_imbalance": 0.9,
+            "imbalance_score": 90.0, "imbalance_score_short": 10.0,
+            "whale_score": 50.0, "whale_score_short": 50.0,
+            "absorption_score": 50.0, "absorption_score_short": 50.0,
+            "spread_score": 80.0,
+            "liquidity_score": 50.0,
+            "spoofing_confidence": 1.0,
+        }
+        self.assertEqual(score_orderbook(data, side="long"), 69.0)
+
+    def test_long_score_unchanged_default_side_is_long(self):
+        """side param defaultnya 'long' -- tidak boleh berubah perilaku
+        pemanggilan lama score_orderbook(data) tanpa argumen side."""
+        data = {
+            "bid_ask_imbalance": 0.9,
+            "imbalance_score": 90.0, "imbalance_score_short": 10.0,
+            "whale_score": 50.0, "whale_score_short": 50.0,
+            "absorption_score": 50.0, "absorption_score_short": 50.0,
+            "spread_score": 80.0, "liquidity_score": 50.0,
+            "spoofing_confidence": 1.0,
+        }
+        self.assertEqual(score_orderbook(data), score_orderbook(data, side="long"))
+        self.assertEqual(score_orderbook(data), 69.0)
+
+    def test_long_score_unchanged_spoofing_penalty_applied(self):
+        """spoofing_confidence < 1.0 menarik skor ke netral 50 -- perilaku
+        ini tidak berubah dgn adanya side param. spoof=0.5 -> score jadi
+        rata2 raw & 50 (raw*0.5 + 50*0.5)."""
+        data = {
+            "bid_ask_imbalance": 0.9,
+            "imbalance_score": 90.0, "imbalance_score_short": 10.0,
+            "whale_score": 50.0, "whale_score_short": 50.0,
+            "absorption_score": 50.0, "absorption_score_short": 50.0,
+            "spread_score": 80.0, "liquidity_score": 50.0,
+            "spoofing_confidence": 0.5,
+        }
+        self.assertEqual(score_orderbook(data, side="long"), 59.5)
+        self.assertEqual(score_orderbook(data, side="short"), 43.5)
+
+    def test_long_score_unchanged_across_random_fuzz_vs_pre_batch7_formula(self):
+        """20000 kasus acak (termasuk bid_ask_imbalance=None utk cek gate)
+        dibandingkan thd reimplementasi formula SEBELUM side param
+        ditambahkan (selalu baca field base, tanpa suffix) -- byte-identical.
+        Pelajaran dari sar/pivot/fib/imbalance: jangan asumsikan wiring
+        composite aman tanpa fuzz, walau "cuma nambah parameter"."""
+        def old_formula(data):
+            if data.get("bid_ask_imbalance") is None:
+                return 50.0
+            imb = data.get("imbalance_score", 50.0)
+            whl = data.get("whale_score", 50.0)
+            abso = data.get("absorption_score", 50.0)
+            spr = data.get("spread_score", 80.0)
+            liq = data.get("liquidity_score", 50.0)
+            spoof = data.get("spoofing_confidence", 1.0)
+            raw = imb * 0.40 + whl * 0.25 + abso * 0.20 + spr * 0.10 + liq * 0.05
+            score = raw * spoof + 50.0 * (1.0 - spoof)
+            return max(0.0, min(100.0, score))
+
+        rng = random.Random(7)
+        for _ in range(20000):
+            data = {
+                "bid_ask_imbalance": rng.choice([None, rng.uniform(0.0, 1.0)]),
+                "imbalance_score": rng.uniform(0.0, 100.0),
+                "imbalance_score_short": rng.uniform(0.0, 100.0),
+                "whale_score": rng.uniform(0.0, 100.0),
+                "whale_score_short": rng.uniform(0.0, 100.0),
+                "absorption_score": rng.uniform(0.0, 100.0),
+                "absorption_score_short": rng.uniform(0.0, 100.0),
+                "spread_score": rng.uniform(0.0, 100.0),
+                "liquidity_score": rng.uniform(0.0, 100.0),
+                "spoofing_confidence": rng.uniform(0.0, 1.0),
+            }
+            self.assertEqual(score_orderbook(data), old_formula(data), msg=f"data={data}")
+
+    def test_long_via_calculate_orderbook_unchanged_bid_heavy_fixture(self):
+        reset_state("TESTBATCH7-COMPOSITE-LONGREG/USDT")
+        ob = _make_synthetic_book(bid_qty_mult=3.0, ask_qty_mult=1.0)
+        data = calculate_orderbook(ob, symbol="TESTBATCH7-COMPOSITE-LONGREG/USDT")
+        self.assertAlmostEqual(score_orderbook(data, side="long"), 58.25268421052632, places=9)
+
+    # ── 2. Swap-symmetry, role-swap MANUAL (bukan sum-to-100) ───────────────
+
+    def test_role_swap_manual_reconstruction_fuzz(self):
+        """[Independent reconstruction] score_orderbook TIDAK genuinely
+        sum-to-100 (spread/liquidity/spoof arah-agnostic, tidak dipasangkan
+        long/short) -- jadi verifikasi yg benar bukan long+short==100,
+        tapi role-swap MANUAL: tukar imbalance/whale/absorption (base<->
+        _short) sendiri di dict, spread/liquidity/spoof TETAP, lalu
+        score_orderbook(swapped, 'long') harus == score_orderbook(asli,
+        'short') PERSIS -- dan sebaliknya. 20000 kasus acak, 0 mismatch."""
+        rng = random.Random(11)
+        for _ in range(20000):
+            data = {
+                "bid_ask_imbalance": rng.uniform(0.0, 1.0),  # non-None -- gate harus lolos
+                "imbalance_score": rng.uniform(0.0, 100.0),
+                "imbalance_score_short": rng.uniform(0.0, 100.0),
+                "whale_score": rng.uniform(0.0, 100.0),
+                "whale_score_short": rng.uniform(0.0, 100.0),
+                "absorption_score": rng.uniform(0.0, 100.0),
+                "absorption_score_short": rng.uniform(0.0, 100.0),
+                "spread_score": rng.uniform(0.0, 100.0),
+                "liquidity_score": rng.uniform(0.0, 100.0),
+                "spoofing_confidence": rng.uniform(0.0, 1.0),
+            }
+            swapped = dict(data)
+            swapped["imbalance_score"], swapped["imbalance_score_short"] = (
+                data["imbalance_score_short"], data["imbalance_score"])
+            swapped["whale_score"], swapped["whale_score_short"] = (
+                data["whale_score_short"], data["whale_score"])
+            swapped["absorption_score"], swapped["absorption_score_short"] = (
+                data["absorption_score_short"], data["absorption_score"])
+
+            self.assertEqual(score_orderbook(data, side="short"),
+                              score_orderbook(swapped, side="long"), msg=f"data={data}")
+            self.assertEqual(score_orderbook(data, side="long"),
+                              score_orderbook(swapped, side="short"), msg=f"data={data}")
+
+    def test_swap_symmetry_via_real_orderbook_both_directions(self):
+        """Verifikasi lewat data orderbook sintetis yg lolos jalur
+        calculate_orderbook() PENUH -- bid-heavy vs ask-heavy harus
+        menghasilkan arah komposit yang berlawanan (bukan sum-to-100,
+        krn itu properti yg SALAH utk composite -- lihat docstring
+        kelas)."""
+        reset_state("SYM-COMPOSITE-BIDHEAVY/USDT")
+        ob_bid = _make_synthetic_book(bid_qty_mult=3.0, ask_qty_mult=1.0)
+        data_bid = calculate_orderbook(ob_bid, symbol="SYM-COMPOSITE-BIDHEAVY/USDT")
+        long_bid = score_orderbook(data_bid, side="long")
+        short_bid = score_orderbook(data_bid, side="short")
+
+        reset_state("SYM-COMPOSITE-ASKHEAVY/USDT")
+        ob_ask = _make_synthetic_book(bid_qty_mult=1.0, ask_qty_mult=3.0)
+        data_ask = calculate_orderbook(ob_ask, symbol="SYM-COMPOSITE-ASKHEAVY/USDT")
+        long_ask = score_orderbook(data_ask, side="long")
+        short_ask = score_orderbook(data_ask, side="short")
+
+        self.assertGreater(long_bid, short_bid)
+        self.assertGreater(short_ask, long_ask)
+
+    # ── "Bukan cuma beda angka" ──────────────────────────────────────────────
+
+    def test_bid_heavy_favors_long_not_short(self):
+        reset_state("COMPOSITE-BIDHEAVY/USDT")
+        ob = _make_synthetic_book(bid_qty_mult=3.0, ask_qty_mult=1.0)
+        data = calculate_orderbook(ob, symbol="COMPOSITE-BIDHEAVY/USDT")
+        long_val = score_orderbook(data, side="long")
+        short_val = score_orderbook(data, side="short")
+        self.assertGreater(long_val, short_val)
+        self.assertGreater(long_val, 50.0)
+        self.assertLess(short_val, 50.0)
+
+    def test_whale_bid_wall_favors_long_not_short(self):
+        reset_state("COMPOSITE-WHALEBID/USDT")
+        ob = _make_book_with_wall(wall_side="bid")
+        data = calculate_orderbook(ob, symbol="COMPOSITE-WHALEBID/USDT")
+        long_val = score_orderbook(data, side="long")
+        short_val = score_orderbook(data, side="short")
+        self.assertGreater(long_val, short_val)
+
+    def test_absorbed_ask_breakout_favors_long_not_short(self):
+        """ask wall diserap (absorbed_ask=True) = breakout signal utk long
+        (harga menembus ask) -- composite harus condong long, bukan short."""
+        sym = "COMPOSITE-ABSORBED-ASK/USDT"
+        reset_state(sym)
+        calculate_orderbook(_absorption_wall_book(big=True), symbol=sym)
+        book2 = {"bids": _absorption_wall_book(big=True)["bids"], "asks": _flat_book()["asks"]}
+        data = calculate_orderbook(book2, symbol=sym)
+        self.assertTrue(data["absorbed_ask"])
+        long_val = score_orderbook(data, side="long")
+        short_val = score_orderbook(data, side="short")
+        self.assertGreater(long_val, short_val)
+
+    # ── 3. Neutral-alignment ─────────────────────────────────────────────────
+
+    def test_neutral_both_sides_empty_orderbook(self):
+        reset_state("EMPTYCOMPOSITEOB/USDT")
+        data = calculate_orderbook({}, symbol="EMPTYCOMPOSITEOB/USDT")
+        self.assertIsNone(data["bid_ask_imbalance"])
+        self.assertEqual(score_orderbook(data, side="long"), 50.0)
+        self.assertEqual(score_orderbook(data, side="short"), 50.0)
+
+    def test_neutral_both_sides_missing_side_in_book(self):
+        reset_state("NOBIDSCOMPOSITEOB/USDT")
+        data = calculate_orderbook({"bids": [], "asks": [(100.0, 1.0)]}, symbol="NOBIDSCOMPOSITEOB/USDT")
+        self.assertEqual(score_orderbook(data, side="long"), 50.0)
+        self.assertEqual(score_orderbook(data, side="short"), 50.0)
+
+    def test_neutral_both_sides_perfectly_balanced_book(self):
+        """Book seimbang sempurna -- semua sub-score netral 50 kedua sisi,
+        spread/liquidity identik -- composite long harus == short."""
+        reset_state("PERFBALCOMPOSITEOB/USDT")
+        data = calculate_orderbook({"bids": [(100.0, 5.0)], "asks": [(100.1, 5.0)]},
+                                    symbol="PERFBALCOMPOSITEOB/USDT")
+        long_val = score_orderbook(data, side="long")
+        short_val = score_orderbook(data, side="short")
+        self.assertAlmostEqual(long_val, short_val, delta=0.1)
+
+    # ── Integrasi (end-to-end via score_orderbook_data & scorer.py) ─────────
+
+    def test_score_orderbook_data_wires_orderbook_score_short(self):
+        """Entry point publik score_orderbook_data() -- orderbook_score
+        (long) & orderbook_score_short harus keduanya terisi dan berbeda
+        utk book yg skewed, TANPA meng-ubah composite_score (alias lama,
+        tetap = orderbook_score demi backward-compat)."""
+        reset_state("WIRECOMPOSITEOB/USDT")
+        ob = _make_synthetic_book(bid_qty_mult=3.0, ask_qty_mult=1.0)
+        ob["symbol"] = "WIRECOMPOSITEOB/USDT"
+        ind = score_orderbook_data(ob)
+        self.assertIsNotNone(ind.orderbook_score_short)
+        self.assertNotEqual(ind.orderbook_score, ind.orderbook_score_short)
+        self.assertGreater(ind.orderbook_score, ind.orderbook_score_short)
+        self.assertEqual(ind.composite_score, ind.orderbook_score)
+
+    def test_extract_indicator_scores_ob_score_side_aware_end_to_end(self):
+        """[BATCH 7 KOMPLIT -- verifikasi akhir menyeluruh] Full pipeline:
+        book skewed -> calculate_orderbook -> score_orderbook_data ->
+        IndicatorSet -> _extract_indicator_scores(side=...) -> scorer.py
+        'ob_score' (_pick_side_score) -- semua harus konsisten side-aware
+        tanpa scorer.py disentuh sama sekali."""
+        reset_state("E2ECOMPOSITEOB/USDT")
+        ob = _make_book_with_wall(wall_side="ask")  # ask-heavy -> harus condong short
+        ob["symbol"] = "E2ECOMPOSITEOB/USDT"
+        ind = score_orderbook_data(ob)
+
+        iset = IndicatorSet(symbol="E2ECOMPOSITEOB/USDT", timeframe="15m")
+        iset.orderbook = ind
+
+        long_result = _extract_indicator_scores(iset, side="long")
+        short_result = _extract_indicator_scores(iset, side="short")
+
+        self.assertEqual(long_result["orderbook"]["ob_score"], ind.orderbook_score)
+        self.assertEqual(short_result["orderbook"]["ob_score"], ind.orderbook_score_short)
+        self.assertGreater(short_result["orderbook"]["ob_score"], long_result["orderbook"]["ob_score"])
 
 
 if __name__ == "__main__":
