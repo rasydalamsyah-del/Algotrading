@@ -667,7 +667,9 @@ def score_pattern(
         result.pattern_score       = SCORE_NEUTRAL
         result.pattern_score_short = SCORE_NEUTRAL
         result.context_score       = SCORE_NEUTRAL
+        result.context_score_short = SCORE_NEUTRAL
         result.composite_score     = SCORE_NEUTRAL
+        result.composite_score_short = SCORE_NEUTRAL
         return result
 
     vol_confirmed = _is_volume_confirmed(df)
@@ -761,14 +763,29 @@ def score_pattern(
     }
     context_score = context_score_map.get(context, SCORE_NEUTRAL)
     result.context_score = context_score
+    # [MTF-BIAS-FIX -- Sub-Batch A.4, proyek MTF composite side-aware]
+    # context_score TIDAK PERNAH dapat treatment side-aware di Batch 1 (yg
+    # cuma cakup pattern_score) -- padahal genuinely directional: NEAR_SUPPORT
+    # (dekat support = ekspektasi bounce naik) bagus utk long, NEAR_RESISTANCE
+    # (dekat resistance = ekspektasi rejection turun) bagus utk short. Pola
+    # input-reflection (100-x) sama persis dgn pattern_score_short di atas --
+    # NEAR_SUPPORT 70->30, NEAR_RESISTANCE 32->68, MID_RANGE 52->48,
+    # UNKNOWN 50->50 (netral tetap netral).
+    result.context_score_short = clamp_score(100.0 - context_score)
 
     if primary_pattern == PatternType.NONE:
         result.composite_score = clamp_score(
             SCORE_NEUTRAL * 0.7 + context_score * 0.3
         )
+        result.composite_score_short = clamp_score(
+            SCORE_NEUTRAL * 0.7 + result.context_score_short * 0.3
+        )
     else:
         result.composite_score = clamp_score(
             pattern_score * 0.70 + context_score * 0.30
+        )
+        result.composite_score_short = clamp_score(
+            result.pattern_score_short * 0.70 + result.context_score_short * 0.30
         )
 
     log.debug(
