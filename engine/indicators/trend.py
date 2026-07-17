@@ -639,6 +639,7 @@ def score_trend(
 
     if total_available_weight < 1e-6:
         result.composite_score = SCORE_NEUTRAL
+        result.composite_score_short = SCORE_NEUTRAL
         errors.append("trend: tidak ada sub-indikator yang valid, composite = neutral")
         return result
 
@@ -650,6 +651,29 @@ def score_trend(
         composite += raw_scores[key] * adjusted_w
 
     result.composite_score = clamp_score(composite)
+
+    # [MTF-BIAS-FIX -- Sub-Batch A, proyek MTF composite side-aware]
+    # composite_score_short: pakai bobot & availability (ok flags) yang SAMA
+    # persis dgn long -- ok flags cuma soal ketersediaan data (ema9/ema21
+    # not None, dst), BUKAN soal arah, jadi valid dipakai utk kedua sisi.
+    # Sub-score _short (ema_stack_score_short, cross_score_short,
+    # supertrend_score_short, vwap_score_short) SUDAH terisi sejak Batch 5
+    # (proyek 24 sub-score/8 batch) -- langkah ini cuma menggabungkannya
+    # jadi composite, sama seperti wiring score_orderbook() di Batch 7.
+    raw_scores_short = {
+        "ema":        result.ema_stack_score_short,
+        "cross":      result.cross_score_short,
+        "supertrend": result.supertrend_score_short,
+        "vwap":       result.vwap_score_short,
+    }
+    composite_short = 0.0
+    for key, (base_w, ok) in raw_weights.items():
+        if not ok:
+            continue
+        adjusted_w = base_w / total_available_weight
+        composite_short += raw_scores_short[key] * adjusted_w
+
+    result.composite_score_short = clamp_score(composite_short)
 
     log.debug(
         "trend score: ema=%.1f cross=%.1f st=%.1f vwap=%.1f → composite=%.1f",
