@@ -694,6 +694,34 @@ def calculate_stochastic_rsi(
         composite_score=score,
     )
 
+def _score_vwma(diff_pct: float, side: str = "long") -> float:
+    """
+    [MTF-BIAS-FIX -- Sub-Batch A.2, proyek MTF composite side-aware]
+    vwma_score TIDAK pernah dapat treatment di Batch 3 (24 sub-score/8
+    batch cuma cakup rsi/macd/stochrsi) -- sub-score ini genuinely
+    directional (VWMA>SMA = volume berat di bar bullish = bagus utk long;
+    VWMA<SMA = bagus utk short), BUKAN arah-agnostic seperti volatility.
+    side="short": input-reflection -- negasi diff_pct lalu jalankan cabang
+    threshold yang SAMA PERSIS, pola sama dgn rsi/macd/stochrsi Batch 3
+    (bukan role-swap seperti trend/cross_score).
+    """
+    if side == "short":
+        diff_pct = -diff_pct
+
+    if diff_pct > 1.5:
+        score = 78.0
+    elif diff_pct > 0.5:
+        score = 65.0
+    elif diff_pct > -0.5:
+        score = 52.0
+    elif diff_pct > -1.5:
+        score = 38.0
+    else:
+        score = 25.0
+
+    return clamp_score(score)
+
+
 def score_momentum(
     df: pd.DataFrame,
     errors: Optional[List[str]] = None,
@@ -710,6 +738,15 @@ def score_momentum(
     result.rsi_divergence = rsi_res.rsi_divergence
     result.rsi_zone_exit  = rsi_res.rsi_zone_exit
     result.rsi_score      = rsi_res.rsi_score
+    # [BUG-FIX KRITIS -- ditemukan di Sub-Batch A.2, proyek MTF composite]
+    # rsi_score_short SEBELUMNYA TIDAK PERNAH disalin ke result -- artinya
+    # sejak Batch 3, di jalur PRODUKSI ASLI (observer.py -> score_momentum()),
+    # iset.momentum.rsi_score_short SELALU None, walau calculate_rsi_enhanced()
+    # sendiri sudah menghitungnya dgn benar. Batch 3 lolos test krn test
+    # integrasinya membangun IndicatorSet manual (bypass score_momentum()),
+    # tidak lewat jalur produksi asli. Additive fix -- rsi_score (long) TIDAK
+    # disentuh sama sekali.
+    result.rsi_score_short = rsi_res.rsi_score_short
     rsi_ok = result.rsi is not None
 
     macd_res = calculate_macd_enhanced(df, errors=errors)
@@ -720,6 +757,8 @@ def score_momentum(
     result.macd_divergence = macd_res.macd_divergence
     result.macd_zero_cross = macd_res.macd_zero_cross
     result.macd_score      = macd_res.macd_score
+    # [BUG-FIX KRITIS -- sama persis dgn rsi_score_short di atas]
+    result.macd_score_short = macd_res.macd_score_short
     macd_ok = result.macd_line is not None
 
     stoch_res = calculate_stochastic_rsi(df, errors=errors)
@@ -728,6 +767,8 @@ def score_momentum(
     result.stoch_kd_cross = stoch_res.stoch_kd_cross
     result.stoch_zone     = stoch_res.stoch_zone
     result.stoch_score    = stoch_res.stoch_score
+    # [BUG-FIX KRITIS -- sama persis dgn rsi_score_short di atas]
+    result.stoch_score_short = stoch_res.stoch_score_short
     stoch_ok = result.stoch_k is not None
 
     # [UPGRADE] VWMA dari ta_compat — konfirmasi volume-weighted momentum
@@ -752,21 +793,16 @@ def score_momentum(
                 result.vwma_vs_sma = diff_pct
 
                 # Scoring: VWMA > SMA = bullish volume support
-                if diff_pct > 1.5:
-                    vwma_score = 78.0
-                elif diff_pct > 0.5:
-                    vwma_score = 65.0
-                elif diff_pct > -0.5:
-                    vwma_score = 52.0
-                elif diff_pct > -1.5:
-                    vwma_score = 38.0
-                else:
-                    vwma_score = 25.0
-
-                result.vwma_score = clamp_score(vwma_score)
+                result.vwma_score = _score_vwma(diff_pct, side="long")
+                # [MTF-BIAS-FIX -- Sub-Batch A.2] vwma_score_short baru, belum
+                # pernah ada sebelumnya (di luar cakupan Batch 3 lama).
+                result.vwma_score_short = _score_vwma(diff_pct, side="short")
                 vwma_ok = True
     except Exception as exc:
         errors.append(f"vwma: {exc}")
+
+    if not vwma_ok:
+        result.vwma_score_short = SCORE_NEUTRAL
 
     sub_indicators = [
         (_RSI_WEIGHT,   rsi_ok,   result.rsi_score),
@@ -780,6 +816,7 @@ def score_momentum(
     if total_weight_available < 1e-6:
         errors.append("momentum: tidak ada sub-indikator yang valid, composite = neutral")
         result.composite_score = SCORE_NEUTRAL
+        result.composite_score_short = SCORE_NEUTRAL
         return result
 
     composite = 0.0
@@ -790,6 +827,25 @@ def score_momentum(
         composite  += score * adjusted_w
 
     result.composite_score = clamp_score(composite)
+
+    # [MTF-BIAS-FIX -- Sub-Batch A.2, proyek MTF composite side-aware]
+    # composite_score_short: reuse ok-flags & bobot yang SAMA dgn long (soal
+    # ketersediaan data, bukan arah), baca sub-score _short (rsi/macd/stoch
+    # dari Batch 3, vwma dari _score_vwma baru di atas).
+    sub_indicators_short = [
+        (_RSI_WEIGHT,   rsi_ok,   result.rsi_score_short),
+        (_MACD_WEIGHT,  macd_ok,  result.macd_score_short),
+        (_STOCH_WEIGHT, stoch_ok, result.stoch_score_short),
+        (_VWMA_WEIGHT,  vwma_ok,  result.vwma_score_short),
+    ]
+    composite_short = 0.0
+    for base_w, ok, score in sub_indicators_short:
+        if not ok:
+            continue
+        adjusted_w = base_w / total_weight_available
+        composite_short += score * adjusted_w
+
+    result.composite_score_short = clamp_score(composite_short)
 
     log.debug(
         "momentum composite: rsi=%.1f macd=%.1f stoch=%.1f vwma=%.1f → composite=%.1f",
