@@ -242,7 +242,7 @@ class TrendIndicators:
     vwap_score:    float           = 50.0
     vwap_score_short: Optional[float] = None   # [BIAS-FIX -- Batch 5]
     composite_score: float = 50.0
-    
+    composite_score_short: Optional[float] = None   # [MTF-BIAS-FIX -- Sub-Batch A]
     def is_valid(self) -> bool:
         return all(v is not None for v in [self.ema9, self.ema21, self.ema50])
 
@@ -274,7 +274,9 @@ class MomentumIndicators:
     vwma:              Optional[float] = None   # nilai VWMA_20
     vwma_vs_sma:       Optional[float] = None   # VWMA - SMA: positif = vol berat di atas avg
     vwma_score:        float           = 50.0
+    vwma_score_short:  Optional[float] = None   # [MTF-BIAS-FIX -- Sub-Batch A.2]
     composite_score: float = 50.0
+    composite_score_short: Optional[float] = None   # [MTF-BIAS-FIX -- Sub-Batch A.2]
 
     def is_valid(self) -> bool:
         return self.rsi is not None
@@ -302,6 +304,7 @@ class StrengthIndicators:
     mfi_score:       float           = 50.0
     mfi_score_short: Optional[float] = None
     composite_score: float = 50.0
+    composite_score_short: Optional[float] = None   # [MTF-BIAS-FIX -- Sub-Batch A.3]
 
     def is_valid(self) -> bool:
         return self.volume_ratio is not None
@@ -349,7 +352,9 @@ class PatternIndicators:
     # eksplisit oleh score_pattern(), merusak mekanisme fallback aman.
     pattern_score_short: Optional[float] = None
     context_score:    float = 50.0
+    context_score_short: Optional[float] = None   # [MTF-BIAS-FIX -- Sub-Batch A.4]
     composite_score:  float = 50.0
+    composite_score_short: Optional[float] = None   # [MTF-BIAS-FIX -- Sub-Batch A.4]
 
     def is_valid(self) -> bool:
         return True
@@ -376,6 +381,7 @@ class OscillatorIndicators:
     roc_score_short:  Optional[float] = None   # [BIAS-FIX -- Batch 4]
     # ── Composite ─────────────────────────────────────────────────────────────
     composite_score:  float           = 50.0
+    composite_score_short: Optional[float] = None   # [MTF-BIAS-FIX -- Sub-Batch A.5]
 
     def is_valid(self) -> bool:
         return self.cci is not None or self.roc is not None
@@ -438,6 +444,7 @@ class StructureIndicators:
     last_swing_low:          Optional[float] = None
     swing_points:            List[dict]      = field(default_factory=list)
     market_structure_score:  float           = 50.0
+    market_structure_score_short: Optional[float] = None   # [MTF-BIAS-FIX -- Sub-Batch A.6]
     # [v2 NEW] Support/Resistance zone clustering (confluence pivot+fib+swing)
     sr_zones:                      List[dict]      = field(default_factory=list)
     nearest_structure_support:     Optional[float] = None
@@ -449,7 +456,9 @@ class StructureIndicators:
     donchian_pct_b:          Optional[float] = None
     donchian_width_pct:      Optional[float] = None
     donchian_score:          float           = 50.0
+    donchian_score_short:    Optional[float] = None   # [MTF-BIAS-FIX -- Sub-Batch A.6]
     composite_score:         float           = 50.0
+    composite_score_short:   Optional[float] = None   # [MTF-BIAS-FIX -- Sub-Batch A.6]
 
     def is_valid(self) -> bool:
         return self.tenkan is not None or self.pivot is not None
