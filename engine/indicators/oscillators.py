@@ -419,6 +419,7 @@ def score_oscillators(
     """
     w = {**_DEFAULT_WEIGHTS, **(weights or {})}
     result = OscillatorIndicators()
+    result.composite_score_short = 50.0   # default aman jika exception terjadi sblm wiring composite
     try:
         # ── CCI ───────────────────────────────────────────────────────────────
         # [MSL-1] Fast-path: pakai kolom pre-computed jika tersedia
@@ -489,9 +490,27 @@ def score_oscillators(
         total_w = sum(available_w.values())
         if total_w <= 0:
             result.composite_score = 50.0
+            result.composite_score_short = 50.0
         else:
             result.composite_score = clamp_score(
                 sum(available_val[k] * available_w[k] for k in available_w) / total_w
+            )
+            # [MTF-BIAS-FIX -- Sub-Batch A.5, proyek MTF composite side-aware]
+            # composite_score_short: reuse available_w (ok-flags/bobot) yang
+            # SAMA persis dgn long -- ketersediaan data (cci/williams_r/roc
+            # is not None) tidak bergantung arah. cci_score_short/
+            # williams_r_score_short/roc_score_short SUDAH dihitung inline di
+            # atas sejak Batch 4 (bukan lewat sub-object copy spt momentum/
+            # strength, jadi tidak ada risiko bug copy-omission di sini).
+            available_val_short = {}
+            if "cci" in available_w:
+                available_val_short["cci"] = result.cci_score_short
+            if "williams" in available_w:
+                available_val_short["williams"] = result.williams_r_score_short
+            if "roc" in available_w:
+                available_val_short["roc"] = result.roc_score_short
+            result.composite_score_short = clamp_score(
+                sum(available_val_short[k] * available_w[k] for k in available_w) / total_w
             )
 
     except Exception as exc:
