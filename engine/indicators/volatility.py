@@ -231,7 +231,9 @@ def calculate_bollinger_bands(
             bb_position=None,
             bb_trending="flat",
             bb_score=SCORE_NEUTRAL,
+            bb_score_short=SCORE_NEUTRAL,
             composite_score=SCORE_NEUTRAL,
+            composite_score_short=SCORE_NEUTRAL,
         )
 
     min_bars = period + 2
@@ -247,7 +249,9 @@ def calculate_bollinger_bands(
             bb_position=None,
             bb_trending="flat",
             bb_score=SCORE_NEUTRAL,
+            bb_score_short=SCORE_NEUTRAL,
             composite_score=SCORE_NEUTRAL,
+            composite_score_short=SCORE_NEUTRAL,
         )
 
     close = df["close"]
@@ -276,7 +280,9 @@ def calculate_bollinger_bands(
             bb_position=None,
             bb_trending="flat",
             bb_score=SCORE_NEUTRAL,
+            bb_score_short=SCORE_NEUTRAL,
             composite_score=SCORE_NEUTRAL,
+            composite_score_short=SCORE_NEUTRAL,
         )
 
     upper_val    = float(last_upper.iloc[-1])
@@ -288,10 +294,16 @@ def calculate_bollinger_bands(
     position_val = max(0.0, min(1.0, position_val))
     bb_trending = _bb_trend(width_series.dropna())
     score = _score_bb(position_val, width_val, bb_trending)  # [UPGRADE] bb_trending kini aktif
+    # [MTF-BIAS-FIX -- Sub-Batch B] bb_score TERBUKTI directional (favor
+    # posisi rendah = dekat lower band = long-favorable "buy the dip"),
+    # BUKAN arah-agnostic seperti dugaan awal. Short = role-swap posisi
+    # (1 - bb_position) lewat formula yang SAMA -- konsisten gaya
+    # sar/pivot/fib/donchian (bukan reformulasi cabang baru).
+    score_short = _score_bb(1.0 - position_val, width_val, bb_trending)
 
     log.debug(
-        "bollinger: upper=%.5f mid=%.5f lower=%.5f width=%.4f pos=%.3f trend=%s → score=%.1f",
-        upper_val, middle_val, lower_val, width_val, position_val, bb_trending, score,
+        "bollinger: upper=%.5f mid=%.5f lower=%.5f width=%.4f pos=%.3f trend=%s → score=%.1f short=%.1f",
+        upper_val, middle_val, lower_val, width_val, position_val, bb_trending, score, score_short,
     )
 
     return VolatilityIndicators(
@@ -302,8 +314,27 @@ def calculate_bollinger_bands(
         bb_position=position_val,
         bb_trending=bb_trending,
         bb_score=score,
+        bb_score_short=score_short,
         composite_score=score,
+        composite_score_short=score_short,
     )
+
+def _score_kc(kc_position: float) -> float:
+    # [MTF-BIAS-FIX -- Sub-Batch B] Diekstrak dari ladder inline lama
+    # (perilaku long IDENTIK, tidak diubah -- diverifikasi manual, clamp_score
+    # no-op utk semua literal di sini) supaya bisa dipakai ulang utk short
+    # lewat role-swap posisi (1 - kc_position), konsisten gaya bb_score_short.
+    if kc_position < 0.0:
+        score = 62.0
+    elif kc_position < 0.35:
+        score = 70.0
+    elif kc_position < 0.65:
+        score = 55.0
+    elif kc_position <= 1.0:
+        score = 42.0
+    else:
+        score = 30.0
+    return clamp_score(score)
 
 def calculate_keltner_channels(
     df: pd.DataFrame,
@@ -322,7 +353,9 @@ def calculate_keltner_channels(
                 kc_middle=None,
                 kc_lower=None,
                 kc_score=SCORE_NEUTRAL,
+                kc_score_short=SCORE_NEUTRAL,
                 composite_score=SCORE_NEUTRAL,
+                composite_score_short=SCORE_NEUTRAL,
             )
 
     min_bars = period * 2 + 2
@@ -335,7 +368,9 @@ def calculate_keltner_channels(
             kc_middle=None,
             kc_lower=None,
             kc_score=SCORE_NEUTRAL,
+            kc_score_short=SCORE_NEUTRAL,
             composite_score=SCORE_NEUTRAL,
+            composite_score_short=SCORE_NEUTRAL,
         )
 
     close = df["close"]
@@ -355,7 +390,9 @@ def calculate_keltner_channels(
             kc_middle=None,
             kc_lower=None,
             kc_score=SCORE_NEUTRAL,
+            kc_score_short=SCORE_NEUTRAL,
             composite_score=SCORE_NEUTRAL,
+            composite_score_short=SCORE_NEUTRAL,
         )
 
     upper_val  = float(last_upper.iloc[-1])
@@ -369,29 +406,25 @@ def calculate_keltner_channels(
     else:
         kc_position = 0.5
 
-    if kc_position < 0.0:
-        score = 62.0
-    elif kc_position < 0.35:
-        score = 70.0
-    elif kc_position < 0.65:
-        score = 55.0
-    elif kc_position <= 1.0:
-        score = 42.0
-    else:
-        score = 30.0
+    score = _score_kc(kc_position)
+    # [MTF-BIAS-FIX -- Sub-Batch B] kc_score TERBUKTI directional (pola sama
+    # seperti bb_score, favor kc_position rendah). Short = role-swap posisi
+    # (1 - kc_position) lewat formula/ladder yang SAMA.
+    score_short = _score_kc(1.0 - kc_position)
 
     log.debug(
-        "keltner: upper=%.5f mid=%.5f lower=%.5f kc_pos=%.3f → score=%.1f",
-        upper_val, middle_val, lower_val, kc_position, score,
+        "keltner: upper=%.5f mid=%.5f lower=%.5f kc_pos=%.3f → score=%.1f short=%.1f",
+        upper_val, middle_val, lower_val, kc_position, score, score_short,
     )
 
-    score = clamp_score(score)
     return VolatilityIndicators(
         kc_upper=upper_val,
         kc_middle=middle_val,
         kc_lower=lower_val,
         kc_score=score,
+        kc_score_short=score_short,
         composite_score=score,
+        composite_score_short=score_short,
     )
 
 def detect_squeeze(
@@ -564,7 +597,9 @@ def calculate_atr_enhanced(
                 atr_percentile=None,
                 atr_trend="flat",
                 atr_score=SCORE_NEUTRAL,
+                atr_score_short=SCORE_NEUTRAL,
                 composite_score=SCORE_NEUTRAL,
+                composite_score_short=SCORE_NEUTRAL,
             )
 
     min_bars = period * 2 + 2
@@ -578,7 +613,9 @@ def calculate_atr_enhanced(
             atr_percentile=None,
             atr_trend="flat",
             atr_score=SCORE_NEUTRAL,
+            atr_score_short=SCORE_NEUTRAL,
             composite_score=SCORE_NEUTRAL,
+            composite_score_short=SCORE_NEUTRAL,
         )
 
     close = df["close"]
@@ -593,7 +630,9 @@ def calculate_atr_enhanced(
             atr_percentile=None,
             atr_trend="flat",
             atr_score=SCORE_NEUTRAL,
+            atr_score_short=SCORE_NEUTRAL,
             composite_score=SCORE_NEUTRAL,
+            composite_score_short=SCORE_NEUTRAL,
         )
 
     atr_val   = float(atr_clean.iloc[-1])
@@ -614,13 +653,21 @@ def calculate_atr_enhanced(
         atr_val, atr_pct, atr_percentile, atr_trend, score,
     )
 
+    # [MTF-BIAS-FIX -- Sub-Batch B, KNOWN LIMITATION] alias, BUKAN diklaim
+    # arah-agnostic -- lihat CLAUDE.md bagian "TEMUAN TERPISAH" utk root
+    # cause bias (atr_percentile ranking ATR absolut, bukan atr_pct) dan
+    # kenapa fix-nya DITUNDA sbg proyek terpisah (blast radius menyentuh
+    # regime classification live). Alias di sini cuma supaya
+    # composite_score_short tidak None/crash.
     return VolatilityIndicators(
         atr=atr_val,
         atr_pct=atr_pct,
         atr_percentile=atr_percentile,
         atr_trend=atr_trend,
         atr_score=score,
+        atr_score_short=score,
         composite_score=score,
+        composite_score_short=score,
     )
 
 def calculate_squeeze(
@@ -628,11 +675,16 @@ def calculate_squeeze(
     errors: Optional[List[str]] = None,
 ) -> VolatilityIndicators:
     squeeze_active, squeeze_bars, squeeze_score = detect_squeeze(df, errors=errors)
+    # [MTF-BIAS-FIX -- Sub-Batch B] squeeze_score confirmed genuinely
+    # arah-agnostic via fuzz (murni fungsi durasi/state squeeze) -- alias,
+    # bukan hasil formula terpisah.
     return VolatilityIndicators(
         squeeze_active=squeeze_active,
         squeeze_bars=squeeze_bars,
         squeeze_score=squeeze_score,
+        squeeze_score_short=squeeze_score,
         composite_score=squeeze_score,
+        composite_score_short=squeeze_score,
     )
 
 def score_volatility(
@@ -652,24 +704,29 @@ def score_volatility(
     result.bb_position = bb.bb_position
     result.bb_trending = bb.bb_trending
     result.bb_score    = bb.bb_score
+    result.bb_score_short = bb.bb_score_short   # [MTF-BIAS-FIX -- Sub-Batch B]
     bb_ok = bb.bb_upper is not None
-    
+
     kc = calculate_keltner_channels(df, errors=errors)
     result.kc_upper  = kc.kc_upper
     result.kc_lower  = kc.kc_lower
     result.kc_middle = kc.kc_middle
     result.kc_score  = kc.kc_score
+    result.kc_score_short = kc.kc_score_short   # [MTF-BIAS-FIX -- Sub-Batch B]
     kc_ok = kc.kc_upper is not None
 
     sq = detect_squeeze(df, errors=errors)
     result.squeeze_active = sq[0]
     result.squeeze_bars   = sq[1]
     result.squeeze_score  = sq[2]
+    result.squeeze_score_short = sq[2]   # [MTF-BIAS-FIX -- Sub-Batch B] alias, confirmed arah-agnostic
 
     if kc_ok:
         combined_kc_squeeze = (result.kc_score + result.squeeze_score) / 2.0
+        combined_kc_squeeze_short = (result.kc_score_short + result.squeeze_score_short) / 2.0
     else:
         combined_kc_squeeze = result.squeeze_score
+        combined_kc_squeeze_short = result.squeeze_score_short
     # [BUG-FIX] kc_squeeze_ok = kc_ok or True selalu menghasilkan True (X or True ≡ True),
     # sehingga bobot SQUEEZE selalu masuk composite terlepas apapun. Ganti dengan
     # flag eksplisit: squeeze selalu punya skor (minimal SCORE_NEUTRAL dari fallback),
@@ -682,12 +739,18 @@ def score_volatility(
     result.atr_percentile = atr.atr_percentile
     result.atr_trend      = atr.atr_trend
     result.atr_score      = atr.atr_score
+    result.atr_score_short = atr.atr_score_short   # [MTF-BIAS-FIX -- Sub-Batch B, KNOWN LIMITATION -- alias]
     atr_ok = atr.atr is not None
 
     sub_indicators = [
         (_BB_WEIGHT,      bb_ok,             result.bb_score),
         (_SQUEEZE_WEIGHT, kc_squeeze_valid,  combined_kc_squeeze),
         (_ATR_WEIGHT,     atr_ok,            result.atr_score),
+    ]
+    sub_indicators_short = [
+        (_BB_WEIGHT,      bb_ok,             result.bb_score_short),
+        (_SQUEEZE_WEIGHT, kc_squeeze_valid,  combined_kc_squeeze_short),
+        (_ATR_WEIGHT,     atr_ok,            result.atr_score_short),
     ]
 
     total_weight_available = sum(w for w, ok, _ in sub_indicators if ok)
@@ -697,22 +760,26 @@ def score_volatility(
             "volatility: tidak ada sub-indikator yang valid, composite = neutral"
         )
         result.composite_score = SCORE_NEUTRAL
+        result.composite_score_short = SCORE_NEUTRAL
         return result
 
     composite = 0.0
-    for base_w, ok, score in sub_indicators:
+    composite_short = 0.0
+    for (base_w, ok, score), (_, _, score_short) in zip(sub_indicators, sub_indicators_short):
         if not ok:
             continue
         adjusted_w  = base_w / total_weight_available
         composite  += score * adjusted_w
+        composite_short += score_short * adjusted_w
 
     result.composite_score = clamp_score(composite)
+    result.composite_score_short = clamp_score(composite_short)   # [MTF-BIAS-FIX -- Sub-Batch B]
 
     log.debug(
-        "volatility composite: bb=%.1f squeeze=%.1f atr=%.1f → composite=%.1f "
+        "volatility composite: bb=%.1f squeeze=%.1f atr=%.1f → composite=%.1f short=%.1f "
         "(squeeze_active=%s bars=%d)",
         result.bb_score, combined_kc_squeeze, result.atr_score,
-        result.composite_score,
+        result.composite_score, result.composite_score_short,
         result.squeeze_active, result.squeeze_bars,
     )
 

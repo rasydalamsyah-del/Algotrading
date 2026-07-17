@@ -935,6 +935,11 @@ class VolumetricBreakoutStrategyBase(BaseStrategy):
                 log.debug("[%s] Tidak ada profile — skip pipeline", symbol)
                 return None
 
+            # [MTF-BIAS-FIX -- Sub-Batch D] `side` (parameter get_scored_signal
+            # ini sendiri, sudah ada sejak dukungan short) sekarang diteruskan
+            # ke observer.observe() -- sebelumnya TIDAK PERNAH dikirim, jadi
+            # observation.primary_tf_score/confirmation_tf_score SELALU
+            # dihitung versi long apapun side sinyal yang sedang dievaluasi.
             observation = await asyncio.get_running_loop().run_in_executor(
                 None,
                 self._observer.observe,
@@ -944,6 +949,7 @@ class VolumetricBreakoutStrategyBase(BaseStrategy):
                 confirmation_df,
                 confirmation_timeframe,
                 ob_data,
+                side,
             )
 
             if observation is None or not observation.is_tradeable():

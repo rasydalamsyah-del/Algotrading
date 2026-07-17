@@ -314,6 +314,14 @@ class TradingBot:
         # 'auto_scan_universe_futures', kalau true baru scan Binance
         # FUTURES (bukan spot), simpan ke universe_futures.json.
         from future.exchange_future import auto_scan_and_populate_futures
+        # [FIX -- insiden EVAA/USDT 13 Juli 2026, rencana perbaikan #1 dari 3]
+        # Refresh cache market ccxt SEBELUM scan+validasi di bawah -- cache
+        # lama (dari load_markets() di connect(), baris ~293) bisa ketinggalan
+        # kalau ada simbol baru listing setelah itu. scan_binance_futures_
+        # universe() sendiri hit REST mentah (independen dari cache ini), tapi
+        # is_symbol_supported() di bawah baca cache ccxt -- reload_markets()
+        # memastikan validasi itu pakai data paling baru yang tersedia.
+        await self.exchange.reload_markets()
         # [FIX] Validasi simbol hasil scan terhadap ccxt SEBELUM ditulis ke
         # universe_futures.json/universe_overrides -- scan_binance_futures_
         # universe() hit REST mentah, independen dari ccxt yang benar-benar

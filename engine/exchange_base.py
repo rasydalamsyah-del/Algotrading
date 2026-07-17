@@ -167,6 +167,21 @@ class BaseExchangeConnector:
         except Exception:
             return False
 
+    async def reload_markets(self) -> None:
+        """
+        [FIX -- insiden EVAA/USDT 13 Juli 2026, rencana perbaikan #1 dari 3]
+        Paksa ccxt refetch daftar market terbaru dari exchange (bukan pakai
+        cache dari load_markets() awal di connect()). Dipakai SEBELUM auto-
+        scan universe futures memvalidasi simbol hasil scan lewat
+        is_symbol_supported() -- scan_binance_futures_universe() hit REST
+        Binance mentah, independen dari cache ccxt, jadi kalau ada simbol
+        yang baru listing SETELAH connect() meng-cache market, cache lama
+        bisa salah menolaknya sebagai "tidak dikenal". Pure refresh read,
+        tidak menyentuh order/saldo/posisi -- kalau data pasar tidak
+        berubah, hasilnya identik dengan cache lama.
+        """
+        self._markets = await self._ex.load_markets(reload=True)
+
     def amount_to_precision(self, symbol: str, amount: float) -> float:
         try:
             return float(self._ex.amount_to_precision(symbol, amount))

@@ -318,19 +318,35 @@ class VolatilityIndicators:
     bb_position: Optional[float] = None
     bb_trending: Optional[str]   = None
     bb_score:    float           = 50.0
+    # [MTF-BIAS-FIX -- Sub-Batch B] Directional (confirmed via fuzz, BUKAN
+    # arah-agnostic seperti dugaan awal CLAUDE.md) -- role-swap bb_position.
+    bb_score_short: Optional[float] = None
     kc_upper:    Optional[float] = None
     kc_lower:    Optional[float] = None
     kc_middle:   Optional[float] = None
     kc_score:    float           = 50.0
+    # [MTF-BIAS-FIX -- Sub-Batch B] Directional (pola sama seperti bb_score).
+    kc_score_short: Optional[float] = None
     squeeze_active:    bool           = False
     squeeze_bars:      int            = 0
     squeeze_score:     float          = 50.0
+    # [MTF-BIAS-FIX -- Sub-Batch B] Genuinely arah-agnostic (confirmed via
+    # fuzz, murni fungsi durasi/state squeeze) -- alias = squeeze_score.
+    squeeze_score_short: Optional[float] = None
     atr:              Optional[float] = None
     atr_pct:          Optional[float] = None
     atr_percentile:   Optional[float] = None
     atr_trend:        Optional[str]   = None
     atr_score:        float           = 50.0
+    # [MTF-BIAS-FIX -- Sub-Batch B, KNOWN LIMITATION] alias = atr_score.
+    # BUKAN diklaim arah-agnostic -- ada bias terukur krn _calc_atr_percentile()
+    # ranking ATR absolut (bukan atr_pct yg dinormalisasi harga), root cause
+    # blast-radius-nya menyentuh regime classification live (lihat CLAUDE.md,
+    # bagian "TEMUAN TERPISAH"). Root-cause fix DITUNDA sbg proyek terpisah;
+    # alias di sini cuma supaya composite_score_short tidak crash/None.
+    atr_score_short: Optional[float] = None
     composite_score: float = 50.0
+    composite_score_short: Optional[float] = None   # [MTF-BIAS-FIX -- Sub-Batch B]
 
     def is_valid(self) -> bool:
         return self.atr is not None and self.bb_upper is not None

@@ -19,10 +19,12 @@ kasus termudah (batch 1, pattern_score) yang dikerjakan duluan.
 
 from __future__ import annotations
 
+import asyncio
 import itertools
 import random
 import unittest
 
+import numpy as np
 import pandas as pd
 
 from engine.core.models import IndicatorSet, PatternContext, PatternType, clamp_score
@@ -59,6 +61,13 @@ from engine.indicators.orderbook import (
     calculate_orderbook, score_orderbook, score_orderbook_data, reset_state,
     IMBALANCE_BULL, IMBALANCE_BEAR,
 )
+from engine.indicators.volatility import (
+    score_volatility, calculate_bollinger_bands, calculate_keltner_channels,
+    detect_squeeze, calculate_atr_enhanced, calculate_squeeze,
+    _score_bb, _score_kc,
+)
+from engine.intelligence.observer import _compute_tf_score, observe, MarketObserver, clear_cache
+from engine.strategy_base import VolumetricBreakoutStrategyBase
 
 
 class TestBatch0PickSideScoreHelper(unittest.TestCase):
@@ -4033,6 +4042,709 @@ class TestMTFSubBatchAStructureCompositeShort(unittest.TestCase):
         r = score_structure(df)
         self.assertIsNotNone(r.composite_score_short)
         self.assertNotEqual(r.composite_score, r.composite_score_short)
+
+
+class TestMTFSubBatchBVolatilityCompositeShort(unittest.TestCase):
+    """[PROYEK BARU -- MTF composite side-aware, Sub-Batch B, volatility]
+
+    score_volatility(): composite = BB(0.30) + (KC+Squeeze)/2 (0.30) + ATR(0.40),
+    exclude+renormalize ok-flags (bug-fix lama `kc_squeeze_valid`, tidak disentuh).
+
+    [TAHAP 0] Hipotesis awal CLAUDE.md ("volatility genuinely arah-agnostic
+    semua") TERBUKTI SALAH SEBAGIAN setelah verifikasi kode + fuzz:
+    - `bb_score`/`kc_score`: DIRECTIONAL (bukan arah-agnostic). Short dibuat
+      via role-swap posisi (1 - bb_position / 1 - kc_position) lewat formula
+      LONG yang SAMA persis (`_score_bb`/`_score_kc`), gaya sar/pivot/fib/
+      donchian -- BUKAN reformulasi cabang baru.
+    - `squeeze_score`: genuinely arah-agnostic (murni durasi/state squeeze).
+      `squeeze_score_short` = alias langsung.
+    - `atr_score`: formula `_score_atr()` sendiri TIDAK directional, TAPI
+      input `atr_percentile`-nya (dari `_calc_atr_percentile()`) me-ranking
+      ATR ABSOLUT (bukan `atr_pct` yg dinormalisasi harga) -- bias terukur
+      di pasar trending. `atr_score_short` = alias + KNOWN LIMITATION
+      (didokumentasikan eksplisit, BUKAN diklaim arah-agnostic). Root-cause
+      fix DITUNDA sbg proyek terpisah (lihat CLAUDE.md "TEMUAN TERPISAH") --
+      blast radius menyentuh regime classification LIVE (classifier.py),
+      di luar scope aditif Sub-Batch B.
+
+    [KARAKTERISTIK DESAIN -- BUKAN bug] `bb_score`/`kc_score` (formula LONG
+    asli, TIDAK diubah) ternyata KONTRARIAN/mean-reversion: reward posisi
+    RENDAH (dekat lower band = "buy the dip"), BUKAN trend-following. Fuzz
+    200 trial (choppy random-walk berbias, BUKAN cuma tren monoton lurus)
+    membuktikan `composite_score` (long, tidak berubah) rata-rata LEBIH
+    TINGGI di fixture downtrend (63.20) drpd uptrend (45.71) -- kebalikan
+    ekspektasi trend-following naif. Krn `composite_score_short` adalah
+    role-swap EXACT dari formula yg sama, ia mewarisi sifat kontrarian yg
+    sama (condong tinggi di uptrend, BUKAN downtrend). Pola IDENTIK dgn
+    `momentum.py` (RSI+Stoch kontrarian) & `oscillators.py` (CCI/Williams %R
+    kontrarian) yg sudah didokumentasikan sebelumnya -- SENGAJA TIDAK
+    diperbaiki (mengubah formula long di luar scope aditif). Test di bawah
+    ditulis berdasarkan role-swap symmetry & arithmetic correctness yang
+    TERBUKTI benar, BUKAN asumsi "uptrend favors long"."""
+
+    # ── 1. Long regression ──────────────────────────────────────────────────
+
+    def test_long_score_bb_static_values_unchanged(self):
+        # [Diverifikasi manual via shell sebelum ditulis -- lihat investigasi
+        # Tahap 0] width=0.05 persis di batas BB_WIDTH_NORMAL (bukan < 0.05),
+        # jadi tidak kena adjustment lebar band -- baseline paling bersih.
+        cases = [
+            (0.0,   80.0), (0.175, 77.5), (0.35, 75.0), (0.425, 70.0),
+            (0.5,   65.0), (0.575, 58.5), (0.65, 52.0), (0.725, 46.0),
+            (0.8,   40.0), (0.9,   32.5), (1.0,  25.0),
+        ]
+        for pos, expected in cases:
+            self.assertAlmostEqual(_score_bb(pos, 0.05, "flat"), expected, places=6)
+
+    def test_long_score_kc_static_values_unchanged(self):
+        cases = [
+            (-0.5, 62.0), (-0.01, 62.0), (0.0, 70.0), (0.2, 70.0), (0.34, 70.0),
+            (0.35, 55.0), (0.5, 55.0), (0.64, 55.0), (0.65, 42.0), (0.8, 42.0),
+            (1.0, 42.0), (1.01, 30.0), (1.5, 30.0),
+        ]
+        for pos, expected in cases:
+            self.assertAlmostEqual(_score_kc(pos), expected, places=6)
+
+    def test_long_score_kc_matches_old_inline_ladder_fuzz(self):
+        """[REGRESI -- Sub-Batch B] `_score_kc()` diekstrak dari ladder inline
+        lama di `calculate_keltner_channels()`. Fuzz ini membuktikan hasilnya
+        byte-identical thd reimplementasi independen ladder ASLI (sebelum
+        diekstrak), supaya ekstraksi terbukti aditif murni -- bukan asumsi."""
+        def _old_inline_ladder(kc_position):
+            if kc_position < 0.0:
+                score = 62.0
+            elif kc_position < 0.35:
+                score = 70.0
+            elif kc_position < 0.65:
+                score = 55.0
+            elif kc_position <= 1.0:
+                score = 42.0
+            else:
+                score = 30.0
+            return max(0.0, min(100.0, round(score, 4)))
+
+        rng = random.Random(2024)
+        for _ in range(5000):
+            pos = rng.uniform(-3.0, 3.0)
+            self.assertAlmostEqual(_score_kc(pos), _old_inline_ladder(pos), places=9)
+
+    def test_long_composite_score_arithmetic_fuzz(self):
+        """Fuzz composite_score (long, TIDAK diubah) lewat score_volatility()
+        vs reimplementasi independen formula renormalisasi -- membuktikan
+        refactor _score_kc tidak mengganggu long end-to-end."""
+        rng = random.Random(4242)
+        for i in range(200):
+            n = rng.randint(0, 150)
+            if n == 0:
+                df = pd.DataFrame({"open": [], "high": [], "low": [], "close": [], "volume": []})
+            elif i % 2 == 0:
+                df = _make_trend_df(n, direction=rng.choice([1, -1]),
+                                     start=rng.uniform(20.0, 500.0), step=rng.uniform(0.05, 3.0))
+            else:
+                df = _make_choppy_df(seed=rng.randint(0, 10000), bias=rng.uniform(-0.3, 0.3), n=n)
+
+            r = score_volatility(df)
+
+            bb_ok = r.bb_upper is not None
+            kc_ok = r.kc_upper is not None
+            combined_kc_sq = (r.kc_score + r.squeeze_score) / 2.0 if kc_ok else r.squeeze_score
+            weighted = [
+                (0.30, bb_ok, r.bb_score),
+                (0.30, True,  combined_kc_sq),
+                (0.40, r.atr is not None, r.atr_score),
+            ]
+            avail = sum(w for w, ok, _ in weighted if ok)
+            if avail < 1e-6:
+                expected = 50.0
+            else:
+                # [PENTING] Urutan operasi HARUS sama persis dgn score_volatility()
+                # (adjusted_w = base_w/avail per-term, baru dikali skor, baru
+                # diakumulasi) -- urutan float berbeda bisa geser digit ke-4
+                # stlh round(), walau matematis ekuivalen.
+                raw = 0.0
+                for w, ok, s in weighted:
+                    if not ok:
+                        continue
+                    raw += s * (w / avail)
+                expected = max(0.0, min(100.0, round(raw, 4)))  # matches clamp_score() exactly
+            self.assertAlmostEqual(expected, r.composite_score, places=6)
+
+    # ── 2. Swap-symmetry (role-swap, via data real) ──────────────────────────
+
+    def test_bb_score_short_independent_role_swap_reconstruction(self):
+        """Role-swap MANUAL: ambil bb_position/bb_width/bb_trending dari
+        calculate_bollinger_bands(), lalu panggil _score_bb(1-pos, ...)
+        SENDIRI (bukan cuma baca field bb_score_short) -- reconstruction
+        independen, bukan tautology."""
+        for direction in (1, -1):
+            df = _make_trend_df(100, direction=direction, step=0.7)
+            r = calculate_bollinger_bands(df)
+            manual_short = _score_bb(1.0 - r.bb_position, r.bb_width, r.bb_trending)
+            self.assertAlmostEqual(r.bb_score_short, manual_short, places=9)
+
+        for seed in range(30):
+            df = _make_choppy_df(seed=seed, bias=random.Random(seed).uniform(-0.3, 0.3), n=100)
+            r = calculate_bollinger_bands(df)
+            manual_short = _score_bb(1.0 - r.bb_position, r.bb_width, r.bb_trending)
+            self.assertAlmostEqual(r.bb_score_short, manual_short, places=9)
+
+    def test_kc_score_short_independent_role_swap_reconstruction(self):
+        for direction in (1, -1):
+            df = _make_trend_df(100, direction=direction, step=0.7)
+            r = calculate_keltner_channels(df)
+            kc_range = r.kc_upper - r.kc_lower
+            close_val = df["close"].iloc[-1]
+            kc_position = (close_val - r.kc_lower) / kc_range if kc_range > 1e-9 else 0.5
+            manual_short = _score_kc(1.0 - kc_position)
+            self.assertAlmostEqual(r.kc_score_short, manual_short, places=9)
+
+    def test_bb_kc_swap_symmetry_not_exact_sum_to_100_documented(self):
+        """[KARAKTERISTIK DESAIN -- bukan bug] Ladder bb/kc TIDAK simetris di
+        sekitar 0.5 (beda dgn pattern.py/context_score yg exact reflection
+        100-x) -- didokumentasikan eksplisit, konsisten gaya sar/fib/roc."""
+        bb_sum_0 = _score_bb(0.0, 0.05, "flat") + _score_bb(1.0, 0.05, "flat")
+        bb_sum_35 = _score_bb(0.35, 0.05, "flat") + _score_bb(0.65, 0.05, "flat")
+        self.assertNotAlmostEqual(bb_sum_0, 100.0, places=1)
+        self.assertNotAlmostEqual(bb_sum_35, 100.0, places=1)
+
+        kc_sum = _score_kc(0.2) + _score_kc(0.8)
+        self.assertNotAlmostEqual(kc_sum, 100.0, places=1)
+
+    def test_squeeze_score_short_alias_exact_fuzz(self):
+        rng = random.Random(1357)
+        for _ in range(150):
+            n = rng.randint(45, 150)
+            df = (_make_trend_df(n, direction=rng.choice([1, -1]), step=rng.uniform(0.05, 2.0))
+                  if rng.random() < 0.5 else
+                  _make_choppy_df(seed=rng.randint(0, 10000), bias=rng.uniform(-0.3, 0.3), n=n))
+            active, bars, sq_score = detect_squeeze(df)
+            r = score_volatility(df)
+            self.assertEqual(r.squeeze_score, r.squeeze_score_short)
+            self.assertAlmostEqual(r.squeeze_score, sq_score, places=6)
+
+    def test_atr_score_short_alias_exact_fuzz(self):
+        rng = random.Random(9753)
+        for _ in range(150):
+            n = rng.randint(30, 150)
+            df = (_make_trend_df(n, direction=rng.choice([1, -1]), step=rng.uniform(0.05, 2.0))
+                  if rng.random() < 0.5 else
+                  _make_choppy_df(seed=rng.randint(0, 10000), bias=rng.uniform(-0.3, 0.3), n=n))
+            r = calculate_atr_enhanced(df)
+            self.assertEqual(r.atr_score, r.atr_score_short)
+
+    def test_atr_percentile_known_bug_documented_geometric_mirror(self):
+        """[KNOWN LIMITATION -- didokumentasikan, TIDAK diperbaiki di sini]
+        `_calc_atr_percentile()` me-ranking ATR ABSOLUT (dolar), bukan
+        `atr_pct` (dinormalisasi harga). Dibuktikan lewat geometric mirror
+        (mclose = anchor**2/close, negasi log-return EXACT): dua seri dgn
+        profil return relatif yg identik-berlawanan seharusnya (kalau
+        genuinely price-normalized) punya atr_percentile yg simetris --
+        pada kenyataannya SANGAT TIDAK (99.50 vs 2.50, padahal atr_pct
+        cuma beda 1.91 vs 2.70) krn ATR absolut ikut price-level drift.
+        Root-cause fix DITUNDA sbg proyek terpisah (lihat CLAUDE.md)."""
+        n = 120
+        anchor = 100.0
+        rng = np.random.RandomState(7)
+        idx = pd.date_range("2026-01-01", periods=n, freq="15min")
+        logret = rng.normal(0.01, 0.015, size=n)
+        close_up = anchor * np.exp(np.cumsum(logret))
+        close_dn = anchor ** 2 / close_up   # exact geometric mirror
+
+        def _build(close):
+            o = np.empty(n); h = np.empty(n); l = np.empty(n)
+            prev = anchor
+            for i in range(n):
+                o[i] = prev
+                c = close[i]
+                h[i] = max(o[i], c) * 1.004
+                l[i] = min(o[i], c) * 0.996
+                prev = c
+            return pd.DataFrame({"open": o, "high": h, "low": l, "close": close,
+                                  "volume": 1000.0}, index=idx)
+
+        r_up = calculate_atr_enhanced(_build(close_up))
+        r_dn = calculate_atr_enhanced(_build(close_dn))
+
+        self.assertGreater(r_up.atr_percentile, 90.0)
+        self.assertLess(r_dn.atr_percentile, 10.0)
+        # atr_pct (dinormalisasi harga, field yg AMAN) TIDAK sedramatis itu --
+        # membuktikan divergensi di atas murni artefak ranking absolut.
+        self.assertLess(abs(r_up.atr_pct - r_dn.atr_pct), 2.0)
+
+    # ── "Bukan cuma beda angka" (kontrarian, BUKAN trend-following) ─────────
+
+    def test_extended_up_favors_short_composite_not_long(self):
+        """[KARAKTERISTIK DESAIN] Krn bb/kc kontrarian, fixture yg mendorong
+        harga dekat UPPER band (uptrend berbias) secara KONSISTEN membuat
+        composite_score_short > composite_score -- BUKAN sebaliknya."""
+        n_short_favored = 0
+        trials = 60
+        for i in range(trials):
+            bias = random.Random(i + 500).uniform(0.1, 0.4)
+            df = _make_choppy_df(seed=i, bias=bias, n=100)
+            r = score_volatility(df)
+            if r.composite_score_short > r.composite_score:
+                n_short_favored += 1
+        self.assertGreater(n_short_favored, trials * 0.8)
+
+    def test_extended_down_favors_long_composite_not_short(self):
+        n_long_favored = 0
+        trials = 60
+        for i in range(trials):
+            bias = random.Random(i + 500).uniform(0.1, 0.4)
+            df = _make_choppy_df(seed=i, bias=-bias, n=100)
+            r = score_volatility(df)
+            if r.composite_score > r.composite_score_short:
+                n_long_favored += 1
+        self.assertGreater(n_long_favored, trials * 0.8)
+
+    # ── 3. Neutral-alignment ─────────────────────────────────────────────────
+
+    def test_neutral_both_sides_empty_df(self):
+        empty_df = pd.DataFrame({"open": [], "high": [], "low": [], "close": [], "volume": []})
+        r = score_volatility(empty_df)
+        self.assertEqual(r.composite_score, 50.0)
+        self.assertEqual(r.composite_score_short, 50.0)
+
+    def test_neutral_both_sides_insufficient_bars(self):
+        df = _make_trend_df(5, direction=1)
+        r = score_volatility(df)
+        self.assertEqual(r.composite_score, 50.0)
+        self.assertEqual(r.composite_score_short, 50.0)
+        self.assertEqual(r.bb_score_short, 50.0)
+        self.assertEqual(r.kc_score_short, 50.0)
+        self.assertEqual(r.atr_score_short, 50.0)
+
+    # ── Integrasi ────────────────────────────────────────────────────────────
+
+    def test_composite_score_short_field_exists_and_differs(self):
+        df = _make_trend_df(100, direction=1, step=0.7)
+        r = score_volatility(df)
+        self.assertIsNotNone(r.composite_score_short)
+        self.assertNotEqual(r.composite_score, r.composite_score_short)
+
+    def test_extract_indicator_scores_reads_short_fields(self):
+        df = _make_choppy_df(seed=11, bias=0.2, n=100)
+        r = score_volatility(df)
+        iset = IndicatorSet(symbol="TEST/USDT", timeframe="15m")
+        iset.volatility = r
+
+        scores_long  = _extract_indicator_scores(iset, side="long")
+        scores_short = _extract_indicator_scores(iset, side="short")
+
+        self.assertAlmostEqual(scores_long["volatility"]["bb"], r.bb_score, places=6)
+        self.assertAlmostEqual(scores_short["volatility"]["bb"], r.bb_score_short, places=6)
+        self.assertAlmostEqual(scores_long["volatility"]["squeeze"], r.squeeze_score, places=6)
+        self.assertAlmostEqual(scores_short["volatility"]["squeeze"], r.squeeze_score_short, places=6)
+        self.assertAlmostEqual(scores_long["volatility"]["atr"], r.atr_score, places=6)
+        self.assertAlmostEqual(scores_short["volatility"]["atr"], r.atr_score_short, places=6)
+
+
+class TestMTFSubBatchCObserverOrderbookShort(unittest.TestCase):
+    """[PROYEK BARU -- MTF composite side-aware, Sub-Batch C]
+
+    observer.py::_compute_tf_score(iset, side="long") -- penyesuaian KECIL,
+    SENGAJA cuma menyentuh baris orderbook (bukan 7 kategori lain, itu
+    cakupan Sub-Batch D). `iset.orderbook.composite_score` TETAP alias
+    long-only (models.py, tidak disentuh sama sekali di Sub-Batch C ini) --
+    fix-nya di sisi consumer: baca lewat `_pick_side_score(iset.orderbook,
+    "orderbook_score", side)` (helper yg sama dipakai scorer.py) supaya
+    side="short" kebagian `orderbook_score_short` (Batch 7, sudah wired),
+    dgn fallback aman ke `orderbook_score` kalau field itu masih None.
+
+    side="long" (default, SEMUA caller `observe()` existing saat ini)
+    HARUS identik persis dgn sebelum perubahan ini -- diverifikasi eksplisit
+    di bawah, bukan diasumsikan."""
+
+    def _base_iset(self) -> IndicatorSet:
+        # [PENTING] PatternIndicators.is_valid() SELALU return True TANPA
+        # SYARAT (models.py, quirk pre-existing, di luar cakupan Sub-Batch C)
+        # -- patterns SELALU ikut ke weighted average dgn composite_score
+        # default 50.0 (weight 0.10), terlepas dari apapun yg di-set di
+        # iset. Supaya test di bawah bisa isolasi kontribusi orderbook
+        # dgan angka bersih, patterns.composite_score dipatok eksplisit ke
+        # 50.0 (=default, tidak mengubah apapun) dan expected value HARUS
+        # ikut menghitung kontribusi 0.10 x 50.0 ini -- diverifikasi manual
+        # lewat regresi arithmetic fuzz di kelas lain sebelumnya, di sini
+        # cukup dihitung tangan krn cuma 1-2 kategori aktif per test.
+        iset = IndicatorSet(symbol="TEST/USDT", timeframe="15m")
+        iset.bars_available = 100
+        iset.patterns.composite_score = 50.0
+        return iset
+
+    def test_side_long_reads_orderbook_score_unchanged(self):
+        iset = self._base_iset()
+        iset.orderbook.bid_ask_imbalance = 0.55
+        iset.orderbook.orderbook_score = 72.0
+        iset.orderbook.composite_score = 72.0
+        iset.orderbook.orderbook_score_short = 18.0
+        result = _compute_tf_score(iset, side="long")
+        # patterns (selalu valid, w=0.10, score=50.0) + orderbook (w=0.10, 72.0)
+        expected = round((72.0 * 0.10 + 50.0 * 0.10) / 0.20, 2)
+        self.assertAlmostEqual(result, expected, places=2)
+
+    def test_side_short_reads_orderbook_score_short(self):
+        iset = self._base_iset()
+        iset.orderbook.bid_ask_imbalance = 0.55
+        iset.orderbook.orderbook_score = 72.0
+        iset.orderbook.composite_score = 72.0
+        iset.orderbook.orderbook_score_short = 18.0
+        result = _compute_tf_score(iset, side="short")
+        expected = round((18.0 * 0.10 + 50.0 * 0.10) / 0.20, 2)
+        self.assertAlmostEqual(result, expected, places=2)
+
+    def test_side_short_falls_back_when_short_field_none(self):
+        """orderbook_score_short belum diisi (None, mis. kategori lama yg
+        belum wired) -- side='short' TIDAK BOLEH crash atau diam-diam pakai
+        0, harus fallback ke orderbook_score (sama seperti long)."""
+        iset = self._base_iset()
+        iset.orderbook.bid_ask_imbalance = 0.55
+        iset.orderbook.orderbook_score = 65.0
+        iset.orderbook.composite_score = 65.0
+        iset.orderbook.orderbook_score_short = None
+        result_long  = _compute_tf_score(iset, side="long")
+        result_short = _compute_tf_score(iset, side="short")
+        expected = round((65.0 * 0.10 + 50.0 * 0.10) / 0.20, 2)
+        self.assertAlmostEqual(result_long, expected, places=2)
+        self.assertAlmostEqual(result_short, expected, places=2)
+        self.assertEqual(result_long, result_short)
+
+    def test_default_call_no_side_arg_unchanged(self):
+        """Caller lama (observe(), belum di-thread side -- itu Sub-Batch D)
+        manggil _compute_tf_score(iset) TANPA argumen side sama sekali --
+        harus identik dgn side='long' eksplisit."""
+        iset = self._base_iset()
+        iset.orderbook.bid_ask_imbalance = 0.55
+        iset.orderbook.orderbook_score = 40.0
+        iset.orderbook.composite_score = 40.0
+        iset.orderbook.orderbook_score_short = 90.0
+        result_default = _compute_tf_score(iset)
+        result_explicit_long = _compute_tf_score(iset, side="long")
+        expected = round((40.0 * 0.10 + 50.0 * 0.10) / 0.20, 2)
+        self.assertAlmostEqual(result_default, expected, places=2)
+        self.assertEqual(result_default, result_explicit_long)
+
+    def test_trend_also_side_aware_since_sub_batch_d(self):
+        """[SUPERSEDED oleh Sub-Batch D] Sub-Batch C dulu memastikan trend
+        dkk BELUM side-aware di level ini -- sekarang (Sub-Batch D) trend
+        SUDAH baca composite_score_short juga, lewat _pick_side_score() yang
+        sama persis dgn orderbook. Test ini diupdate utk mengunci perilaku
+        BARU yang benar, bukan lagi perilaku lama Sub-Batch C."""
+        iset = self._base_iset()
+        iset.trend.ema9, iset.trend.ema21, iset.trend.ema50 = 105.0, 100.0, 95.0
+        iset.trend.composite_score = 80.0
+        iset.trend.composite_score_short = 20.0
+        iset.orderbook.bid_ask_imbalance = 0.55
+        iset.orderbook.orderbook_score = 50.0
+        iset.orderbook.composite_score = 50.0
+        iset.orderbook.orderbook_score_short = 50.0   # disamakan biar isolasi trend jelas
+
+        result_long  = _compute_tf_score(iset, side="long")
+        result_short = _compute_tf_score(iset, side="short")
+
+        # trend weight=0.30, orderbook weight=0.10 (sama di kedua sisi di
+        # test ini) + patterns (selalu valid, w=0.10, score=50.0 default).
+        expected_long  = round((80.0 * 0.30 + 50.0 * 0.10 + 50.0 * 0.10) / 0.50, 2)
+        expected_short = round((20.0 * 0.30 + 50.0 * 0.10 + 50.0 * 0.10) / 0.50, 2)
+        self.assertAlmostEqual(result_long, expected_long, places=2)
+        self.assertAlmostEqual(result_short, expected_short, places=2)
+        self.assertNotAlmostEqual(result_long, result_short, places=2)
+
+    def test_all_7_categories_side_aware_end_to_end(self):
+        """Populate ke-7 kategori (trend/momentum/strength/volatility/
+        patterns/oscillators/structure) dengan composite_score vs
+        composite_score_short yang beda jauh, plus orderbook -- pastikan
+        SEMUANYA ikut terbaca lewat side, bukan cuma trend (test di atas)
+        atau orderbook (Sub-Batch C)."""
+        iset = self._base_iset()
+        iset.trend.ema9, iset.trend.ema21, iset.trend.ema50 = 105.0, 100.0, 95.0
+        cats_weights = [
+            ("trend", 0.30), ("momentum", 0.25), ("strength", 0.25),
+            ("volatility", 0.10), ("patterns", 0.10), ("oscillators", 0.07),
+            ("structure", 0.07),
+        ]
+        long_val, short_val = 90.0, 10.0
+        for cat, _ in cats_weights:
+            obj = getattr(iset, cat)
+            obj.composite_score = long_val
+            obj.composite_score_short = short_val
+        # Field validitas tambahan per kategori (selain trend yg sudah di-set
+        # via ema9/21/50 di atas) -- volume_ratio(strength)/rsi(momentum)/
+        # atr+bb_upper(volatility) supaya is_valid() masing2 True.
+        iset.momentum.rsi = 55.0
+        iset.strength.volume_ratio = 1.2
+        iset.volatility.atr = 1.0
+        iset.volatility.bb_upper = 105.0
+        iset.orderbook.bid_ask_imbalance = 0.55
+        iset.orderbook.orderbook_score = long_val
+        iset.orderbook.composite_score = long_val
+        iset.orderbook.orderbook_score_short = short_val
+
+        result_long  = _compute_tf_score(iset, side="long")
+        result_short = _compute_tf_score(iset, side="short")
+
+        # patterns/oscillators/structure is_valid() default True/tergantung
+        # kategori masing2 -- oscillators & structure is_valid() perlu dicek;
+        # kalau ternyata tidak valid (skip), weighted-avg tetap konsisten
+        # krn long_val==short_val==90/10 seragam di SEMUA kategori yg valid
+        # -- jadi result HARUS persis sama dgn long_val (side=long) dan
+        # short_val (side=short), tak peduli subset kategori mana yg valid.
+        self.assertAlmostEqual(result_long, long_val, places=2)
+        self.assertAlmostEqual(result_short, short_val, places=2)
+
+    def test_neutral_insufficient_bars_regardless_of_side(self):
+        iset = IndicatorSet(symbol="TEST/USDT", timeframe="15m")
+        iset.bars_available = 5
+        iset.orderbook.bid_ask_imbalance = 0.55
+        iset.orderbook.orderbook_score = 90.0
+        iset.orderbook.orderbook_score_short = 10.0
+        self.assertEqual(_compute_tf_score(iset, side="long"), 50.0)
+        self.assertEqual(_compute_tf_score(iset, side="short"), 50.0)
+
+
+class TestMTFSubBatchDObserveSideThreading(unittest.TestCase):
+    """[PROYEK BARU -- MTF composite side-aware, Sub-Batch D]
+
+    observer.py::observe() (module-level) & MarketObserver.observe() (method,
+    dipanggil via run_in_executor dari strategy_base.py::get_scored_signal())
+    sekarang punya parameter `side`, diteruskan ke _compute_tf_score() untuk
+    primary DAN confirmation TF.
+
+    [TEMUAN KRUSIAL Tahap 0] _OBSERVATION_CACHE (module-level, key sebelumnya
+    HANYA symbol|timeframe|timestamp) TIDAK menyertakan side -- begitu
+    primary_tf_score/confirmation_tf_score genuinely beda per side (Sub-Batch
+    D), cache hit utk side="short" bisa diam-diam mengembalikan
+    ObservationReport yang dihitung utk side="long" dari request sebelumnya
+    pada bar yang sama (silent cross-side contamination). Fix: _cache_key()
+    sekarang menyertakan side sbg SUFFIX (bukan prefix, supaya
+    get_cached_observation()/clear_cache() yang match via startswith(symbol|
+    timeframe|) tetap benar tanpa perlu diubah). Diverifikasi eksplisit di
+    bawah, bukan diasumsikan."""
+
+    def setUp(self):
+        clear_cache()  # _OBSERVATION_CACHE global module-level -- isolasi antar test
+
+    def tearDown(self):
+        clear_cache()
+
+    def test_default_side_long_unchanged_from_before(self):
+        """Caller lama (observe() tanpa argumen side sama sekali) HARUS
+        identik dgn side='long' eksplisit."""
+        df = _make_trend_df(100, direction=1, step=0.7)
+        r_default = observe("TEST/USDT", "universal", df, "15m", use_cache=False)
+        clear_cache()
+        r_long = observe("TEST/USDT", "universal", df, "15m", use_cache=False, side="long")
+        self.assertEqual(r_default.primary_tf_score, r_long.primary_tf_score)
+
+    def test_observe_side_threading_end_to_end(self):
+        """side='short' vs side='long' pada df & parameter yang SAMA PERSIS
+        harus menghasilkan primary_tf_score BERBEDA -- membuktikan side
+        genuinely nyampe ke _compute_tf_score() lewat seluruh rantai
+        observe(), bukan cuma diterima lalu diabaikan diam-diam."""
+        df = _make_choppy_df(seed=42, bias=0.15, n=100)
+        r_long  = observe("TEST/USDT", "universal", df, "15m", use_cache=False, side="long")
+        r_short = observe("TEST/USDT", "universal", df, "15m", use_cache=False, side="short")
+        self.assertNotAlmostEqual(r_long.primary_tf_score, r_short.primary_tf_score, places=2)
+
+    def test_cache_does_not_cross_contaminate_between_sides(self):
+        """[FIX UTAMA Sub-Batch D] Panggil side='long' (cached), lalu
+        side='short' (df & bar SAMA PERSIS) -- side='short' TIDAK BOLEH
+        mengembalikan primary_tf_score versi long dari cache. Lalu panggil
+        side='long' LAGI -- harus tetap dapat cache hit versi long yang
+        benar (bukan malah rusak jadi tidak pernah cache-hit sama sekali)."""
+        df = _make_choppy_df(seed=7, bias=0.2, n=100)
+
+        r_long_1 = observe("TEST/USDT", "universal", df, "15m", use_cache=True, side="long")
+        r_short  = observe("TEST/USDT", "universal", df, "15m", use_cache=True, side="short")
+        r_long_2 = observe("TEST/USDT", "universal", df, "15m", use_cache=True, side="long")
+
+        self.assertNotAlmostEqual(r_long_1.primary_tf_score, r_short.primary_tf_score, places=2)
+        # side="long" kedua kali harus dapat NILAI yang sama (cache hit yang
+        # benar mengembalikan report versi long, bukan versi short yang
+        # barusan di-cache di antaranya).
+        self.assertEqual(r_long_1.primary_tf_score, r_long_2.primary_tf_score)
+
+    def test_market_observer_method_threads_side(self):
+        """MarketObserver.observe() (dipanggil via run_in_executor di
+        strategy_base.py) meneruskan side ke observe() module-level."""
+        from types import SimpleNamespace
+        df = _make_choppy_df(seed=99, bias=0.1, n=100)
+        profile = SimpleNamespace(
+            profile=SimpleNamespace(value="universal"),
+            timeframe="15m",
+            confirmation_weight=0.25,
+        )
+        mo = MarketObserver()
+        r_long  = mo.observe("TEST/USDT", df, profile, side="long")
+        clear_cache()
+        r_short = mo.observe("TEST/USDT", df, profile, side="short")
+        self.assertNotAlmostEqual(r_long.primary_tf_score, r_short.primary_tf_score, places=2)
+
+    def test_market_observer_default_side_long(self):
+        """MarketObserver.observe() dipanggil TANPA side (pola lama, semua
+        caller sebelum Sub-Batch D) -- harus default ke long, identik
+        dgn caller yang eksplisit side='long'."""
+        from types import SimpleNamespace
+        df = _make_choppy_df(seed=99, bias=0.1, n=100)
+        profile = SimpleNamespace(
+            profile=SimpleNamespace(value="universal"),
+            timeframe="15m",
+            confirmation_weight=0.25,
+        )
+        mo = MarketObserver()
+        r_default = mo.observe("TEST/USDT", df, profile)
+        clear_cache()
+        r_long = mo.observe("TEST/USDT", df, profile, side="long")
+        self.assertEqual(r_default.primary_tf_score, r_long.primary_tf_score)
+
+
+def _make_hourly_trend_df(n, direction=1, start=500.0, step=0.15):
+    """Sama persis pola _make_trend_df, cuma freq='1h' (bukan '15min') --
+    dipakai sbg confirmation_df di TestMTFSubBatchEGateVerification, krn
+    _make_trend_df hardcode 15min."""
+    idx = pd.date_range("2026-01-01", periods=n, freq="1h")
+    bars = []
+    for i in range(n):
+        c = start + direction * step * i
+        o = c - direction * step * 0.3
+        h = max(o, c) + 0.5
+        l = min(o, c) - 0.5
+        bars.append((o, h, l, c, 1000))
+    return pd.DataFrame(bars, columns=["open", "high", "low", "close", "volume"], index=idx)
+
+
+class _DummyStrategyForGateTest(VolumetricBreakoutStrategyBase):
+    """Subclass minimal cuma utk implement generate_signals() abstract --
+    tidak dipakai di test ini, get_scored_signal() sudah konkret di base."""
+    async def generate_signals(self, symbol, df):
+        return []
+
+
+class TestMTFSubBatchEGateVerification(unittest.TestCase):
+    """[PROYEK BARU -- MTF composite side-aware, Sub-Batch E]
+
+    Verifikasi hard MTF gate (engine/strategy_base.py, di dalam
+    get_scored_signal(), ~baris 1048-1060):
+        if (not observation.confirmation_tf_valid) or (
+            float(observation.confirmation_tf_score or 0.0)
+            < float(profile.confirmation_min_score)
+        ):
+            return None  # sinyal diblokir
+
+    [TAHAP 0 -- 2 hal yang WAJIB diverifikasi, BUKAN diasumsikan]
+    1. Apakah `observation` di titik gate ini sudah dihitung dgn `side` yang
+       benar? YA -- `observation` adalah HASIL LANGSUNG dari
+       `self._observer.observe(..., side)` beberapa baris di atas DI DALAM
+       FUNGSI YANG SAMA (get_scored_signal()) -- sudah dibereskan Sub-Batch D
+       (side dulu TIDAK PERNAH diteruskan ke observe(), sekarang diteruskan).
+       Tidak ada perubahan kode lagi yang diperlukan utk poin ini.
+    2. Apakah logika perbandingan `< profile.confirmation_min_score` MASIH
+       benar utk short, atau perlu dibalik arahnya? TERBUKTI MASIH BENAR,
+       TIDAK PERLU DIBALIK -- dibuktikan lewat data riil di bawah (bukan
+       penalaran teoretis semata): fixture downtrend riil menghasilkan
+       confirmation_tf_score LEBIH TINGGI utk short (54.53) drpd long
+       (38.94) pada bar yg SAMA PERSIS -- karena SEMUA 8 kategori sub-skor
+       `_short` sudah dibangun dgn konvensi "makin tinggi = makin favorable
+       utk sisi itu" (Sub-Batch A/B/C, konvensi `_pick_side_score()`), gate
+       yang MEMBLOKIR skor RENDAH bekerja simetris utk kedua sisi tanpa
+       perlu dibalik. `profile.confirmation_min_score` sendiri TIDAK punya
+       varian `_short` (dicek engine/profiles/thresholds.py) -- ini BENAR
+       by design krn threshold-nya flat, yang side-aware adalah SKOR-nya.
+
+    Test di bawah memanggil get_scored_signal() SUNGGUHAN (bukan re-
+    implementasi logic gate, bukan mock observer/scorer) lewat instance
+    VolumetricBreakoutStrategyBase konkret -- jalur produksi asli end-to-end
+    (observer -> classifier -> scorer -> MTF gate)."""
+
+    def setUp(self):
+        clear_cache()
+
+    def tearDown(self):
+        clear_cache()
+
+    def _make_strategy(self):
+        strat = _DummyStrategyForGateTest(symbols=["BTC/USDT"], timeframe="15m")
+        # [PENTING] Profile default BTC/USDT adalah "hodl_accumulate" dgn
+        # timeframe="1d" -- dipaksa "15m" di sini spy primary_df (freq
+        # 15min, dibangun _make_trend_df) genuinely dipakai sbg timeframe
+        # yang benar oleh observe() (yang baca profile.timeframe, BUKAN
+        # argumen timeframe yang dioper ke get_scored_signal()).
+        strat._profiles["BTC/USDT"].timeframe = "15m"
+        return strat
+
+    def test_downtrend_blocks_long_passes_short(self):
+        """Fixture downtrend riil (250 bar primary 15m + 250 bar
+        confirmation 1h, arah SAMA) -- confirmation_min_score default
+        profile hodl_accumulate = 40.0."""
+        strat = self._make_strategy()
+        threshold = strat._profiles["BTC/USDT"].confirmation_min_score
+        self.assertAlmostEqual(threshold, 40.0, places=1)  # asumsi Tahap 0, dikunci
+
+        primary_df = _make_trend_df(250, direction=-1, start=500.0, step=0.3)
+        conf_df    = _make_hourly_trend_df(250, direction=-1, start=500.0, step=0.15)
+
+        async def _run(side):
+            clear_cache()
+            return await strat.get_scored_signal(
+                symbol="BTC/USDT", df=primary_df,
+                confirmation_df=conf_df, confirmation_timeframe="1h",
+                side=side,
+            )
+
+        scored_long  = asyncio.run(_run("long"))
+        scored_short = asyncio.run(_run("short"))
+
+        self.assertIsNone(scored_long, "MTF gate SEHARUSNYA blokir long saat downtrend "
+                                        "(confirmation_tf_score long < threshold)")
+        self.assertIsNotNone(scored_short, "MTF gate SEHARUSNYA meloloskan short saat "
+                                            "downtrend (confirmation_tf_score short >= threshold)")
+
+    def test_uptrend_blocks_short_passes_long(self):
+        """Mirror dari test di atas -- fixture uptrend, arah gate terbalik."""
+        strat = self._make_strategy()
+
+        primary_df = _make_trend_df(250, direction=1, start=500.0, step=0.3)
+        conf_df    = _make_hourly_trend_df(250, direction=1, start=500.0, step=0.15)
+
+        async def _run(side):
+            clear_cache()
+            return await strat.get_scored_signal(
+                symbol="BTC/USDT", df=primary_df,
+                confirmation_df=conf_df, confirmation_timeframe="1h",
+                side=side,
+            )
+
+        scored_long  = asyncio.run(_run("long"))
+        scored_short = asyncio.run(_run("short"))
+
+        self.assertIsNotNone(scored_long, "MTF gate SEHARUSNYA meloloskan long saat uptrend")
+        self.assertIsNone(scored_short, "MTF gate SEHARUSNYA blokir short saat uptrend")
+
+    def test_confirmation_tf_score_values_documented(self):
+        """[REGRESI -- kunci angka riil, bukan cuma lolos/blokir] Nilai
+        confirmation_tf_score persis yang membuktikan temuan Tahap 0 --
+        diverifikasi manual sebelum ditulis di sini (bukan ditebak)."""
+        primary_df = _make_trend_df(250, direction=-1, start=500.0, step=0.3)
+        conf_df    = _make_hourly_trend_df(250, direction=-1, start=500.0, step=0.15)
+
+        clear_cache()
+        r_long = observe(
+            "BTC/USDT", "hodl_accumulate", primary_df, "15m",
+            confirmation_df=conf_df, confirmation_timeframe="1h",
+            use_cache=False, side="long",
+        )
+        clear_cache()
+        r_short = observe(
+            "BTC/USDT", "hodl_accumulate", primary_df, "15m",
+            confirmation_df=conf_df, confirmation_timeframe="1h",
+            use_cache=False, side="short",
+        )
+
+        self.assertTrue(r_long.confirmation_tf_valid)
+        self.assertTrue(r_short.confirmation_tf_valid)
+        self.assertAlmostEqual(r_long.confirmation_tf_score, 38.94, places=1)
+        self.assertAlmostEqual(r_short.confirmation_tf_score, 54.53, places=1)
+        self.assertGreater(r_short.confirmation_tf_score, r_long.confirmation_tf_score)
 
 
 if __name__ == "__main__":

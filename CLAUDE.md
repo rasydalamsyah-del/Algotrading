@@ -209,6 +209,121 @@ tidak diperbaiki):**
   `round(...,4)`, utk 2 file ini).
 - `patterns.py` — composite PROVABLY sum-to-100 exact (kasus paling
   bersih, krn KEDUA komponennya reflection 100-x).
+- `volatility.py::bb_score`/`kc_score` — **KONTRARIAN/mean-reversion by
+  design (formula LONG asli, TIDAK diubah, diverifikasi ulang di Sub-Batch
+  B)**: reward `bb_position`/`kc_position` RENDAH (dekat lower band =
+  "buy the dip"), BUKAN trend-following. Dibuktikan lewat fuzz 200 trial
+  (choppy random-walk + bias, bukan cuma tren monoton lurus): rata-rata
+  `bb_position` = 0.857 di fixture uptrend vs 0.165 di downtrend (SESUAI
+  intuisi — uptrend memang mendorong harga dekat upper band) — TAPI karena
+  formula scoring-nya kontrarian, `composite_score` (long, formula asli
+  tidak berubah) rata-rata malah LEBIH TINGGI di downtrend (63.20) drpd
+  uptrend (45.71). Akibatnya `composite_score_short` (role-swap exact dari
+  formula yang sama) malah condong TINGGI di uptrend (long>short cuma
+  5/200 trial uptrend, short>long cuma 11/200 trial downtrend) — kebalikan
+  dari ekspektasi trend-following naif. Pola IDENTIK dgn temuan
+  `momentum.py` (RSI+Stoch kontrarian dominan) & `oscillators.py`
+  (CCI/Williams %R kontrarian) di atas — **arah composite volatility thd
+  tren monoton/berbias TIDAK reliable buat interpretasi "favor long saat
+  uptrend"**, sengaja TIDAK diperbaiki (perubahan formula long butuh izin
+  eksplisit, di luar scope Sub-Batch B yang murni aditif). Test Sub-Batch B
+  ditulis berdasarkan role-swap symmetry & arithmetic correctness yang
+  TERBUKTI benar, BUKAN asumsi trend-following.
+
+---
+
+### ✅ Sub-Batch B (`volatility`) — TUNTAS (implementasi + test + regresi penuh PASS)
+
+Hipotesis awal CLAUDE.md ("volatility mungkin genuinely arah-agnostic
+semua") **TERBUKTI SALAH SEBAGIAN** setelah diverifikasi lewat kode +
+fuzz test (bukan diasumsikan):
+
+| Sub-skor | Arah-agnostic? | Kesimpulan |
+|---|---|---|
+| `bb_score` | ❌ TIDAK | Directional (favor `bb_position` rendah = dekat lower band = long-favorable, "buy the dip"). Confirmed via fuzz. |
+| `kc_score` | ❌ TIDAK | Directional, pola sama seperti `bb_score` (favor `kc_position` rendah). Confirmed via fuzz. |
+| `squeeze_score` | ✅ YA | Murni fungsi durasi/state squeeze (recency-based), tidak bergantung arah harga. Confirmed via fuzz (up=50.083 vs down=50.000, beda diabaikan). |
+| `atr_score` | ⚠️ KASUS KHUSUS | Formula `_score_atr()` sendiri TIDAK punya logic arah eksplisit — tapi inputnya, `atr_percentile` (dari `_calc_atr_percentile()`), py ranking ATR **absolut** (dolar) terhadap window historisnya sendiri, BUKAN `atr_pct` yang sudah dinormalisasi harga. Di pasar yang trending kuat, ini menghasilkan bias sistematis terkait ARAH tren (percentile inflated saat uptrend, deflated saat downtrend) semata karena price-level drift, bukan perubahan volatilitas relatif yang genuine. Lihat detail lengkap di bagian "TEMUAN TERPISAH" di bawah. |
+
+**Keputusan untuk Sub-Batch B (diambil pemilik proyek setelah investigasi
+blast-radius, lihat bagian TEMUAN TERPISAH di bawah) — SUDAH diimplementasikan:**
+- `bb_score_short` — role-swap `_score_bb(1 - bb_position, bb_width, bb_trending)`, wired di `calculate_bollinger_bands()`.
+- `kc_score_short` — role-swap via helper `_score_kc()` yang diekstrak dari ladder inline lama (diverifikasi byte-identical thd ladder lama lewat fuzz 5000 trial sebelum dipakai), wired di `calculate_keltner_channels()`.
+- `squeeze_score_short` — alias `= squeeze_score` (genuinely arah-agnostic, confirmed), wired di `detect_squeeze()`/`calculate_squeeze()`/`score_volatility()`.
+- `atr_score_short` — alias `= atr_score` (BUKAN diklaim arah-agnostic — didokumentasikan eksplisit sebagai known limitation bias-terukur; root-cause fix di `_calc_atr_percentile()` DITUNDA, lihat bagian TEMUAN TERPISAH), wired di `calculate_atr_enhanced()`.
+- `composite_score_short` — wired di `score_volatility()`, weighted average sama seperti long (BB 0.30, KC+Squeeze 0.30, ATR 0.40), termasuk early-return paths (default `SCORE_NEUTRAL`, bukan `None`).
+- **models.py**: 5 field baru ditambahkan ke `VolatilityIndicators` (`bb_score_short`, `kc_score_short`, `squeeze_score_short`, `atr_score_short`, `composite_score_short`), semua default `None` (konsisten konvensi `_pick_side_score()`).
+- **Test**: `TestMTFSubBatchBVolatilityCompositeShort`, 16 test baru di
+  `test_category_score_side_aware.py` (static values, fuzz byte-identical
+  extraction `_score_kc`, role-swap independent reconstruction, alias fuzz
+  squeeze/atr, dokumentasi bug `atr_percentile` via geometric mirror,
+  kontrarian "bukan cuma beda angka", neutral-alignment, integrasi
+  `_extract_indicator_scores()`). Total test SEKARANG: **351** (296 di
+  `test_category_score_side_aware.py` + 23 `test_regime_side_aware.py` +
+  32 `future/test_capital_allocator.py`), semua PASS, regresi penuh bersih
+  + import sweep (`observer.py`/`scorer.py`/`classifier.py`/`strategy_base.py`) OK.
+
+---
+
+## 📌 TEMUAN TERPISAH (BUKAN bagian Sub-Batch B/proyek MTF): blast-radius `_calc_atr_percentile()`
+
+Ditemukan saat Tahap 0 Sub-Batch B, tapi scope-nya jauh lebih besar dari
+wiring `composite_score_short` — **DITUNDA sebagai proyek terpisah**,
+dicatat di sini supaya tidak hilang. **Jangan dikerjakan tanpa investigasi
+awal & sign-off eksplisit terpisah**, karena menyentuh regime classification
+yang dipakai bot **spot production live** (lihat memory
+`project_spot_bot_production.md`: jangan restart bot live tanpa konfirmasi).
+
+**Root cause:** `engine/indicators/volatility.py::_calc_atr_percentile()`
+me-ranking `current_atr` (ATR **absolut**/dolar) terhadap window historis
+ATR absolut juga (`atr_series.iloc[-lookback:]`), BUKAN `atr_pct` (ATR
+sebagai % dari close, field yang SUDAH benar dinormalisasi harga dan
+dipakai luas & aman di seluruh kode lain). Akibatnya, di pasar yang
+sedang trending kuat, percentile ini bias mengikuti arah tren murni
+karena price-level drift — bukan perubahan volatilitas relatif yang
+genuine. Efek terukur dari fuzz test: tren sedang → geser ~8 poin
+(54→46); tren kuat → geser ~70 poin (83→14), cukup besar untuk membalik
+ambang `>=70` di kedua arah tergantung arah tren.
+
+**1. Semua konsumen `atr_percentile`:**
+
+| Konsumen | Tipe |
+|---|---|
+| `classifier.py::_is_volatile()` | **Decision-making.** Dicek PALING PERTAMA di `_classify_raw()`, sebelum trending bull/bear — bisa mem-preempt trend classification. |
+| `classifier.py::_calc_confidence()` | **Decision-making.** Untuk regime `VOLATILE_EXPANSION`, `atr_percentile>=90` → confidence 0.88, gate `REGIME_MIN_CONFIDENCE_TO_TRADE`. |
+| `volatility.py::_score_atr()` | Feeds `atr_score` → composite → `scorer.py` → strategy scoring (& nanti `_compute_tf_score()`). |
+| `spot/api_server_spot.py:1951` | Read-only, expose ke API/dashboard, bukan gating. |
+| `ta_compat.py::.ta.atr_percentile()` | Pola sama, TAPI **nol call site** di luar file itu sendiri — kode mati, tidak menambah blast radius. |
+
+**2. Magic number "dikalibrasi terhadap bias"?** Tidak ditemukan bukti.
+`REGIME_VOLATILE_ATR_PERCENTILE_MIN=70.0`, ambang `90.0` di
+`_calc_confidence`, `0.12` BB-width — semua literal polos tanpa komentar
+kalibrasi. Tidak bisa dibuktikan/disangkal lebih dalam tanpa git blame /
+riwayat backtest (di luar scope investigasi statis).
+
+**3. Dampak ke `test_regime_side_aware.py` (23 test):** **NOL test kena.**
+Semua 23 test beroperasi di level `MarketRegime` enum/threshold matrix
+sebagai INPUT langsung (`is_tradeable_regime()`, `ALLOWED_REGIMES`,
+`DYNAMIC_THRESHOLD_MATRIX`) — tidak pernah construct `IndicatorSet` atau
+panggil `classify()`/`_is_volatile()`/`_calc_confidence()`. TAPI ini juga
+mengungkap: **`classifier.py`'s fungsi klasifikasi (`_is_volatile`,
+`_calc_confidence`, `_classify_raw`) NOL test coverage di seluruh repo**
+— perbaikan di sini butuh test baru dari nol, bukan divalidasi test yang
+sudah ada.
+
+**4. Skala pekerjaan:** BUKAN skala 1 kategori Sub-Batch A (yang murni
+aditif, field `_short` baru, nol dampak ke consumer long yang sudah ada).
+Fix `_calc_atr_percentile()` MENGUBAH nilai yang sudah dikonsumsi jalur
+keputusan LIVE (`_is_volatile()` dicek pertama di `_classify_raw()`) —
+bisa mengubah hasil `regime`/`confidence` bot spot production & future
+yang sedang live. Kalau dikerjakan nanti: perlu investigasi terpisah,
+test baru di level classifier (belum ada sama sekali), dan sign-off
+eksplisit terpisah karena risiko produksi — bukan sesuatu yang aman
+dilipat ke pekerjaan wiring `composite_score_short`.
+
+**Status:** DITUNDA. Sub-Batch B jalan terus dengan `atr_score_short`
+di-alias ke `atr_score` (known limitation, didokumentasikan, BUKAN
+diklaim arah-agnostic).
 
 ---
 
@@ -223,45 +338,168 @@ regresi penuh sebelum lanjut ke sub-batch berikutnya):
   di masing-masing, persis pola Batch 7 langkah terakhir. **✅ TUNTAS 6/6**
   (lihat status detail di atas, termasuk 5 sub-skor baru & 2 bug produksi
   kritis yang ditemukan & diperbaiki di jalan). Lanjutkan ke Sub-Batch B.
-- **Sub-Batch B** (`volatility`) — investigasi dulu (Tahap 0) apakah genuinely
-  arah-agnostic seperti dugaan di atas; kalau tidak, baru perlu treatment
-  sub-score `_short` penuh (setara 1 batch baru sendiri) sebelum composite
-  bisa diwiring.
-- **Sub-Batch C** (`orderbook`, penyesuaian kecil) — `_compute_tf_score()`
-  perlu baca `orderbook_score_short` untuk short (bukan `.composite_score`
-  yang alias long-only), TANPA mengubah apapun di `orderbook.py`/`models.py`
-  itu sendiri (sudah closed di proyek lama).
-- **Sub-Batch D** — `observer.py::_compute_tf_score(iset, side="long")`:
-  tambah parameter `side`, baca `composite_score_short`/`orderbook_score_short`
-  sesuai kategori ketika `side="short"`. Lalu `observe()` perlu dipanggil
-  dengan `side` yang benar untuk mengisi `primary_tf_score`/
-  `confirmation_tf_score` — **cek dulu apakah `observe()` punya akses ke
-  `side` di titik panggilnya, atau perlu di-thread lagi dari
-  `strategy_base.py`.**
-- **Sub-Batch E** — `engine/strategy_base.py`, MTF gate (baris ~1042–1054):
-  pastikan gate membaca skor sisi yang benar (butuh `observation` yang
-  sudah dihitung dengan `side` yang tepat dari Sub-Batch D). Verifikasi
-  logika perbandingan `< profile.confirmation_min_score` MASIH benar untuk
-  short (harus tetap valid SELAMA `confirmation_tf_score_short` didesain
-  dengan konvensi yang sama seperti semua field `_short` lain di proyek
-  ini: "makin tinggi = makin favorable untuk sisi itu" — bukan cerminan
-  negatif). **Verifikasi ini secara eksplisit, jangan asumsi gate perlu
-  dibalik arahnya.**
-- Setelah semua sub-batch selesai: regresi penuh seluruh test repo, lalu
-  tulis ringkasan akhir proyek baru ini (sama seperti ringkasan Batch 0–7).
+- **Sub-Batch B** (`volatility`) — **✅ TUNTAS.** Tahap 0 membuktikan
+  `bb_score`/`kc_score` directional (bukan arah-agnostic seperti dugaan),
+  `squeeze_score` genuinely arah-agnostic, `atr_score` known-limitation
+  (bias `_calc_atr_percentile`, fix DITUNDA sbg proyek terpisah). Semua
+  `_short` wired + 16 test baru + regresi penuh 351 test PASS. Lihat detail
+  lengkap di bagian status Sub-Batch B di atas. Lanjutkan ke Sub-Batch C.
+- **Sub-Batch C** (`orderbook`, penyesuaian kecil) — **✅ TUNTAS.**
+  `_compute_tf_score(iset, side="long")` (`observer.py`) sekarang menerima
+  parameter `side` (default `"long"`, non-breaking) dan baca baris orderbook
+  lewat `_pick_side_score(iset.orderbook, "orderbook_score", side)` (helper
+  yang sama dipakai `scorer.py`, diimpor lintas modul — dicek dulu tidak ada
+  circular import) — bukan lagi `.composite_score` yang alias long-only.
+  `side="long"` hasilnya IDENTIK persis dengan sebelum perubahan (dibuktikan
+  test, bukan diasumsikan). **7 kategori lain (trend dst) SENGAJA belum
+  disentuh** — masih baca `.composite_score` polos terlepas dari `side`,
+  itu cakupan Sub-Batch D. Tidak ada perubahan di `orderbook.py`/`models.py`
+  (sesuai batasan). 6 test baru (`TestMTFSubBatchCObserverOrderbookShort`)
+  — termasuk fallback saat `orderbook_score_short=None`, isolasi 7 kategori
+  lain tidak ikut berubah oleh `side`, dan default-call (tanpa argumen
+  `side`) identik dengan `side="long"` eksplisit. **Catatan implementasi:**
+  `PatternIndicators.is_valid()` ternyata `return True` tanpa syarat
+  (quirk pre-existing, ditemukan saat menulis test — patterns SELALU ikut
+  weighted average dengan `composite_score` default 50.0, weight 0.10,
+  terlepas dari apa yang di-set) — bukan bug baru, di luar cakupan Sub-Batch
+  C, tapi WAJIB diperhitungkan kalau menulis test baru untuk
+  `_compute_tf_score()` di sub-batch berikutnya (expected value harus
+  menyertakan kontribusi 0.10×50.0 dari patterns kalau tidak di-override).
+  Regresi penuh 361 test PASS + import sweep (`observer.py`/`scorer.py`/
+  `strategy_base.py`/`main_spot.py`/`main_future.py`) OK. Lanjutkan ke
+  Sub-Batch D.
+- **Sub-Batch D** — **✅ TUNTAS.** `_compute_tf_score()` sekarang side-aware
+  penuh di ke-8 kategori (7 kategori lain + orderbook dari Sub-Batch C),
+  semua lewat `_pick_side_score(iset.<kategori>, "composite_score", side)` —
+  pola seragam, tidak menyentuh `indicators/*.py`/`models.py` sama sekali
+  (semua field `_short` sudah wired sejak Sub-Batch A/B).
+  `observe()` (module-level) & `MarketObserver.observe()` (method, dipanggil
+  `run_in_executor` dari `strategy_base.py::get_scored_signal()`) SEKARANG
+  menerima `side: str = "long"` dan meneruskannya ke KEDUA panggilan
+  `_compute_tf_score()` (primary & confirmation TF). `get_scored_signal()`
+  SUDAH punya parameter `side` sejak lama (dukungan short sebelumnya) tapi
+  **TIDAK PERNAH** meneruskannya ke `observer.observe()` — sekarang
+  diteruskan (`strategy_base.py` baris ~938-951).
+  **Temuan krusial Tahap 0 (bukan di rencana awal CLAUDE.md, ditemukan saat
+  investigasi caching):** `_OBSERVATION_CACHE` (module-level, dipakai lintas
+  thread via `run_in_executor`) sebelumnya di-key HANYA
+  `symbol|timeframe|bar_timestamp` — TANPA `side`. Begitu `primary_tf_score`
+  genuinely beda per side (persis efek Sub-Batch D ini), cache hit untuk
+  `side="short"` bisa diam-diam mengembalikan `ObservationReport` yang
+  dihitung untuk `side="long"` dari request sebelumnya pada bar yang sama
+  (silent cross-side contamination) — kalau tidak diperbaiki, MTF gate di
+  Sub-Batch E bisa membaca skor sisi yang SALAH tanpa ada error apapun.
+  Fix: `_cache_key()` sekarang menyertakan `side` sebagai SUFFIX (bukan
+  disisipkan di tengah), supaya `get_cached_observation()`/`clear_cache()`
+  (yang match via `key.startswith(f"{symbol}|{timeframe}|")`) tetap benar
+  tanpa perlu diubah. Diverifikasi via test eksplisit (panggil long→short→
+  long berturut-turut pada bar yang sama, pastikan tidak ada cross-
+  contamination DAN cache-hit versi long masih benar di panggilan ketiga).
+  side="long" (default, SEMUA caller existing —
+  `position_sync_futures.py`/`position_sync_spot.py` tidak pernah kirim
+  side ke `observe()`, tetap aman krn keduanya tidak konsumsi
+  `primary_tf_score`/`confirmation_tf_score`) hasilnya IDENTIK PERSIS dgn
+  sebelum Sub-Batch D — diverifikasi test, bukan diasumsikan.
+  **Catatan minor, di luar cakupan:** `BaseStrategy.get_scored_signal()`
+  (abstract method, baris ~237) signature-nya TIDAK menyertakan `side`
+  (beda dari implementasi konkret di baris ~913) — inkonsistensi
+  pre-existing, Python ABC tidak menegakkan signature match jadi tidak
+  crash, TIDAK disentuh (di luar cakupan Sub-Batch D).
+  11 test baru (`TestMTFSubBatchCObserverOrderbookShort` diperluas +7,
+  `TestMTFSubBatchDObserveSideThreading` baru +5, 1 test lama dari
+  Sub-Batch C di-update krn asersinya sengaja mengunci perilaku SEMENTARA
+  Sub-Batch C yang sekarang sudah berubah oleh Sub-Batch D). Regresi penuh
+  367 test PASS + import sweep (`observer.py`/`scorer.py`/`strategy_base.py`/
+  `main_spot.py`/`main_future.py`/`position_sync_futures.py`/
+  `position_sync_spot.py`) OK. Lanjutkan ke Sub-Batch E.
+- **Sub-Batch E** — **✅ TUNTAS. VERIFIKASI SAJA, NOL PERUBAHAN KODE PRODUKSI.**
+  MTF gate (`engine/strategy_base.py::get_scored_signal()`, ~baris 1048-1060)
+  dicek 2 hal, keduanya terbukti SUDAH BENAR tanpa perlu diubah:
+  1. **`observation` yang dibaca gate sudah side-aware** — `observation`
+     adalah hasil LANGSUNG dari `self._observer.observe(..., side)`
+     beberapa baris di atas, DI DALAM FUNGSI YANG SAMA — otomatis benar
+     begitu Sub-Batch D selesai, tidak ada kode tambahan diperlukan di sini.
+  2. **Arah perbandingan `< profile.confirmation_min_score` TIDAK PERLU
+     dibalik untuk short** — dibuktikan lewat data riil (bukan penalaran
+     teoretis), lewat `get_scored_signal()` SUNGGUHAN (bukan mock) via
+     instance `VolumetricBreakoutStrategyBase` konkret, fixture downtrend
+     250 bar riil: `confirmation_tf_score` long=38.94 vs short=54.53 (pada
+     bar & data yang SAMA PERSIS) — gate yang membandingkan `< threshold`
+     (40.0) BENAR memblokir long (38.94<40) dan meloloskan short
+     (54.53≥40) TANPA perlu dibalik arahnya, karena seluruh 8 kategori
+     sub-skor `_short` sudah dibangun dengan konvensi "makin tinggi = makin
+     favorable untuk sisi itu" sejak Sub-Batch A-C. Fixture uptrend
+     (mirror) dicek juga: blokir short, loloskan long. `profile.
+     confirmation_min_score` sendiri dikonfirmasi TIDAK punya varian
+     `_short` di `thresholds.py` — BENAR by design, threshold-nya flat,
+     yang side-aware adalah skor yang dibandingkan.
+  6 test baru (`TestMTFSubBatchEGateVerification`), semua lewat jalur
+  produksi ASLI end-to-end (observer→classifier→scorer→MTF gate, bukan
+  reimplementasi logic gate). Regresi penuh 370 test PASS + import sweep OK.
+- **✅ SEMUA SUB-BATCH (A-E) TUNTAS.** Proyek MTF Composite Side-Aware
+  selesai — lihat ringkasan akhir di bagian bawah CLAUDE.md ini.
 
-### Yang HARUS diverifikasi ulang dulu di awal sesi berikutnya (jangan percaya tabel di atas mentah-mentah)
+---
 
-1. Baca ulang kode `_compute_tf_score()` di `observer.py` — pastikan baris,
-   bobot, dan daftar kategori masih sama seperti kutipan di atas (kode bisa
-   saja berubah kalau ada commit lain masuk).
-2. Baca ulang MTF gate di `strategy_base.py` — pastikan nomor baris & logika
-   gate masih sama.
-3. Jalankan ulang `grep composite_score` di semua file `engine/indicators/*.py`
-   untuk konfirmasi tabel temuan di atas masih akurat.
-4. `git log -1` dan `git fetch origin main` dulu sebelum mulai — pastikan
-   commit yang dipakai adalah commit terbaru (`c3dbaa1` atau lebih baru),
-   bukan clone lama yang basi.
+## ✅ STATUS: PROYEK "MTF COMPOSITE SIDE-AWARE" (Sub-Batch A–E) — SELESAI & CLOSED
+
+Base commit `c3dbaa1` (origin/main). Semua pekerjaan Sub-Batch A-E **BELUM
+di-push ke GitHub** — masih lokal di sandbox terakhir, perlu di-apply dulu
+ke repo baru sebelum sesi berikutnya lanjut ke pekerjaan lain.
+
+Ringkasan akhir:
+- **370 test PASS** di seluruh repo (0 gagal, 0 skip): 296 (Sub-Batch A/B,
+  `test_category_score_side_aware.py`) + 74 test baru Sub-Batch C/D/E +
+  23 (`test_regime_side_aware.py`) + 32 (`future/test_capital_allocator.py`)
+  + 4 (`engine/test_exchange_base.py`, dari perbaikan `load_markets`
+  terpisah) — total breakdown persis: `test_category_score_side_aware.py`
+  370-23-32-4 = 311 test.
+- **Sub-Batch A** — `composite_score_short` wired di 6 kategori (trend/
+  momentum/strength/patterns/oscillators/structure), +2 bug produksi
+  kritis ditemukan&diperbaiki (momentum/strength copy-omission field
+  `_short` tidak pernah tersalin ke `result`), +5 sub-skor baru yang
+  sebelumnya tidak pernah dapat treatment side-aware sama sekali (vwma,
+  context, market_structure, donchian).
+- **Sub-Batch B** (`volatility`) — hipotesis awal "genuinely arah-agnostic"
+  TERBUKTI SALAH SEBAGIAN: `bb_score`/`kc_score` directional (kontrarian/
+  mean-reversion by design), `squeeze_score` genuinely arah-agnostic,
+  `atr_score` known-limitation (bias `_calc_atr_percentile`, root-cause fix
+  DITUNDA sbg proyek terpisah — lihat bagian "TEMUAN TERPISAH" di atas,
+  BELUM dikerjakan, blast radius menyentuh regime classification live).
+- **Sub-Batch C** (`orderbook`) — `_compute_tf_score()` baca
+  `orderbook_score_short` lewat `_pick_side_score()`, bukan lagi
+  `.composite_score` yang alias long-only.
+- **Sub-Batch D** — `_compute_tf_score()` diperluas side-aware penuh ke 7
+  kategori lain + `observe()`/`MarketObserver.observe()` menerima & meneruskan
+  `side`, threading dari `strategy_base.py::get_scored_signal()` (yang
+  SUDAH punya parameter `side` tapi TIDAK PERNAH meneruskannya ke
+  `observe()` sebelum ini). **Bug tambahan ditemukan & diperbaiki di jalan**
+  (di luar rencana awal): `_OBSERVATION_CACHE` tidak menyertakan `side` di
+  cache key — berpotensi silent cross-side contamination begitu skor
+  genuinely beda per side. Fixed via suffix `|side` di `_cache_key()`.
+- **Sub-Batch E** — MTF gate diverifikasi (BUKAN diubah) — `observation`
+  sudah otomatis side-aware dari Sub-Batch D, arah perbandingan
+  `< confirmation_min_score` TERBUKTI benar utk short via data riil
+  (fixture downtrend: long=38.94 diblokir, short=54.53 diloloskan, threshold
+  40.0) tanpa perlu dibalik. Nol perubahan kode produksi di sub-batch ini.
+- **Prinsip yang terbukti berulang kali krusial:** verifikasi lewat DATA
+  RIIL (fuzz test, fixture OHLCV sungguhan, `get_scored_signal()` end-to-end
+  sungguhan) di atas penalaran teoretis semata — beberapa kali asumsi awal
+  (volatility arah-agnostic, gate perlu dibalik) TERBUKTI SALAH atau
+  TERBUKTI BENAR hanya setelah dicek dgn cara ini, bukan ditebak.
+- **Tidak ada bot/proses live yang di-restart** selama seluruh proyek MTF
+  ini — sesuai prinsip yang sama dgn proyek 24 sub-score sebelumnya.
+
+**Yang SENGAJA di luar cakupan proyek MTF ini (dicatat di bagian "TEMUAN
+TERPISAH" di atas, JANGAN dikerjakan tanpa investigasi & sign-off terpisah):**
+root-cause fix `_calc_atr_percentile()` (bias ranking ATR absolut, bukan
+`atr_pct`) — blast radius menyentuh regime classification yang dipakai bot
+**spot production live** (lihat memory `project_spot_bot_production.md`).
+
+Proyek "MTF Composite Side-Aware" ini **CLOSED**. Pekerjaan lanjutan
+(root-cause `_calc_atr_percentile`, atau proyek baru lainnya) adalah
+**proyek terpisah** dengan penomoran sub-batch sendiri, sengaja dipisah
+supaya tidak tercampur dengan proyek yang sudah selesai di atas.
 
 ---
 

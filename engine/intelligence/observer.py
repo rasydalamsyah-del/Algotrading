@@ -57,6 +57,7 @@ from engine.indicators.patterns import score_pattern
 from engine.indicators.oscillators import score_oscillators
 from engine.indicators.structure import score_structure
 from engine.indicators.orderbook import score_orderbook_data
+from engine.intelligence.scorer import _pick_side_score
 
 log = logging.getLogger("intelligence.observer")
 
@@ -79,9 +80,21 @@ _OBSERVATION_CACHE_LOCK = threading.Lock()
 _CACHE_TTL = OBSERVATION_CACHE_TTL_SECONDS
 _STALE_THRESHOLD = OBSERVATION_STALE_THRESHOLD_SECONDS
 
-def _cache_key(symbol: str, timeframe: str, bar_timestamp: Optional[datetime]) -> str:
+def _cache_key(
+    symbol: str, timeframe: str, bar_timestamp: Optional[datetime], side: str = "long",
+) -> str:
+    # [MTF-BIAS-FIX -- Sub-Batch D] `side` ditambahkan ke cache key SEBAGAI
+    # SUFFIX (bukan disisipkan di tengah) -- primary_tf_score/confirmation_tf_score
+    # yang di-cache sekarang genuinely beda nilai per side (7 kategori lain
+    # sekarang ikut side-aware, lihat _compute_tf_score()). Tanpa ini, cache
+    # hit untuk side="short" bisa diam-diam mengembalikan ObservationReport
+    # yang primary_tf_score-nya dihitung untuk side="long" (atau sebaliknya)
+    # dari request SEBELUMNYA pada bar yang sama -- silent cross-side
+    # contamination. Suffix (bukan prefix) supaya get_cached_observation()/
+    # clear_cache() yang match via `key.startswith(f"{symbol}|{timeframe}|")`
+    # TIDAK perlu diubah -- masih match kedua sisi dengan benar.
     ts = bar_timestamp.isoformat() if bar_timestamp else "latest"
-    return f"{symbol}|{timeframe}|{ts}"
+    return f"{symbol}|{timeframe}|{ts}|{side}"
 
 def _get_cached(key: str) -> Optional[ObservationReport]:
     with _OBSERVATION_CACHE_LOCK:
@@ -253,27 +266,37 @@ def _build_indicator_set(
 
     return iset
 
-def _compute_tf_score(iset: IndicatorSet) -> float:
+def _compute_tf_score(iset: IndicatorSet, side: str = "long") -> float:
     if iset.bars_available < MIN_CANDLES_FOR_INDICATORS:
         return SCORE_NEUTRAL
 
     scores = []
     weights = []
 
+    # [MTF-BIAS-FIX -- Sub-Batch D] 7 kategori di bawah (trend/momentum/
+    # strength/volatility/patterns/oscillators/structure) semuanya sekarang
+    # baca lewat _pick_side_score(iset.<kategori>, "composite_score", side) --
+    # pola SAMA PERSIS dgn orderbook di Sub-Batch C. Semua 7 field
+    # `composite_score_short`-nya SUDAH wired sejak Sub-Batch A/B (proyek
+    # ini), jadi murni perubahan CONSUMER, tidak menyentuh indicators/*.py
+    # atau models.py sama sekali. side="long" (default, SEMUA caller yang
+    # belum eksplisit kirim side) hasilnya IDENTIK PERSIS dgn sebelumnya,
+    # krn _pick_side_score(..., "long") SELALU baca composite_score biasa,
+    # tidak pernah menyentuh field _short.
     if iset.trend.is_valid():
-        scores.append(iset.trend.composite_score)
+        scores.append(_pick_side_score(iset.trend, "composite_score", side))
         weights.append(0.30)
 
     if iset.momentum.is_valid():
-        scores.append(iset.momentum.composite_score)
+        scores.append(_pick_side_score(iset.momentum, "composite_score", side))
         weights.append(0.25)
 
     if iset.strength.is_valid():
-        scores.append(iset.strength.composite_score)
+        scores.append(_pick_side_score(iset.strength, "composite_score", side))
         weights.append(0.25)
 
     if iset.volatility.is_valid():
-        scores.append(iset.volatility.composite_score)
+        scores.append(_pick_side_score(iset.volatility, "composite_score", side))
         weights.append(0.10)
 
     # [BUG-FIX v2] Sebelumnya 3 baris di bawah ini TIDAK punya weights.append()
@@ -292,19 +315,26 @@ def _compute_tf_score(iset: IndicatorSet) -> float:
     # oscillator~0.07, structure~0.06-0.08); fungsi ini tetap normalisasi via
     # total_weight di akhir jadi tidak perlu pas sama dgn LEVEL1_WEIGHTS persis.
     if iset.patterns.is_valid():
-        scores.append(iset.patterns.composite_score)
+        scores.append(_pick_side_score(iset.patterns, "composite_score", side))
         weights.append(0.10)
 
     if iset.oscillators.is_valid():
-        scores.append(iset.oscillators.composite_score)
+        scores.append(_pick_side_score(iset.oscillators, "composite_score", side))
         weights.append(0.07)
 
     if iset.structure.is_valid():
-        scores.append(iset.structure.composite_score)
+        scores.append(_pick_side_score(iset.structure, "composite_score", side))
         weights.append(0.07)
 
+    # [MTF-BIAS-FIX -- Sub-Batch C] `iset.orderbook.composite_score` SENGAJA
+    # tetap alias long-only (lihat komentar di models.py::OrderbookIndicators)
+    # -- baca lewat _pick_side_score() supaya sinyal short kebagian
+    # `orderbook_score_short` (Batch 7, sudah wired) alih-alih diam-diam
+    # selalu dapat versi long. side="long" (default, SEMUA caller existing
+    # saat ini) hasilnya IDENTIK dgn sebelumnya, krn composite_score cuma
+    # alias dari orderbook_score.
     if iset.orderbook.is_valid():
-        scores.append(iset.orderbook.composite_score)
+        scores.append(_pick_side_score(iset.orderbook, "orderbook_score", side))
         weights.append(0.10)
 
     if not scores:
@@ -327,12 +357,19 @@ def observe(
     confirmation_weight: float = 0.25,
     use_cache: bool = True,
     ob_data: Optional[dict] = None,
+    side: str = "long",
+    # [MTF-BIAS-FIX -- Sub-Batch D] side="long" default -- SEMUA caller
+    # existing yang tidak eksplisit mengirim side (position_sync_*.py, dan
+    # MarketObserver.observe() sebelum Sub-Batch D) tetap dapat perilaku
+    # IDENTIK PERSIS dengan sebelum parameter ini ada. Diteruskan ke
+    # _compute_tf_score() supaya primary_tf_score/confirmation_tf_score
+    # genuinely dihitung untuk sisi yang benar, bukan selalu long.
 ) -> ObservationReport:
     bar_ts: Optional[datetime] = None
     if isinstance(primary_df.index, pd.DatetimeIndex) and len(primary_df) > 0:
         bar_ts = primary_df.index[-1].to_pydatetime()
 
-    cache_key = _cache_key(symbol, primary_timeframe, bar_ts)
+    cache_key = _cache_key(symbol, primary_timeframe, bar_ts, side)
 
     if use_cache:
         cached = _get_cached(cache_key)
@@ -353,7 +390,7 @@ def observe(
         ob_data=ob_data,
     )
     report.primary_tf_indicators = primary_iset
-    report.primary_tf_score = _compute_tf_score(primary_iset)
+    report.primary_tf_score = _compute_tf_score(primary_iset, side=side)
     report.primary_tf_valid = (
         primary_iset.is_fully_valid()
         and not primary_iset.has_critical_errors()
@@ -374,7 +411,7 @@ def observe(
                 higher_tf_aligned=primary_is_bullish,
             )
             report.confirmation_tf_indicators = conf_iset
-            conf_score = _compute_tf_score(conf_iset)
+            conf_score = _compute_tf_score(conf_iset, side=side)
             report.confirmation_tf_score = conf_score
             report.confirmation_tf_valid = (
                 conf_iset.is_fully_valid()
@@ -485,6 +522,10 @@ class MarketObserver:
         confirmation_df: Optional[pd.DataFrame] = None,
         confirmation_timeframe: Optional[str] = None,
         ob_data: Optional[dict] = None,
+        side: str = "long",
+        # [MTF-BIAS-FIX -- Sub-Batch D] side="long" default -- caller lama
+        # (run_in_executor di strategy_base.py, sebelum Sub-Batch D) yang
+        # cuma kirim 6 argumen positional pertama tetap berperilaku IDENTIK.
     ) -> ObservationReport:
         return observe(
             symbol=symbol,
@@ -495,4 +536,5 @@ class MarketObserver:
             confirmation_timeframe=confirmation_timeframe,
             confirmation_weight=float(getattr(profile, "confirmation_weight", 0.25)),
             ob_data=ob_data,
+            side=side,
         )
