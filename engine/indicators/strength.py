@@ -644,6 +644,12 @@ def score_strength(
     result.minus_di  = adx_res.minus_di
     result.adx_score = adx_res.adx_score
     result.di_score  = adx_res.di_score
+    # [BUG-FIX KRITIS -- SAMA PERSIS dgn bug momentum.py di Sub-Batch A.2]
+    # di_score_short SEBELUMNYA TIDAK PERNAH disalin ke result -- sejak
+    # Batch 2, di jalur produksi asli (observer.py -> score_strength()),
+    # iset.strength.di_score_short SELALU None. Additive fix, di_score
+    # (long) TIDAK disentuh.
+    result.di_score_short = adx_res.di_score_short
     adx_ok = result.adx is not None
     di_ok  = result.plus_di is not None
 
@@ -654,12 +660,16 @@ def score_strength(
     result.obv_trend     = vol_res.obv_trend
     result.volume_climax = vol_res.volume_climax
     result.volume_score  = vol_res.volume_score
+    # [BUG-FIX KRITIS -- sama persis]
+    result.volume_score_short = vol_res.volume_score_short
     vol_ok = result.volume_ratio is not None
 
     mfi_res = calculate_money_flow(df, errors=errors, rsi_series=rsi_series)
     result.mfi           = mfi_res.mfi
     result.mfi_divergence = mfi_res.mfi_divergence
     result.mfi_score     = mfi_res.mfi_score
+    # [BUG-FIX KRITIS -- sama persis]
+    result.mfi_score_short = mfi_res.mfi_score_short
     mfi_ok = result.mfi is not None
 
     sub_indicators = [
@@ -674,6 +684,7 @@ def score_strength(
     if total_weight_available < 1e-6:
         errors.append("strength: tidak ada sub-indikator yang valid, composite = neutral")
         result.composite_score = SCORE_NEUTRAL
+        result.composite_score_short = SCORE_NEUTRAL
         return result
 
     composite = 0.0
@@ -684,6 +695,30 @@ def score_strength(
         composite  += score * adjusted_w
 
     result.composite_score = clamp_score(composite)
+
+    # [MTF-BIAS-FIX -- Sub-Batch A.3, proyek MTF composite side-aware]
+    # composite_score_short: reuse ok-flags & bobot yg SAMA dgn long.
+    # adx_score TIDAK punya versi _short (ADX cuma ukur MAGNITUDE kekuatan
+    # tren, bukan arah -- arah-agnostic, sama seperti spread_score/
+    # liquidity_score di orderbook Batch 7) -- dipakai IDENTIK di kedua
+    # sisi. di_score/volume_score/mfi_score genuinely directional, pakai
+    # versi _short (di_score_short dari Batch 2, volume_score_short &
+    # mfi_score_short dari Batch 3 -- semua BARU BENAR terisi setelah
+    # bug-fix di atas).
+    sub_indicators_short = [
+        (_ADX_WEIGHT,    adx_ok, result.adx_score),        # arah-agnostic, sama persis
+        (_DI_WEIGHT,     di_ok,  result.di_score_short),
+        (_VOLUME_WEIGHT, vol_ok, result.volume_score_short),
+        (_MFI_WEIGHT,    mfi_ok, result.mfi_score_short),
+    ]
+    composite_short = 0.0
+    for base_w, ok, score in sub_indicators_short:
+        if not ok:
+            continue
+        adjusted_w = base_w / total_weight_available
+        composite_short += score * adjusted_w
+
+    result.composite_score_short = clamp_score(composite_short)
 
     log.debug(
         "strength composite: adx=%.1f di=%.1f vol=%.1f mfi=%.1f → composite=%.1f",
