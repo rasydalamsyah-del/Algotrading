@@ -786,8 +786,18 @@ def calculate_market_structure(
 
     return result
 
-def score_market_structure(data: dict) -> float:
-    """[v2 NEW] Skor 0-100 dari klasifikasi struktur trend + event BOS/CHoCH."""
+def score_market_structure(data: dict, side: str = "long") -> float:
+    """[v2 NEW] Skor 0-100 dari klasifikasi struktur trend + event BOS/CHoCH.
+
+    [MTF-BIAS-FIX -- Sub-Batch A.6, proyek MTF composite side-aware] TIDAK
+    PERNAH dapat treatment side-aware sebelumnya (di luar cakupan 24
+    sub-score/8-batch lama) -- padahal genuinely directional. Formula ini
+    PROVABLY mirror-symmetric by construction (bullish=65 vs bearish=35,
+    BOS_bullish +15 vs BOS_bearish -15, CHoCH_bullish +10 vs CHoCH_bearish
+    -10 -- semua pasangan simetris persis di sekitar 50), sama seperti
+    pattern_score (Batch 1, Class B). side="short" cukup komplemen 100-x,
+    BUKAN pendekatan -- exact.
+    """
     trend = data.get("trend_structure")
     event = data.get("structure_event")
 
@@ -809,7 +819,10 @@ def score_market_structure(data: dict) -> float:
     elif event == "CHoCH_bearish":
         score -= 10.0    # reversal turun di tengah tren naik -> warning
 
-    return clamp_score(score)
+    score = clamp_score(score)
+    if side == "short":
+        score = clamp_score(100.0 - score)
+    return score
 
 # ══════════════════════════════════════════════════════════════════════════════
 # SUPPORT / RESISTANCE ZONE CLUSTERING
@@ -955,10 +968,20 @@ def calculate_donchian(df: pd.DataFrame, period: int = DONCHIAN_PERIOD) -> dict:
     result["donchian_width_pct"] = round((upper - lower) / middle * 100, 4) if middle else None
     return result
 
-def score_donchian(data: dict) -> float:
+def score_donchian(data: dict, side: str = "long") -> float:
+    """[MTF-BIAS-FIX -- Sub-Batch A.6] TIDAK PERNAH dapat treatment
+    side-aware sebelumnya -- padahal genuinely directional (pct_b tinggi =
+    dekat/breakout upper band = bullish; rendah = dekat/breakout lower
+    band = bearish). Diverifikasi aljabar: formula ini PROVABLY simetris
+    di bawah transform pct_b -> 1-pct_b (role-swap posisi dlm channel),
+    identik dgn komplemen 100-x pada skor akhir. side="short" role-swap
+    pct_b (bukan reformulasi cabang) -- konsisten dgn gaya sar/pivot/fib
+    (Batch 6) yg role-swap titik acuan, bukan sekadar komplemen output."""
     pct_b = data.get("donchian_pct_b")
     if pct_b is None:
         return 50.0
+    if side == "short":
+        pct_b = 1.0 - pct_b
     if pct_b >= 0.95:
         return clamp_score(78.0 + (pct_b - 0.95) * 100)   # dekat/breakout tepi atas
     if pct_b <= 0.05:
@@ -973,6 +996,7 @@ def score_structure(df: pd.DataFrame, errors: Optional[List[str]] = None):
     Dipanggil dari observer.py → hasilnya masuk ke iset.structure
     """
     result = StructureIndicators()
+    result.composite_score_short = 50.0   # default aman (samakan dgn composite_score dataclass default 50.0) utk semua early-return/exception path sblm wiring composite
 
     if len(df) == 0 or "close" not in df.columns:
         return result
@@ -1062,6 +1086,7 @@ def score_structure(df: pd.DataFrame, errors: Optional[List[str]] = None):
         result.last_swing_low         = mkt["last_swing_low"]
         result.swing_points           = mkt["swing_points"]
         result.market_structure_score = score_market_structure(mkt)
+        result.market_structure_score_short = score_market_structure(mkt, side="short")
     except Exception as exc:
         if errors is not None:
             errors.append(f"market_structure: {exc}")
@@ -1086,6 +1111,7 @@ def score_structure(df: pd.DataFrame, errors: Optional[List[str]] = None):
         result.donchian_pct_b      = dch["donchian_pct_b"]
         result.donchian_width_pct  = dch["donchian_width_pct"]
         result.donchian_score      = score_donchian(dch)
+        result.donchian_score_short = score_donchian(dch, side="short")
     except Exception as exc:
         if errors is not None:
             errors.append(f"donchian: {exc}")
@@ -1124,5 +1150,26 @@ def score_structure(df: pd.DataFrame, errors: Optional[List[str]] = None):
     if available_weight > 0:
         weighted_sum = sum(score * w for score, w, ok in weighted_components if ok)
         result.composite_score = clamp_score(weighted_sum / available_weight)
+
+        # [MTF-BIAS-FIX -- Sub-Batch A.6, proyek MTF composite side-aware]
+        # composite_score_short: reuse ok-flags & bobot yang SAMA dgn long
+        # (ketersediaan data tidak bergantung arah). ichimoku/sar/pivot/fib
+        # _short sudah ada sejak Batch 6; market_structure_score_short &
+        # donchian_score_short baru dibuat di atas sesi ini.
+        weighted_components_short = [
+            (result.ichimoku_score_short,         0.25, result.tenkan is not None),
+            (result.market_structure_score_short, 0.20, result.trend_structure not in (None, "undefined")),
+            (result.sar_score_short,              0.15, result.sar_value is not None),
+            (result.pivot_score_short,            0.15, result.pivot is not None),
+            (result.donchian_score_short,         0.15, result.donchian_upper is not None),
+            (result.fib_score_short,              0.10, result.fib_swing_high is not None),
+        ]
+        weighted_sum_short = sum(score * w for score, w, ok in weighted_components_short if ok)
+        result.composite_score_short = clamp_score(weighted_sum_short / available_weight)
+    else:
+        # tidak ada komponen valid -- konsisten dgn composite_score yg
+        # default 50.0 (dataclass), composite_score_short jg harus 50.0
+        # eksplisit (field-nya Optional, defaultnya None kalau tdk diisi).
+        result.composite_score_short = 50.0
 
     return result
