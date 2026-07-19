@@ -4747,5 +4747,157 @@ class TestMTFSubBatchEGateVerification(unittest.TestCase):
         self.assertGreater(r_short.confirmation_tf_score, r_long.confirmation_tf_score)
 
 
+class _FakeDBRecorder:
+    """Stub `_db` yang cuma merekam kwargs tiap panggilan save_signal_score()
+    -- dipakai utk membuktikan field `side` yang benar-benar dikirim ke DB,
+    tanpa perlu sqlite/engine sungguhan. Mirror wiring produksi
+    (future/main_future.py:416-418): `strategy._db` DAN `strategy._scorer._db`
+    HARUS keduanya di-set ke instance yang sama, krn SignalScorer meng-capture
+    db_manager di constructor-nya sendiri (engine/intelligence/scorer.py:684),
+    terpisah dari `strategy._db`."""
+
+    def __init__(self):
+        self.calls = []
+
+    async def save_signal_score(self, **kwargs):
+        self.calls.append(kwargs)
+        return len(self.calls)
+
+
+class TestSignalScoresSideLoggingBugFix(unittest.TestCase):
+    """[BUG FIX -- di luar proyek MTF composite side-aware, ditemukan lewat
+    investigasi data produksi live] engine/strategy_base.py::get_scored_signal(),
+    INSERT kedua ke tabel signal_scores (action_taken="PIPELINE", ~baris 1111-
+    1134) TIDAK PERNAH mengirim `side=side` ke db_manager.save_signal_score()
+    -- padahal `side` (parameter get_scored_signal() itu sendiri) sudah ada di
+    scope yang sama. Akibatnya field `side` di DB untuk baris PIPELINE SELALU
+    default "long" (engine/database.py:1394), APAPUN side yang sebenarnya
+    dievaluasi (long ATAU short).
+
+    Dampak nyata (diverifikasi lewat data produksi live hari ini,
+    2026-07-17, data/trading_bot_futures.db): 73 simbol punya baris side='short'
+    yang benar (ditulis dari engine/intelligence/scorer.py::_save_score_to_db(),
+    YANG SUDAH mengirim side=side dgn benar sejak awal), tapi HANYA 22 simbol
+    yang pernah punya baris side='long' genuine, dengan cuma 1 simbol overlap
+    -- artinya hampir semua baris "long"+"PIPELINE" adalah short yang
+    di-mislabel. Contoh konkret (id 3 vs id 4 di DB produksi):
+        DODOX/USDT side=short action=NO_TRIGGER total_score=0.0   (BENAR)
+        DODOX/USDT side=long  action=PIPELINE   total_score=0.0   (SALAH, harusnya short)
+    Ini murni bug logging/observability -- TIDAK memengaruhi eksekusi order
+    riil (future/main_future.py:1306-1310 pakai objek `scored` in-memory per
+    cand_side, bukan kolom `side` di DB ini), tapi merusak seluruh analisis
+    funnel long-vs-short dari tabel signal_scores (termasuk laporan yang
+    memicu investigasi ini).
+
+    Fix: tambah `side=side` ke pemanggilan save_signal_score() di
+    engine/strategy_base.py:1128 (murni aditif, satu keyword argument,
+    tidak menyentuh logic trading apapun).
+
+    Test di bawah memanggil get_scored_signal() SUNGGUHAN (bukan mock
+    observer/scorer/classifier) lewat instance VolumetricBreakoutStrategyBase
+    konkret, dengan `_db` di-stub cuma utk merekam kwargs -- membuktikan field
+    `side` yang BENAR-BENAR dikirim ke lapisan persistence, bukan menguji
+    ulang logic scoring itu sendiri (sudah dicakup class lain di file ini)."""
+
+    def setUp(self):
+        clear_cache()
+
+    def tearDown(self):
+        clear_cache()
+
+    def _make_strategy_with_fake_db(self):
+        strat = _DummyStrategyForGateTest(symbols=["BTC/USDT"], timeframe="15m")
+        strat._profiles["BTC/USDT"].timeframe = "15m"
+        fake_db = _FakeDBRecorder()
+        # [PENTING] Mirror wiring produksi persis -- lihat docstring _FakeDBRecorder.
+        strat._db = fake_db
+        strat._scorer._db = fake_db
+        return strat, fake_db
+
+    async def _run(self, strat, fake_db, df, side):
+        fake_db.calls.clear()
+        result = await strat.get_scored_signal(symbol="BTC/USDT", df=df, side=side)
+        # Baris dari scorer.py dijadwalkan via run_coroutine_threadsafe() dari
+        # worker thread (executor) -- beri kesempatan loop yang sama
+        # menjalankan callback yang sudah dijadwalkan sebelum method ini
+        # (dan asyncio.run() pembungkusnya) selesai/menutup loop.
+        await asyncio.sleep(0.05)
+        return result
+
+    def test_pipeline_row_side_matches_requested_side_short(self):
+        """[REGRESI -- kasus persis DODOX/USDT di produksi] side='short' pada
+        downtrend riil -- baris action_taken='PIPELINE' HARUS tercatat
+        side='short', BUKAN default 'long' diam-diam."""
+        strat, fake_db = self._make_strategy_with_fake_db()
+        primary_df = _make_trend_df(250, direction=-1, start=500.0, step=0.3)
+
+        asyncio.run(self._run(strat, fake_db, primary_df, "short"))
+
+        pipeline_calls = [c for c in fake_db.calls if c.get("action_taken") == "PIPELINE"]
+        self.assertEqual(len(pipeline_calls), 1, "Harus ada tepat 1 baris PIPELINE per panggilan")
+        self.assertEqual(
+            pipeline_calls[0].get("side"), "short",
+            "BUG: baris PIPELINE mislabel side -- harusnya 'short', "
+            "bukan default diam-diam ke 'long' (engine/strategy_base.py:1128)",
+        )
+
+    def test_pipeline_row_side_matches_requested_side_long(self):
+        """Mirror test di atas -- side='long' harus tetap tercatat 'long'
+        (regresi: pastikan fix tidak malah kebalik/rusak utk long)."""
+        strat, fake_db = self._make_strategy_with_fake_db()
+        primary_df = _make_trend_df(250, direction=-1, start=500.0, step=0.3)
+
+        asyncio.run(self._run(strat, fake_db, primary_df, "long"))
+
+        pipeline_calls = [c for c in fake_db.calls if c.get("action_taken") == "PIPELINE"]
+        self.assertEqual(len(pipeline_calls), 1)
+        self.assertEqual(pipeline_calls[0].get("side"), "long")
+
+    def test_no_cross_side_mislabeling_across_both_db_writes(self):
+        """[REGRESI UTAMA] Untuk SATU panggilan get_scored_signal(side=X),
+        SEMUA baris yang ditulis ke signal_scores (baik dari
+        scorer.py::_save_score_to_db() MAUPUN strategy_base.py sendiri) harus
+        konsisten side=X -- tidak ada satupun yang diam-diam side lain.
+        Mereplikasi persis pola pasangan baris DODOX/USDT di data produksi:
+        1 baris dari scorer.py (action bervariasi: NO_TRIGGER/HOLD/dst,
+        side SUDAH benar sejak awal) + 1 baris dari strategy_base.py
+        (action_taken='PIPELINE', BARU benar setelah fix ini)."""
+        strat, fake_db = self._make_strategy_with_fake_db()
+        primary_df = _make_trend_df(250, direction=-1, start=500.0, step=0.3)
+
+        for side in ("long", "short"):
+            asyncio.run(self._run(strat, fake_db, primary_df, side))
+            self.assertGreaterEqual(
+                len(fake_db.calls), 2,
+                f"side={side}: harus ada >=2 baris DB (scorer.py + strategy_base.py PIPELINE)",
+            )
+            sides_recorded = {c.get("side") for c in fake_db.calls}
+            self.assertEqual(
+                sides_recorded, {side},
+                f"side={side}: ditemukan baris dgn side campuran/salah: {fake_db.calls}",
+            )
+
+    def test_pipeline_row_total_score_matches_scorer_row_dodox_pattern(self):
+        """[Dokumentasi pola bug asli] Baris PIPELINE & baris scorer.py utk
+        panggilan yang SAMA harus punya total_score IDENTIK (keduanya berasal
+        dari objek `scored` yang sama) -- persis seperti DODOX/USDT
+        (total_score=0.0 di kedua baris) & EVAA/USDT (44.81 di kedua baris)
+        di data produksi. Sebelum fix, side-nya BEDA (short vs long) walau
+        total_score-nya sama persis -- itulah yang bikin bug ini sulit
+        kelihatan tanpa membandingkan dua baris berdekatan."""
+        strat, fake_db = self._make_strategy_with_fake_db()
+        primary_df = _make_trend_df(250, direction=-1, start=500.0, step=0.3)
+
+        asyncio.run(self._run(strat, fake_db, primary_df, "short"))
+
+        self.assertEqual(len(fake_db.calls), 2)
+        scorer_row, pipeline_row = fake_db.calls[0], fake_db.calls[1]
+        self.assertNotEqual(scorer_row.get("action_taken"), "PIPELINE")
+        self.assertEqual(pipeline_row.get("action_taken"), "PIPELINE")
+        self.assertEqual(scorer_row.get("total_score"), pipeline_row.get("total_score"))
+        self.assertEqual(scorer_row.get("side"), pipeline_row.get("side"), "side")
+        self.assertEqual(pipeline_row.get("side"), "short")
+
+
 if __name__ == "__main__":
     unittest.main()

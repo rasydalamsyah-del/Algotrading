@@ -44,6 +44,7 @@ except ImportError:
 
 from engine.profiles.registry import get_profile_summary, set_profile_override, get_coin_profile
 from engine.database import DatabaseManager
+from engine.event_bus import EventBus, ThrottledTickerPublisher, KeyedLogThrottle
 from spot.exchange_spot import ExchangeConnector, WebSocketFeed
 from spot.strategy_spot import get_strategy, PositionTracker
 from engine.core.models import SignalType, SignalEvent, ExitMode
@@ -141,6 +142,18 @@ class TradingBot:
         self._commander    = None
         self._analytics    = None
         self._meta_learner = None
+        # [AUDIT ITEM #8 -- push/SSE] Selalu diinstansiasi (bukan Optional
+        # spt DatabaseManager.event_bus) -- bus kosong (0 subscriber) genuinely
+        # no-op murah, tidak ada downside selalu ada. Instance IN-PROCESS
+        # milik bot ini saja -- TIDAK dishare dgn proses futures (2 port
+        # terpisah, 2 instance terpisah, dikonfirmasi user).
+        self.event_bus = EventBus()
+        # [#23 -- audit fungsional] Rate-limit log INFO Gate4 ([ScoreThreshold])
+        # per simbol -- lihat komentar "gate4_score_reject_log_interval" di
+        # _load_config() utk latar belakang lengkap.
+        self._gate4_reject_log_throttle = KeyedLogThrottle(
+            self.config["gate4_score_reject_log_interval"]
+        )
         self._tasks:              List[asyncio.Task] = []
         self._daily_summary_sent: bool               = False
         self._closing_lock:    asyncio.Lock = asyncio.Lock()
@@ -148,6 +161,16 @@ class TradingBot:
         self._closing_symbols: Set[str]     = set()
         self._close_retry_count: Dict[str, int] = {}
         self._last_refresh_time: float = 0.0
+        # [ITEM #4 -- audit fungsional] Debounce phantom-position detection --
+        # symbol -> jumlah siklus run_position_sync() berturut-turut simbol
+        # itu terdeteksi is_open=True di DB tapi absen di Binance. Lihat
+        # spot/position_sync_spot.py::_process_phantom_candidates().
+        self._phantom_suspects: Dict[str, int] = {}
+        # [#36 -- audit fungsional] Debounce amount-mismatch detection --
+        # TERPISAH dari _phantom_suspects (symbol bisa punya kedua masalah
+        # independen). Lihat spot/position_sync_spot.py::
+        # _process_amount_mismatch_candidates().
+        self._amount_mismatch_suspects: Dict[str, int] = {}
         self._ob_snapshot_history: Dict[str, Dict] = {}
         self._ob_wall_first_seen:  Dict[str, float] = {}
         self._whale_detectors:     Dict[str, WhaleDetector] = {}
@@ -252,6 +275,18 @@ class TradingBot:
             "meta_learner_min_sample":    int(os.getenv("META_LEARNER_MIN_SAMPLE", "50")),
             "meta_learner_max_change":    int(os.getenv("META_LEARNER_MAX_THRESHOLD_CHANGE", "10")),
             "analytics_refresh_interval": int(os.getenv("ANALYTICS_REFRESH_INTERVAL", "3600")),
+            # [ITEM #6] Interval refresh cache market ccxt (self.exchange._markets)
+            # via reload_markets() -- sebelumnya cuma di-set sekali di connect(),
+            # spot TIDAK PERNAH memanggil reload_markets() sama sekali sebelum ini.
+            "market_cache_refresh_interval": int(os.getenv("MARKET_CACHE_REFRESH_INTERVAL", "3600")),
+            # [#23 -- audit fungsional] Interval rate-limit (detik) utk log
+            # INFO Gate4 ([ScoreThreshold]) per simbol -- Gate4 adalah titik
+            # reject volume tertinggi di pipeline (semua Gate3-survivor masuk
+            # sini), jadi TIDAK di-bump ke INFO polos spt Gate4.5/5 (risiko
+            # banjir log). log.debug() detail penuh TETAP ada tanpa berubah;
+            # log.info() throttled ini TAMBAHAN supaya tetap terlihat tanpa
+            # DEBUG logging, maks 1x per simbol per interval ini.
+            "gate4_score_reject_log_interval": int(os.getenv("GATE4_SCORE_REJECT_LOG_INTERVAL", "600")),
         }
 
     async def start(self) -> None:
@@ -268,6 +303,11 @@ class TradingBot:
         self.db = DatabaseManager(self.config["database_url"])
         await self.db.init_db()
         log.info("Database ready: %s", self.config["database_url"])
+        # [AUDIT ITEM #8] Injeksi pasca-konstruksi (pola sama dgn
+        # self.strategy._notifier = ... dkk di bawah) -- Tier 1 write
+        # (upsert_position/close_position/save_trade/dst) sekarang publish
+        # ke event_bus ini.
+        self.db.event_bus = self.event_bus
 
         # [BUG-FIX] load_all_overrides_from_db() sudah pernah difix (async def
         # yang benar, sebelumnya coroutine tidak pernah di-await -> override
@@ -347,8 +387,14 @@ class TradingBot:
             )
 
         # ── Auto-scan universe dari Binance ──
+        # [BUG-FIX #35] is_valid_symbol= sekarang diteruskan -- pola sama
+        # dgn future/main_future.py::auto_scan_and_populate_futures(),
+        # mencegah simbol hasil scan REST mentah yang tidak dikenali ccxt
+        # masuk ke universe.json/universe_overrides.
         from spot.exchange_spot import auto_scan_and_populate
-        scanned = await auto_scan_and_populate(self.db)
+        scanned = await auto_scan_and_populate(
+            self.db, is_valid_symbol=self.exchange.is_symbol_supported,
+        )
         if scanned:
             self.config["universe_watchlist"] = scanned
             log.info("universe_watchlist diupdate dari auto_scan: %d koin", len(scanned))
@@ -360,6 +406,11 @@ class TradingBot:
             api_passphrase=self.config.get("api_passphrase", ""),
             symbols=self.config["universe_watchlist"],
             testnet=self.config["testnet"],
+            # [AUDIT ITEM #8] Hook on_ticker SUDAH ADA sejak awal di
+            # WebSocketFeed, TIDAK PERNAH disambungkan ke apa pun sebelum
+            # ini (dikonfirmasi grep). Throttled per symbol (default 1.5s)
+            # -- lihat engine/event_bus.py::ThrottledTickerPublisher.
+            on_ticker=ThrottledTickerPublisher(self.event_bus, market_type="spot"),
         )
         await self.ws_feed.start()
         log.info(
@@ -479,6 +530,23 @@ class TradingBot:
                 len(self._closing_symbols), self._closing_symbols,
             )
 
+        # [#27 -- audit fungsional] INVARIAN WAJIB: titik ini HARUS dieksekusi
+        # SEBELUM task periodik manapun dibuat (asyncio.create_task(...) di
+        # run(), lihat komentar berpasangan di sana) -- _reconcile_positions_
+        # on_startup() auto-close phantom TANPA debounce, aman HANYA karena
+        # pada titik ini nol aktivitas trading konkuren berjalan (self._tasks
+        # masih kosong). Assertion di bawah bukan cuma dokumentasi -- kalau
+        # urutan startup berubah nanti (mis. task periodik dipindah lebih
+        # awal), ini GAGAL LOUD alih-alih auto-close diam-diam mulai
+        # beroperasi di tengah race condition yang seharusnya dilindungi
+        # debounce (lihat run_position_sync_loop()/item #4).
+        assert not self._tasks, (
+            "_reconcile_positions_on_startup() HARUS dipanggil sebelum task "
+            "periodik dibuat (self._tasks masih kosong) -- lihat komentar "
+            "[#27] di _reconcile_positions_on_startup() & run(). Kalau ini "
+            "gagal, urutan startup sudah berubah & asumsi keamanan "
+            "auto-close-tanpa-debounce di startup perlu ditinjau ulang."
+        )
         await self._reconcile_positions_on_startup()
 
         open_positions = await self.db.get_open_positions()
@@ -689,6 +757,34 @@ class TradingBot:
             raise BotStartupError(f"Live preflight error: {e}") from e
 
     async def _reconcile_positions_on_startup(self) -> None:
+        """
+        [#27 -- audit fungsional, keputusan desain terverifikasi, BUKAN bug]
+        Fungsi ini auto-close posisi "phantom" (DB is_open=True tapi
+        tidak ditemukan di exchange/_paper_balance) LANGSUNG, TANPA debounce
+        -- BEDA dari run_position_sync_loop() (item #4) yang debounce 2
+        siklus & TIDAK PERNAH auto-close (cuma notify + log CRITICAL untuk
+        review manual). Ini SENGAJA, bukan inkonsistensi yang perlu
+        disamakan.
+
+        Kenapa aman auto-close di sini tapi TIDAK aman di jalur periodik:
+        fungsi ini dipanggil dari start() SEBELUM satu pun task periodik
+        dibuat (run_scanner_loop/run_gate3_worker/run_sl_tp_monitor/
+        run_position_sync_loop, dst -- semua asyncio.create_task() di
+        run(), SETELAH start() selesai). Race condition yang jadi alasan
+        debounce di jalur periodik (posisi genuinely sedang dalam proses
+        close normal, is_closing belum sempat ke-set, tampak "phantom"
+        sesaat) SECARA STRUKTURAL TIDAK BISA TERJADI di sini -- nol
+        aktivitas trading konkuren berjalan pada titik ini. Debounce di
+        jalur periodik melindungi dari race yang nyata; di startup, race
+        itu tidak ada untuk dilindungi -- menambah debounce di sini
+        cuma menunda pembersihan tanpa menambah keamanan riil.
+
+        INVARIAN INI DIJAGA LEWAT ASSERTION di start() (baris pemanggilan
+        fungsi ini) -- lihat komentar di sana & di run() (titik
+        asyncio.create_task() pertama). JANGAN pindahkan pemanggilan fungsi
+        ini ke setelah task periodik dibuat tanpa meninjau ulang seluruh
+        analisis ini.
+        """
         log.info("Reconciliation: cek posisi DB vs exchange...")
 
         try:
@@ -1275,7 +1371,7 @@ class TradingBot:
 
                 # Hitung indikator dasar via ta_compat
                 try:
-                    import ta_compat  # noqa
+                    import engine.ta_compat  # noqa
                     df.ta.ema(length=9,  append=True)
                     df.ta.ema(length=21, append=True)
                     df.ta.ema(length=50, append=True)
@@ -1407,6 +1503,13 @@ class TradingBot:
                 if total_score < effective_threshold:
                     log.debug("[ScoreThreshold] %s skor %.1f < threshold %.1f — skip",
                               symbol, total_score, effective_threshold)
+                    # [#23 -- audit fungsional] INFO throttled (maks 1x per
+                    # simbol per gate4_score_reject_log_interval) -- Gate4
+                    # supaya terlihat tanpa DEBUG logging & tanpa banjir log
+                    # (titik reject volume tertinggi di pipeline).
+                    if self._gate4_reject_log_throttle.allow(symbol):
+                        log.info("[ScoreThreshold] %s skor %.1f < threshold %.1f — skip",
+                                 symbol, total_score, effective_threshold)
                     return
 
                 log.info("[Gate4→Gate5] %s lolos | score=%.1f threshold=%.1f",
@@ -1783,6 +1886,32 @@ class TradingBot:
 
             await asyncio.sleep(60)
 
+    async def run_market_cache_refresh(self) -> None:
+        """[ITEM #6 -- sama kelas masalah dgn insiden EVAA/USDT, scope lebih
+        luas] self.exchange._markets sebelumnya cuma di-set sekali di
+        connect() -- spot TIDAK PERNAH memanggil reload_markets() sama
+        sekali sebelum ini (beda dgn futures yg minimal panggil sekali
+        sebelum auto-scan universe). Loop ini memanggil ulang
+        reload_markets() yang sudah ada (bukan reimplementasi), tiap
+        market_cache_refresh_interval detik (default 3600 = 1 jam -- cukup
+        utk skala perubahan listing/fee Binance, dampak rate-limit
+        diabaikan dibanding OHLCV/ticker loop yg sudah jalan tiap siklus).
+        Pola identik run_daily_summary/run_analytics_loop di file ini."""
+        interval = self.config.get("market_cache_refresh_interval", 3600)
+        log.info("Market cache refresh loop dimulai (interval=%ds).", interval)
+        while self.is_running:
+            try:
+                await asyncio.sleep(interval)
+                await self.exchange.reload_markets()
+                log.info(
+                    "Market cache refresh: %d markets di-reload.",
+                    len(getattr(self.exchange, "_markets", {}) or {}),
+                )
+            except asyncio.CancelledError:
+                break
+            except Exception as e:
+                log.error("Market cache refresh error: %s", e)
+
     async def run_coin_swap_loop(self) -> None:
         """Loop periodik untuk cross-learning coin swap."""
         if not self._coin_swap:
@@ -1885,363 +2014,438 @@ class TradingBot:
                 positions = await self.db.get_open_positions()
 
                 for pos in positions:
-                    async with self._closing_lock:
-                        is_closing = pos.symbol in self._closing_symbols
-                    if is_closing:
-                        log.debug(
-                            "SL/TP monitor skip %s — sedang dalam proses close.",
-                            pos.symbol,
-                        )
-                        continue
-
-                    price = await self._get_current_price(pos.symbol)
-                    if price is None or price <= 0:
-                        log.warning(
-                            "Tidak bisa ambil harga untuk %s — skip cycle ini.",
-                            pos.symbol,
-                        )
-                        continue
-
-                    # Track highest_price untuk trailing ATG yang akurat
-                    if pos.side == "long" and price > (pos.highest_price or 0):
-                        await self.db.update_position_highest_price(pos.symbol, price)
-                        pos.highest_price = price
-                    elif pos.side == "short" and (pos.highest_price is None or price < pos.highest_price):
-                        await self.db.update_position_highest_price(pos.symbol, price)
-                        pos.highest_price = price
-
-                    new_sl = self.risk_manager.check_breakeven_sl(
-                        entry_price=pos.entry_price,
-                        current_price=price,
-                        current_sl=pos.stop_loss_price,
-                        take_profit=pos.take_profit_price,
-                        side=pos.side,
-                    )
-                    if new_sl is not None and (
-                        pos.stop_loss_price is None
-                        or new_sl != pos.stop_loss_price
-                    ):
-                        log.info(
-                            "BREAKEVEN SL | %s | %.6f → %.6f",
-                            pos.symbol, pos.stop_loss_price, new_sl,
-                        )
-                        await self.db.update_position_sl(pos.symbol, new_sl)
-                        pos.stop_loss_price = new_sl
-
-                    # Ambil ATR current untuk trailing stop yang adaptif
-                    current_atr = pos.atr_at_entry  # fallback ke ATR entry
                     try:
-                        _mon_profile = get_coin_profile(pos.symbol, override_profile=pos.strategy_profile)
-                        _mon_tf = _mon_profile.effective_confirmation_tf
-                        candles = await self.exchange.fetch_ohlcv(
-                            pos.symbol, _mon_tf, limit=20
-                        )
-                        if candles and len(candles) >= 15:
-                            import pandas as pd
-                            df = pd.DataFrame(candles, columns=["ts","open","high","low","close","volume"])
-                            df = df.astype({"high": float, "low": float, "close": float})
-                            df.ta.atr(length=14, append=True)
-                            atr_col = [c for c in df.columns if "ATRr" in c or "ATR" in c]
-                            if atr_col:
-                                atr_live = df[atr_col[0]].dropna().iloc[-1]
-                                if atr_live > 0:
-                                    current_atr = float(atr_live)
-                    except Exception as _e:
-                        log.debug("ATR live gagal untuk %s: %s", pos.symbol, _e)
-
-                    if (
-                        current_atr
-                        and current_atr > 0
-                        and pos.stop_loss_price is not None
-                    ):
-                        # Ambil strategy profile coin untuk progressive trailing
-                        _coin_profile = None
-                        if hasattr(self, 'strategy') and self.strategy:
-                            _coin_profile = self.strategy.get_profile(pos.symbol)
-                        _profile_name = _coin_profile.profile.value if _coin_profile else ""
-
-                        new_trailing_sl = self.risk_manager.check_trailing_sl(
-                            entry_price=pos.entry_price,
-                            current_price=price,
-                            current_sl=pos.stop_loss_price,
-                            atr=current_atr,
-                            side=pos.side,
-                            strategy_profile=_profile_name,
-                        )
-                        if (
-                            new_trailing_sl is not None
-                            and new_trailing_sl != pos.stop_loss_price
-                        ):
-                            log.info(
-                                "TRAILING SL | %s | %.6f → %.6f",
-                                pos.symbol, pos.stop_loss_price, new_trailing_sl,
+                        async with self._closing_lock:
+                            is_closing = pos.symbol in self._closing_symbols
+                        if is_closing:
+                            log.debug(
+                                "SL/TP monitor skip %s — sedang dalam proses close.",
+                                pos.symbol,
                             )
-                            await self.db.update_position_sl(pos.symbol, new_trailing_sl)
-                            pos.stop_loss_price = new_trailing_sl
-
-                    hit_sl = (
-                        pos.stop_loss_price is not None and (
-                            (pos.side == "long"  and price <= pos.stop_loss_price)
-                            or (pos.side == "short" and price >= pos.stop_loss_price)
-                        )
-                    )
-                    hit_tp = (
-                        pos.take_profit_price is not None and (
-                            (pos.side == "long"  and price >= pos.take_profit_price)
-                            or (pos.side == "short" and price <= pos.take_profit_price)
-                        )
-                    )
-
-                    trailing_reason = None
-                    if self.strategy and hasattr(self.strategy, "check_trailing_exit"):
-                        trailing_reason = self.strategy.check_trailing_exit(pos.symbol, price)
-
-                    # ── Adaptive Trade Guardian (ATG) ──────────────────────
-                    try:
-                        from engine.intelligence.trade_guardian import check_atg
-                        _atg_df = None
-                        try:
-                            import pandas as pd
-                            _atg_profile = get_coin_profile(pos.symbol, override_profile=pos.strategy_profile)
-                            _atg_tf = _atg_profile.effective_confirmation_tf
-                            _atg_candles = await self.exchange.fetch_ohlcv(
-                                pos.symbol, _atg_tf, limit=50
-                            )
-                            if _atg_candles and len(_atg_candles) >= 15:
-                                _atg_df = pd.DataFrame(
-                                    _atg_candles,
-                                    columns=["ts","open","high","low","close","volume"]
-                                ).astype({"high":float,"low":float,"close":float,"volume":float})
-                        except Exception as _atg_fe:
-                            log.debug("ATG fetch candles gagal [%s]: %s", pos.symbol, _atg_fe)
-
-                        _atg_regime = pos.entry_regime or "trending_bull"
-                        _atg_side   = pos.side or "long"
-                        _atg_result = check_atg(
-                            entry_price=pos.entry_price or 0.0,
-                            current_price=price,
-                            highest_price=pos.highest_price or max(price, pos.entry_price or price),
-                            current_sl=pos.stop_loss_price,
-                            df=_atg_df,
-                            symbol=pos.symbol,
-                            regime=_atg_regime,
-                            side=_atg_side,
-                        )
-
-                        # Update SL ke profit zone kalau lebih baik.
-                        # [FUTURES-READY] Untuk long, "lebih baik" = SL baru lebih
-                        # TINGGI (identik dengan perilaku sebelumnya). Untuk short,
-                        # "lebih baik" = SL baru lebih RENDAH (belum pernah
-                        # tereksekusi di produksi karena belum ada posisi short).
-                        if _atg_result.new_sl is not None:
-                            _atg_is_long = _atg_side != "short"
-                            _sl_improved = (
-                                pos.stop_loss_price is None
-                                or (_atg_is_long and _atg_result.new_sl > pos.stop_loss_price)
-                                or (not _atg_is_long and _atg_result.new_sl < pos.stop_loss_price)
-                            )
-                            if _sl_improved:
-                                log.info(
-                                    "ATG ProfitZone SL | %s | %.6f → %.6f",
-                                    pos.symbol, pos.stop_loss_price or 0, _atg_result.new_sl,
-                                )
-                                await self.db.update_position_sl(pos.symbol, _atg_result.new_sl)
-                                pos.stop_loss_price = _atg_result.new_sl
-
-                        # ATG composite exit
-                        if _atg_result.should_exit and not trailing_reason and not hit_sl and not hit_tp:
-                            log.info(
-                                "ATG EXIT [%s] @ %.6f | %s",
-                                pos.symbol, price, _atg_result.exit_reason,
-                            )
-                            est_pnl = 0.0
-                            if pos.entry_price and pos.amount:
-                                est_pnl = (price - pos.entry_price) * pos.amount
-                            # [BUG-FIX] Sebelumnya trigger="take_profit" di-hardcode
-                            # untuk SEMUA ATG exit, padahal ATG bisa saja exit di
-                            # kondisi rugi (mis. momentum berbalik sebelum harga
-                            # sempat menyentuh SL asli). Notifikasi jadi salah:
-                            # user lihat "🎯 TAKE PROFIT HIT" padahal Est PnL
-                            # negatif. Sekarang trigger ditentukan dari tanda
-                            # est_pnl yang sebenarnya.
-                            _atg_trigger = "take_profit" if est_pnl >= 0 else "stop_loss"
-                            await self.notifier.notify_sl_tp_hit(
-                                symbol=pos.symbol, trigger=_atg_trigger,
-                                price=price, entry_price=pos.entry_price, pnl=est_pnl,
-                            )
-                            await self._close_position_market(pos, price, _atg_result.exit_reason)
                             continue
-                    except Exception as _atg_err:
-                        log.debug("ATG error [%s]: %s", pos.symbol, _atg_err)
-                    # ── End ATG ────────────────────────────────────────────
 
-                    # ── Early Exit Confirmation ──────────────────────────
-                    try:
-                        if (
-                            not hit_sl and not hit_tp
-                            and pos.entry_score
-                            and pos.stop_loss_price
-                            and pos.entry_price
-                        ):
-                            _latest_score = await self.db.get_latest_signal_score(pos.symbol)
-                            if _latest_score is not None:
-                                _score_drop = pos.entry_score - _latest_score.total_score
-                                _sl_dist    = abs(price - pos.stop_loss_price)
-                                _en_dist    = abs(pos.entry_price - pos.stop_loss_price)
-                                _danger     = _en_dist > 0 and (_sl_dist / _en_dist) < 0.5
-                                _regime_chg = (
-                                    _latest_score.regime is not None
-                                    and pos.entry_regime is not None
-                                    and _latest_score.regime != pos.entry_regime
+                        price = await self._get_current_price(pos.symbol)
+                        if price is None or price <= 0:
+                            log.warning(
+                                "Tidak bisa ambil harga untuk %s — skip cycle ini.",
+                                pos.symbol,
+                            )
+                            continue
+
+                        # Track highest_price untuk trailing ATG yang akurat
+                        if pos.side == "long" and price > (pos.highest_price or 0):
+                            await self.db.update_position_highest_price(pos.symbol, price)
+                            pos.highest_price = price
+                        elif pos.side == "short" and (pos.highest_price is None or price < pos.highest_price):
+                            await self.db.update_position_highest_price(pos.symbol, price)
+                            pos.highest_price = price
+
+                        # [ITEM #3 -- proteksi per-langkah] check_breakeven_sl() &
+                        # db.update_position_sl() sebelumnya TIDAK dibungkus -- data
+                        # posisi korup (mis. entry_price non-numerik) bisa melempar
+                        # exception di sini dan (sebelum fix ini) membatalkan
+                        # pengecekan SL/TP untuk SEMUA posisi setelahnya di siklus
+                        # yang sama. Sekarang: gagal di langkah ini TIDAK menghentikan
+                        # trailing/hit_sl/hit_tp check untuk POSISI YANG SAMA di
+                        # siklus yang sama (graceful degradation), dan backstop
+                        # per-posisi di luar tetap ada sbg jaring pengaman kedua.
+                        try:
+                            new_sl = self.risk_manager.check_breakeven_sl(
+                                entry_price=pos.entry_price,
+                                current_price=price,
+                                current_sl=pos.stop_loss_price,
+                                take_profit=pos.take_profit_price,
+                                side=pos.side,
+                            )
+                            if new_sl is not None and (
+                                pos.stop_loss_price is None
+                                or new_sl != pos.stop_loss_price
+                            ):
+                                log.info(
+                                    "BREAKEVEN SL | %s | %.6f → %.6f",
+                                    pos.symbol, pos.stop_loss_price, new_sl,
                                 )
-                                if _score_drop > 20 and _danger and _regime_chg:
-                                    log.info(
-                                        "EARLY EXIT [%s] @ %.6f | score drop %.1f->%.1f | regime %s->%s | danger %.1f%%",
-                                        pos.symbol, price, pos.entry_score, _latest_score.total_score,
-                                        pos.entry_regime, _latest_score.regime,
-                                        (_sl_dist / _en_dist * 100) if _en_dist > 0 else 0,
-                                    )
-                                    est_pnl = 0.0
-                                    if pos.entry_price and pos.amount:
-                                        est_pnl = (
-                                            (price - pos.entry_price) * pos.amount
-                                            if pos.side == "long"
-                                            else (pos.entry_price - price) * pos.amount
-                                        )
-                                    await self.notifier.notify_sl_tp_hit(
-                                        symbol=pos.symbol, trigger="stop_loss",
-                                        price=price, entry_price=pos.entry_price, pnl=est_pnl,
-                                    )
-                                    await self._close_position_market(pos, price, "early_exit_score_drop")
-                                    continue
-                    except Exception as _ee_err:
-                        log.debug("Early exit check error [%s]: %s", pos.symbol, _ee_err)
-                    # ── End Early Exit ────────────────────────────────────
+                                await self.db.update_position_sl(pos.symbol, new_sl)
+                                pos.stop_loss_price = new_sl
+                        except Exception as _be_err:
+                            log.error(
+                                "Breakeven SL check gagal [%s] (entry_price=%r stop_loss_price=%r "
+                                "take_profit_price=%r): %s",
+                                pos.symbol, pos.entry_price, pos.stop_loss_price,
+                                pos.take_profit_price, _be_err, exc_info=True,
+                            )
 
-                    # ── Regime Transition Handler ─────────────────────────────────
-                    try:
+                        # Ambil ATR current untuk trailing stop yang adaptif
+                        current_atr = pos.atr_at_entry  # fallback ke ATR entry
+                        try:
+                            _mon_profile = get_coin_profile(pos.symbol, override_profile=pos.strategy_profile)
+                            _mon_tf = _mon_profile.effective_confirmation_tf
+                            candles = await self.exchange.fetch_ohlcv(
+                                pos.symbol, _mon_tf, limit=20
+                            )
+                            if candles and len(candles) >= 15:
+                                import pandas as pd
+                                df = pd.DataFrame(candles, columns=["ts","open","high","low","close","volume"])
+                                df = df.astype({"high": float, "low": float, "close": float})
+                                df.ta.atr(length=14, append=True)
+                                atr_col = [c for c in df.columns if "ATRr" in c or "ATR" in c]
+                                if atr_col:
+                                    atr_live = df[atr_col[0]].dropna().iloc[-1]
+                                    if atr_live > 0:
+                                        current_atr = float(atr_live)
+                        except Exception as _e:
+                            log.debug("ATR live gagal untuk %s: %s", pos.symbol, _e)
+
                         if (
-                            not hit_sl and not hit_tp
-                            and self.strategy
-                            and hasattr(self.strategy, "_handle_regime_transition")
+                            current_atr
+                            and current_atr > 0
+                            and pos.stop_loss_price is not None
                         ):
-                            _tracker = self.strategy.get_tracker(pos.symbol)
-                            _cur_regime = None
+                            # [ITEM #3] check_trailing_sl() & db.update_position_sl()
+                            # sebelumnya TIDAK dibungkus -- lihat catatan di blok
+                            # breakeven di atas, pola & alasan sama persis.
                             try:
-                                _latest_sig = await self.db.get_latest_signal_score(pos.symbol)
-                                if _latest_sig is not None:
-                                    _cur_regime = (
-                                        _latest_sig.regime.value
-                                        if hasattr(_latest_sig.regime, "value")
-                                        else str(_latest_sig.regime)
-                                    )
-                            except Exception:
-                                pass
-                            if _tracker and _cur_regime:
-                                _rth_action = self.strategy._handle_regime_transition(
-                                    _tracker, _cur_regime
+                                # Ambil strategy profile coin untuk progressive trailing
+                                _coin_profile = None
+                                if hasattr(self, 'strategy') and self.strategy:
+                                    _coin_profile = self.strategy.get_profile(pos.symbol)
+                                _profile_name = _coin_profile.profile.value if _coin_profile else ""
+
+                                new_trailing_sl = self.risk_manager.check_trailing_sl(
+                                    entry_price=pos.entry_price,
+                                    current_price=price,
+                                    current_sl=pos.stop_loss_price,
+                                    atr=current_atr,
+                                    side=pos.side,
+                                    strategy_profile=_profile_name,
                                 )
-                                if _rth_action == "EXIT":
+                                if (
+                                    new_trailing_sl is not None
+                                    and new_trailing_sl != pos.stop_loss_price
+                                ):
                                     log.info(
-                                        "REGIME TRANSITION EXIT [%s] @ %.6f | %s->%s",
-                                        pos.symbol, price,
-                                        _tracker.entry_regime, _cur_regime,
+                                        "TRAILING SL | %s | %.6f → %.6f",
+                                        pos.symbol, pos.stop_loss_price, new_trailing_sl,
                                     )
-                                    est_pnl = 0.0
-                                    if pos.entry_price and pos.amount:
-                                        est_pnl = (price - pos.entry_price) * pos.amount
-                                    await self.notifier.notify_sl_tp_hit(
-                                        symbol=pos.symbol, trigger="stop_loss",
-                                        price=price, entry_price=pos.entry_price, pnl=est_pnl,
-                                    )
-                                    await self._close_position_market(
-                                        pos, price, f"regime_transition_exit:{_tracker.entry_regime}->{_cur_regime}"
-                                    )
-                                    continue
-                                elif _rth_action == "HOLD_TIGHTEN_SL":
-                                    log.info(
-                                        "REGIME TIGHTEN SL [%s] | new quick_sl_pct=%.2f%%",
-                                        pos.symbol, _tracker.quick_sl_pct,
-                                    )
-                                elif _rth_action == "HOLD_RELAX_SL":
-                                    log.info(
-                                        "REGIME RELAX SL [%s] | new quick_sl_pct=%.2f%%",
-                                        pos.symbol, _tracker.quick_sl_pct,
-                                    )
-                    except Exception as _rth_err:
-                        log.debug("Regime transition handler error [%s]: %s", pos.symbol, _rth_err)
-                    # ── End Regime Transition Handler ────────────────────────
+                                    await self.db.update_position_sl(pos.symbol, new_trailing_sl)
+                                    pos.stop_loss_price = new_trailing_sl
+                            except Exception as _tr_err:
+                                log.error(
+                                    "Trailing SL check gagal [%s] (current_atr=%r stop_loss_price=%r): %s",
+                                    pos.symbol, current_atr, pos.stop_loss_price, _tr_err, exc_info=True,
+                                )
 
-                    if trailing_reason and (hit_sl or hit_tp):
-                        log.warning(
-                            "DUAL TRIGGER [%s]: trailing=%s AND sl_hit=%s tp_hit=%s "
-                            "— prioritaskan SL/TP",
-                            pos.symbol, trailing_reason[:60], hit_sl, hit_tp,
+                        hit_sl = (
+                            pos.stop_loss_price is not None and (
+                                (pos.side == "long"  and price <= pos.stop_loss_price)
+                                or (pos.side == "short" and price >= pos.stop_loss_price)
+                            )
                         )
+                        hit_tp = (
+                            pos.take_profit_price is not None and (
+                                (pos.side == "long"  and price >= pos.take_profit_price)
+                                or (pos.side == "short" and price <= pos.take_profit_price)
+                            )
+                        )
+
                         trailing_reason = None
+                        if self.strategy and hasattr(self.strategy, "check_trailing_exit"):
+                            trailing_reason = self.strategy.check_trailing_exit(pos.symbol, price)
 
-                    if trailing_reason:
-                        log.info(
-                            "TRAILING EXIT: %s @ %.6f | %s",
-                            pos.symbol, price, trailing_reason,
-                        )
-                        est_pnl = 0.0
-                        if pos.entry_price and pos.amount:
-                            est_pnl = (
+                        # ── Adaptive Trade Guardian (ATG) ──────────────────────
+                        try:
+                            from engine.intelligence.trade_guardian import check_atg
+                            _atg_df = None
+                            try:
+                                import pandas as pd
+                                _atg_profile = get_coin_profile(pos.symbol, override_profile=pos.strategy_profile)
+                                _atg_tf = _atg_profile.effective_confirmation_tf
+                                _atg_candles = await self.exchange.fetch_ohlcv(
+                                    pos.symbol, _atg_tf, limit=50
+                                )
+                                if _atg_candles and len(_atg_candles) >= 15:
+                                    _atg_df = pd.DataFrame(
+                                        _atg_candles,
+                                        columns=["ts","open","high","low","close","volume"]
+                                    ).astype({"high":float,"low":float,"close":float,"volume":float})
+                            except Exception as _atg_fe:
+                                log.debug("ATG fetch candles gagal [%s]: %s", pos.symbol, _atg_fe)
+
+                            _atg_regime = pos.entry_regime or "trending_bull"
+                            _atg_side   = pos.side or "long"
+                            _atg_result = check_atg(
+                                entry_price=pos.entry_price or 0.0,
+                                current_price=price,
+                                highest_price=pos.highest_price or max(price, pos.entry_price or price),
+                                current_sl=pos.stop_loss_price,
+                                df=_atg_df,
+                                symbol=pos.symbol,
+                                regime=_atg_regime,
+                                side=_atg_side,
+                            )
+
+                            # Update SL ke profit zone kalau lebih baik.
+                            # [FUTURES-READY] Untuk long, "lebih baik" = SL baru lebih
+                            # TINGGI (identik dengan perilaku sebelumnya). Untuk short,
+                            # "lebih baik" = SL baru lebih RENDAH (belum pernah
+                            # tereksekusi di produksi karena belum ada posisi short).
+                            if _atg_result.new_sl is not None:
+                                _atg_is_long = _atg_side != "short"
+                                _sl_improved = (
+                                    pos.stop_loss_price is None
+                                    or (_atg_is_long and _atg_result.new_sl > pos.stop_loss_price)
+                                    or (not _atg_is_long and _atg_result.new_sl < pos.stop_loss_price)
+                                )
+                                if _sl_improved:
+                                    log.info(
+                                        "ATG ProfitZone SL | %s | %.6f → %.6f",
+                                        pos.symbol, pos.stop_loss_price or 0, _atg_result.new_sl,
+                                    )
+                                    await self.db.update_position_sl(pos.symbol, _atg_result.new_sl)
+                                    pos.stop_loss_price = _atg_result.new_sl
+
+                            # ATG composite exit
+                            if _atg_result.should_exit and not trailing_reason and not hit_sl and not hit_tp:
+                                log.info(
+                                    "ATG EXIT [%s] @ %.6f | %s",
+                                    pos.symbol, price, _atg_result.exit_reason,
+                                )
+                                est_pnl = 0.0
+                                if pos.entry_price and pos.amount:
+                                    est_pnl = (price - pos.entry_price) * pos.amount
+                                # [BUG-FIX] Sebelumnya trigger="take_profit" di-hardcode
+                                # untuk SEMUA ATG exit, padahal ATG bisa saja exit di
+                                # kondisi rugi (mis. momentum berbalik sebelum harga
+                                # sempat menyentuh SL asli). Notifikasi jadi salah:
+                                # user lihat "🎯 TAKE PROFIT HIT" padahal Est PnL
+                                # negatif. Sekarang trigger ditentukan dari tanda
+                                # est_pnl yang sebenarnya.
+                                _atg_trigger = "take_profit" if est_pnl >= 0 else "stop_loss"
+                                await self.notifier.notify_sl_tp_hit(
+                                    symbol=pos.symbol, trigger=_atg_trigger,
+                                    price=price, entry_price=pos.entry_price, pnl=est_pnl,
+                                )
+                                await self._close_position_market(pos, price, _atg_result.exit_reason)
+                                continue
+                        except Exception as _atg_err:
+                            log.debug("ATG error [%s]: %s", pos.symbol, _atg_err)
+                        # ── End ATG ────────────────────────────────────────────
+
+                        # ── Early Exit Confirmation ──────────────────────────
+                        try:
+                            if (
+                                not hit_sl and not hit_tp
+                                and pos.entry_score
+                                and pos.stop_loss_price
+                                and pos.entry_price
+                            ):
+                                _latest_score = await self.db.get_latest_signal_score(pos.symbol)
+                                if _latest_score is not None:
+                                    _score_drop = pos.entry_score - _latest_score.total_score
+                                    _sl_dist    = abs(price - pos.stop_loss_price)
+                                    _en_dist    = abs(pos.entry_price - pos.stop_loss_price)
+                                    _danger     = _en_dist > 0 and (_sl_dist / _en_dist) < 0.5
+                                    _regime_chg = (
+                                        _latest_score.regime is not None
+                                        and pos.entry_regime is not None
+                                        and _latest_score.regime != pos.entry_regime
+                                    )
+                                    if _score_drop > 20 and _danger and _regime_chg:
+                                        log.info(
+                                            "EARLY EXIT [%s] @ %.6f | score drop %.1f->%.1f | regime %s->%s | danger %.1f%%",
+                                            pos.symbol, price, pos.entry_score, _latest_score.total_score,
+                                            pos.entry_regime, _latest_score.regime,
+                                            (_sl_dist / _en_dist * 100) if _en_dist > 0 else 0,
+                                        )
+                                        est_pnl = 0.0
+                                        if pos.entry_price and pos.amount:
+                                            est_pnl = (
+                                                (price - pos.entry_price) * pos.amount
+                                                if pos.side == "long"
+                                                else (pos.entry_price - price) * pos.amount
+                                            )
+                                        await self.notifier.notify_sl_tp_hit(
+                                            symbol=pos.symbol, trigger="stop_loss",
+                                            price=price, entry_price=pos.entry_price, pnl=est_pnl,
+                                        )
+                                        await self._close_position_market(pos, price, "early_exit_score_drop")
+                                        continue
+                        except Exception as _ee_err:
+                            log.debug("Early exit check error [%s]: %s", pos.symbol, _ee_err)
+                        # ── End Early Exit ────────────────────────────────────
+
+                        # ── Regime Transition Handler ─────────────────────────────────
+                        try:
+                            if (
+                                not hit_sl and not hit_tp
+                                and self.strategy
+                                and hasattr(self.strategy, "_handle_regime_transition")
+                            ):
+                                _tracker = self.strategy.get_tracker(pos.symbol)
+                                _cur_regime = None
+                                try:
+                                    _latest_sig = await self.db.get_latest_signal_score(pos.symbol)
+                                    if _latest_sig is not None:
+                                        _cur_regime = (
+                                            _latest_sig.regime.value
+                                            if hasattr(_latest_sig.regime, "value")
+                                            else str(_latest_sig.regime)
+                                        )
+                                except Exception:
+                                    pass
+                                if _tracker and _cur_regime:
+                                    _rth_action = self.strategy._handle_regime_transition(
+                                        _tracker, _cur_regime
+                                    )
+                                    if _rth_action == "EXIT":
+                                        log.info(
+                                            "REGIME TRANSITION EXIT [%s] @ %.6f | %s->%s",
+                                            pos.symbol, price,
+                                            _tracker.entry_regime, _cur_regime,
+                                        )
+                                        est_pnl = 0.0
+                                        if pos.entry_price and pos.amount:
+                                            est_pnl = (price - pos.entry_price) * pos.amount
+                                        await self.notifier.notify_sl_tp_hit(
+                                            symbol=pos.symbol, trigger="stop_loss",
+                                            price=price, entry_price=pos.entry_price, pnl=est_pnl,
+                                        )
+                                        await self._close_position_market(
+                                            pos, price, f"regime_transition_exit:{_tracker.entry_regime}->{_cur_regime}"
+                                        )
+                                        continue
+                                    elif _rth_action == "HOLD_TIGHTEN_SL":
+                                        log.info(
+                                            "REGIME TIGHTEN SL [%s] | new quick_sl_pct=%.2f%%",
+                                            pos.symbol, _tracker.quick_sl_pct,
+                                        )
+                                    elif _rth_action == "HOLD_RELAX_SL":
+                                        log.info(
+                                            "REGIME RELAX SL [%s] | new quick_sl_pct=%.2f%%",
+                                            pos.symbol, _tracker.quick_sl_pct,
+                                        )
+                        except Exception as _rth_err:
+                            log.debug("Regime transition handler error [%s]: %s", pos.symbol, _rth_err)
+                        # ── End Regime Transition Handler ────────────────────────
+
+                        # [ITEM #3] _close_position_market() untuk hit_sl/hit_tp/
+                        # trailing_reason sebelumnya TIDAK dibungkus -- ini titik
+                        # PALING kritis dari audit (order close bisa gagal karena
+                        # exchange error, DB error, dst). Gagal di sini TIDAK
+                        # boleh membatalkan pengecekan posisi lain di siklus ini.
+                        try:
+                            if trailing_reason and (hit_sl or hit_tp):
+                                log.warning(
+                                    "DUAL TRIGGER [%s]: trailing=%s AND sl_hit=%s tp_hit=%s "
+                                    "— prioritaskan SL/TP",
+                                    pos.symbol, trailing_reason[:60], hit_sl, hit_tp,
+                                )
+                                trailing_reason = None
+
+                            if trailing_reason:
+                                log.info(
+                                    "TRAILING EXIT: %s @ %.6f | %s",
+                                    pos.symbol, price, trailing_reason,
+                                )
+                                est_pnl = 0.0
+                                if pos.entry_price and pos.amount:
+                                    est_pnl = (
+                                        (price - pos.entry_price) * pos.amount
+                                        if pos.side == "long"
+                                        else (pos.entry_price - price) * pos.amount
+                                    )
+                                # [BUG-FIX] Sama seperti ATG exit: trigger sebelumnya
+                                # di-hardcode "take_profit" untuk SEMUA trailing exit.
+                                # Trailing exit BIASANYA memang profitable (baru aktif
+                                # setelah harga bergerak favorable), tapi tidak
+                                # dijamin selalu positif di semua kondisi edge-case
+                                # (mis. gap harga). Tentukan dari tanda est_pnl supaya
+                                # notifikasi selalu akurat.
+                                _trail_trigger = "take_profit" if est_pnl >= 0 else "stop_loss"
+                                await self.notifier.notify_sl_tp_hit(
+                                    symbol=pos.symbol, trigger=_trail_trigger,
+                                    price=price, entry_price=pos.entry_price, pnl=est_pnl,
+                                )
+                                await self._close_position_market(pos, price, trailing_reason)
+                                continue
+
+                            if hit_sl or hit_tp:
+                                trigger = "stop_loss" if hit_sl else "take_profit"
+                                reason  = "Stop-loss hit" if hit_sl else "Take-profit hit"
+                                log.info(
+                                    "%s | %s @ %.6f | SL=%s TP=%s entry=%.6f",
+                                    trigger.upper(), pos.symbol, price,
+                                    pos.stop_loss_price, pos.take_profit_price, pos.entry_price,
+                                )
+
+                                est_pnl = 0.0
+                                if pos.entry_price and pos.amount:
+                                    est_pnl = (
+                                        (price - pos.entry_price) * pos.amount
+                                        if pos.side == "long"
+                                        else (pos.entry_price - price) * pos.amount
+                                    )
+
+                                await self.notifier.notify_sl_tp_hit(
+                                    symbol=pos.symbol, trigger=trigger,
+                                    price=price, entry_price=pos.entry_price, pnl=est_pnl,
+                                )
+                                await self._close_position_market(pos, price, reason)
+                                continue
+                        except Exception as _close_err:
+                            log.error(
+                                "Close posisi gagal [%s] (hit_sl=%s hit_tp=%s trailing_reason=%r): %s",
+                                pos.symbol, hit_sl, hit_tp, trailing_reason, _close_err, exc_info=True,
+                            )
+
+                        if pos.entry_price and pos.entry_price > 0 and pos.amount:
+                            upnl = (
                                 (price - pos.entry_price) * pos.amount
                                 if pos.side == "long"
                                 else (pos.entry_price - price) * pos.amount
                             )
-                        # [BUG-FIX] Sama seperti ATG exit: trigger sebelumnya
-                        # di-hardcode "take_profit" untuk SEMUA trailing exit.
-                        # Trailing exit BIASANYA memang profitable (baru aktif
-                        # setelah harga bergerak favorable), tapi tidak
-                        # dijamin selalu positif di semua kondisi edge-case
-                        # (mis. gap harga). Tentukan dari tanda est_pnl supaya
-                        # notifikasi selalu akurat.
-                        _trail_trigger = "take_profit" if est_pnl >= 0 else "stop_loss"
-                        await self.notifier.notify_sl_tp_hit(
-                            symbol=pos.symbol, trigger=_trail_trigger,
-                            price=price, entry_price=pos.entry_price, pnl=est_pnl,
-                        )
-                        await self._close_position_market(pos, price, trailing_reason)
-                        continue
-
-                    if hit_sl or hit_tp:
-                        trigger = "stop_loss" if hit_sl else "take_profit"
-                        reason  = "Stop-loss hit" if hit_sl else "Take-profit hit"
-                        log.info(
-                            "%s | %s @ %.6f | SL=%s TP=%s entry=%.6f",
-                            trigger.upper(), pos.symbol, price,
-                            pos.stop_loss_price, pos.take_profit_price, pos.entry_price,
-                        )
-
-                        est_pnl = 0.0
-                        if pos.entry_price and pos.amount:
-                            est_pnl = (
-                                (price - pos.entry_price) * pos.amount
-                                if pos.side == "long"
-                                else (pos.entry_price - price) * pos.amount
+                            cost     = pos.entry_price * pos.amount
+                            upnl_pct = (upnl / cost * 100) if cost > 0 else 0.0
+                            await self.db.update_position_price(
+                                pos.symbol, price, upnl, upnl_pct
                             )
-
-                        await self.notifier.notify_sl_tp_hit(
-                            symbol=pos.symbol, trigger=trigger,
-                            price=price, entry_price=pos.entry_price, pnl=est_pnl,
+                    except asyncio.CancelledError:
+                        raise
+                    except Exception as e:
+                        # [ITEM #3 -- backstop per-posisi] Jaring pengaman TERAKHIR:
+                        # kalau ada langkah di badan loop ini yang GAGAL dibungkus
+                        # try/except spesifik (termasuk kode BARU yang ditambahkan
+                        # nanti tanpa dibungkus), tangkap di sini supaya SATU posisi
+                        # bermasalah tidak pernah menghentikan pengecekan SL/TP untuk
+                        # posisi LAIN di siklus yang sama. Kalau log ini menyala,
+                        # artinya ada kegagalan yang TIDAK tertangkap try/except
+                        # spesifik manapun -- layak diselidiki, bukan sekadar noise.
+                        log.error(
+                            "SL/TP monitor: gagal proses posisi %s — "
+                            "lanjut ke posisi berikutnya: %s",
+                            pos.symbol, e, exc_info=True,
                         )
-                        await self._close_position_market(pos, price, reason)
                         continue
 
-                    if pos.entry_price and pos.entry_price > 0 and pos.amount:
-                        upnl = (
-                            (price - pos.entry_price) * pos.amount
-                            if pos.side == "long"
-                            else (pos.entry_price - price) * pos.amount
-                        )
-                        cost     = pos.entry_price * pos.amount
-                        upnl_pct = (upnl / cost * 100) if cost > 0 else 0.0
-                        await self.db.update_position_price(
-                            pos.symbol, price, upnl, upnl_pct
-                        )
+                # [AUDIT ITEM #8 -- Tier 2] update_position_price() dipanggil
+                # per-posisi di dalam loop di atas (bisa banyak kali per
+                # cycle) -- SENGAJA TIDAK publish di situ (akan jadi 1 event
+                # per write, persis yang dihindari sesuai desain #8), dan
+                # update_position_price() sendiri UPDATE massal (tidak
+                # RETURNING row) jadi objek `positions` di memori TIDAK
+                # ter-refresh current_price/unrealized_pnl-nya. Sebagai
+                # gantinya: SATU query segar + SATU publish teragregasi di
+                # sini, sekali per cycle (tiap SL_TP_CHECK_INTERVAL=5 detik),
+                # supaya snapshot yang dipublish genuinely up-to-date.
+                if positions:
+                    try:
+                        fresh_positions = await self.db.get_open_positions()
+                        if fresh_positions:
+                            self.event_bus.publish(
+                                "positions_snapshot", fresh_positions, market_type="spot",
+                            )
+                    except Exception as _snap_err:
+                        log.debug("SL/TP monitor: gagal publish positions_snapshot: %s", _snap_err)
 
             except asyncio.CancelledError:
                 break
@@ -2370,102 +2574,133 @@ class TradingBot:
             _reset_position_flag()
             return
 
-        # [BUG-FIX v2] Kelly sizing dari Gate 4.5 (commander.py) sebelumnya
-        # dihitung lengkap (Kelly criterion + quality_mult + consec_mult +
-        # correlation penalty) tapi position_size_pct hasilnya tidak pernah
-        # disambungkan ke eksekusi nyata — assessment.approved_size SELALU
-        # murni dari ATR-sizing/max_pct di risk.py, terlepas dari hasil Kelly.
-        # Diterapkan di sini sbg CEILING TAMBAHAN saja (bukan pengganti
-        # ATR-sizing) — Kelly cuma bisa MENGURANGI approved_size, tidak
-        # pernah menaikkannya di atas yang sudah disetujui risk_manager.
-        _kelly_size_pct = signal.metadata.get("kelly_size_pct") if signal.metadata else None
-        if (
-            _kelly_size_pct
-            and _kelly_size_pct > 0
-            and assessment.approved_size
-            and price > 0
-        ):
-            _kelly_max_qty = (equity * _kelly_size_pct / 100) / price
-            if _kelly_max_qty < assessment.approved_size:
-                log.info(
-                    "[Kelly Ceiling] %s: approved_size %.8f -> %.8f (Kelly cap %.2f%% equity)",
-                    symbol, assessment.approved_size, _kelly_max_qty, _kelly_size_pct,
-                )
-                assessment.approved_size = _kelly_max_qty
+        _slot_reserved_pending_release = True
+        try:
+            # [BUG-FIX v2] Kelly sizing dari Gate 4.5 (commander.py) sebelumnya
+            # dihitung lengkap (Kelly criterion + quality_mult + consec_mult +
+            # correlation penalty) tapi position_size_pct hasilnya tidak pernah
+            # disambungkan ke eksekusi nyata — assessment.approved_size SELALU
+            # murni dari ATR-sizing/max_pct di risk.py, terlepas dari hasil Kelly.
+            # Diterapkan di sini sbg CEILING TAMBAHAN saja (bukan pengganti
+            # ATR-sizing) — Kelly cuma bisa MENGURANGI approved_size, tidak
+            # pernah menaikkannya di atas yang sudah disetujui risk_manager.
+            _kelly_size_pct = signal.metadata.get("kelly_size_pct") if signal.metadata else None
+            if (
+                _kelly_size_pct
+                and _kelly_size_pct > 0
+                and assessment.approved_size
+                and price > 0
+            ):
+                _kelly_max_qty = (equity * _kelly_size_pct / 100) / price
+                if _kelly_max_qty < assessment.approved_size:
+                    log.info(
+                        "[Kelly Ceiling] %s: approved_size %.8f -> %.8f (Kelly cap %.2f%% equity)",
+                        symbol, assessment.approved_size, _kelly_max_qty, _kelly_size_pct,
+                    )
+                    assessment.approved_size = _kelly_max_qty
 
-        # [BUG-FIX] Lock digeser lebih awal, membungkus execute_signal() juga.
-        # Sebelumnya lock hanya membungkus upsert_position() -- tapi order fill
-        # (yang mengubah saldo paper trading secara instan di exchange.py) terjadi
-        # di dalam execute_signal(), SEBELUM lock ini. Ada beberapa await point di
-        # dalam execute_signal() (save_trade, notifikasi) yang bisa diselingi oleh
-        # run_portfolio_monitor() -- jika itu terjadi, _refresh_portfolio() membaca
-        # saldo yang sudah berkurang tapi posisi yang belum tercatat di DB, memicu
-        # drawdown palsu (terbukti kejadian nyata: kasus AIGENSYN & PYR).
-        async with self._equity_lock:
-            trade = await self.executor.execute_signal(signal, assessment)
+            # [BUG-FIX] Lock digeser lebih awal, membungkus execute_signal() juga.
+            # Sebelumnya lock hanya membungkus upsert_position() -- tapi order fill
+            # (yang mengubah saldo paper trading secara instan di exchange.py) terjadi
+            # di dalam execute_signal(), SEBELUM lock ini. Ada beberapa await point di
+            # dalam execute_signal() (save_trade, notifikasi) yang bisa diselingi oleh
+            # run_portfolio_monitor() -- jika itu terjadi, _refresh_portfolio() membaca
+            # saldo yang sudah berkurang tapi posisi yang belum tercatat di DB, memicu
+            # drawdown palsu (terbukti kejadian nyata: kasus AIGENSYN & PYR).
+            async with self._equity_lock:
+                trade = await self.executor.execute_signal(signal, assessment)
 
-            if trade is None:
-                log.warning("execute_signal gagal untuk %s — posisi TIDAK dibuka.", symbol)
-                _reset_position_flag()
-                return
+                if trade is None:
+                    log.warning("execute_signal gagal untuk %s — posisi TIDAK dibuka.", symbol)
+                    _reset_position_flag()
+                    return
 
-            actual_amount = float(trade.filled or trade.amount)
-            # [BUG-FIX cross-file, pasangan fix di execution.py._execute_iceberg]
-            # Sebelumnya entry_price SELALU pakai trade.executed_price, yaitu
-            # harga CHUNK PERTAMA saja untuk order iceberg (trade = trades[0]).
-            # amount sudah benar diagregasi dari semua chunk lewat parsing note
-            # di bawah, tapi entry_price tidak — sekarang iceberg_avg_price
-            # (rata-rata tertimbang harga eksekusi semua chunk) turut di-parse
-            # dan dipakai kalau ada, supaya cost basis posisi akurat.
-            entry_price = trade.executed_price
-            if trade.notes and "iceberg_actual_filled=" in (trade.notes or ""):
-                try:
-                    tag    = next(p for p in trade.notes.split("|") if p.strip().startswith("iceberg_actual_filled="))
-                    parsed = float(tag.split("=")[1])
-                    if parsed > 0:
-                        actual_amount = parsed
-                        log.info("Iceberg actual_amount diambil dari notes: %s = %.8f", trade.symbol, actual_amount)
-                except (StopIteration, ValueError, IndexError) as e:
-                    log.warning("Gagal parse iceberg_actual_filled: %s — fallback %.8f", e, actual_amount)
-                try:
-                    tag2 = next((p for p in trade.notes.split("|") if p.strip().startswith("iceberg_avg_price=")), None)
-                    if tag2:
-                        parsed_price = float(tag2.split("=")[1])
-                        if parsed_price > 0:
-                            entry_price = parsed_price
-                            log.info("Iceberg entry_price diambil dari rata-rata tertimbang notes: %s = %.8f", trade.symbol, entry_price)
-                except (ValueError, IndexError) as e:
-                    log.warning("Gagal parse iceberg_avg_price: %s — fallback executed_price %.8f", e, entry_price)
-
-            try:
-                await self.db.upsert_position(symbol, {
-                    "entry_time":        datetime.now(timezone.utc).replace(tzinfo=None),
-                    "entry_price":       round(entry_price, 8),
-                    "current_price":     round(entry_price, 8),
-                    "amount":            round(actual_amount, 8),
-                    "side":              "long",
-                    "is_open":           True,
-                    "is_closing":        False,
-                    "stop_loss_price":   assessment.stop_loss,
-                    "take_profit_price": assessment.take_profit,
-                    "atr_at_entry":      round(float(atr), 8) if atr else None,
-                    "strategy_name":     signal.strategy,
-                    "entry_order_id":    trade.order_id,
-                    "entry_regime":      signal.regime.value if hasattr(signal.regime, "value") else str(signal.regime or "undefined"),
-                })
-
-                entry_fee_actual = float(trade.fee_cost or 0)
-                if entry_fee_actual > 0:
+                actual_amount = float(trade.filled or trade.amount)
+                # [BUG-FIX cross-file, pasangan fix di execution.py._execute_iceberg]
+                # Sebelumnya entry_price SELALU pakai trade.executed_price, yaitu
+                # harga CHUNK PERTAMA saja untuk order iceberg (trade = trades[0]).
+                # amount sudah benar diagregasi dari semua chunk lewat parsing note
+                # di bawah, tapi entry_price tidak — sekarang iceberg_avg_price
+                # (rata-rata tertimbang harga eksekusi semua chunk) turut di-parse
+                # dan dipakai kalau ada, supaya cost basis posisi akurat.
+                entry_price = trade.executed_price
+                if trade.notes and "iceberg_actual_filled=" in (trade.notes or ""):
                     try:
-                        await self.db.update_position_entry_fee(symbol, entry_fee_actual)
-                        log.info("Entry fee aktual disimpan: %s fee=%.8f", symbol, entry_fee_actual)
-                    except Exception as e:
-                        log.warning("Gagal simpan entry fee aktual %s: %s", symbol, e)
+                        tag    = next(p for p in trade.notes.split("|") if p.strip().startswith("iceberg_actual_filled="))
+                        parsed = float(tag.split("=")[1])
+                        if parsed > 0:
+                            actual_amount = parsed
+                            log.info("Iceberg actual_amount diambil dari notes: %s = %.8f", trade.symbol, actual_amount)
+                    except (StopIteration, ValueError, IndexError) as e:
+                        log.warning("Gagal parse iceberg_actual_filled: %s — fallback %.8f", e, actual_amount)
+                    try:
+                        tag2 = next((p for p in trade.notes.split("|") if p.strip().startswith("iceberg_avg_price=")), None)
+                        if tag2:
+                            parsed_price = float(tag2.split("=")[1])
+                            if parsed_price > 0:
+                                entry_price = parsed_price
+                                log.info("Iceberg entry_price diambil dari rata-rata tertimbang notes: %s = %.8f", trade.symbol, entry_price)
+                    except (ValueError, IndexError) as e:
+                        log.warning("Gagal parse iceberg_avg_price: %s — fallback executed_price %.8f", e, entry_price)
 
-            except Exception as e:
-                log.error("upsert_position gagal untuk %s: %s — reset flag", symbol, e)
-                _reset_position_flag()
-                raise
+                try:
+                    await self.db.upsert_position(symbol, {
+                        "entry_time":        datetime.now(timezone.utc).replace(tzinfo=None),
+                        "entry_price":       round(entry_price, 8),
+                        "current_price":     round(entry_price, 8),
+                        "amount":            round(actual_amount, 8),
+                        "side":              "long",
+                        "is_open":           True,
+                        "is_closing":        False,
+                        "stop_loss_price":   assessment.stop_loss,
+                        "take_profit_price": assessment.take_profit,
+                        "atr_at_entry":      round(float(atr), 8) if atr else None,
+                        "strategy_name":     signal.strategy,
+                        "entry_order_id":    trade.order_id,
+                        "entry_regime":      signal.regime.value if hasattr(signal.regime, "value") else str(signal.regime or "undefined"),
+                    })
+
+                    entry_fee_actual = float(trade.fee_cost or 0)
+                    if entry_fee_actual > 0:
+                        try:
+                            await self.db.update_position_entry_fee(symbol, entry_fee_actual)
+                            log.info("Entry fee aktual disimpan: %s fee=%.8f", symbol, entry_fee_actual)
+                        except Exception as e:
+                            log.warning("Gagal simpan entry fee aktual %s: %s", symbol, e)
+
+                except Exception as e:
+                    log.error("upsert_position gagal untuk %s: %s — reset flag", symbol, e)
+                    _reset_position_flag()
+                    raise
+            _slot_reserved_pending_release = False
+        finally:
+            if _slot_reserved_pending_release:
+                self.risk_manager.release_position_slot()
+                log.warning(
+                    "[Opsi 1 -- audit item #2] Slot open_positions dilepas -- entry %s "
+                    "gagal setelah disetujui risk_manager (lihat log error di atas untuk "
+                    "detail kegagalan execute_signal/upsert_position).",
+                    symbol,
+                )
+
+        # [Opsi 2 -- audit item #2] Refresh portfolio (fetch DB) SEGERA
+        # setelah entry sukses tercatat -- mirror pola _do_close_position().
+        # Mengecilkan window race dari sampai 900 detik (SNAPSHOT_INTERVAL)
+        # menjadi durasi satu _handle_buy() -- TIDAK menghilangkan race utk
+        # worker lain yang genuinely konkuren dalam window itu (Opsi 1 di
+        # atas yang menutup race secara menyeluruh). Sengaja DI LUAR scope
+        # _equity_lock: _on_trade_executed() (dipanggil dari dalam
+        # execute_signal() di atas) JUGA bisa memicu refresh -- tapi sejak
+        # fix deadlock _equity_lock (lihat _on_trade_executed()), refresh
+        # itu sekarang fire-and-forget (asyncio.create_task), jadi taruh
+        # panggilan eksplisit di sini tetap aman & bukan lagi soal
+        # menghindari deadlock, murni supaya refresh terjadi SEGERA (bukan
+        # nunggu task fork-nya di-schedule) & tidak bergantung pada jaring
+        # pengaman itu.
+        try:
+            await self._refresh_portfolio()
+        except Exception as _rp_err:
+            log.warning("Refresh portfolio pasca-entry gagal untuk %s: %s", symbol, _rp_err)
 
         # [BUG-FIX — root cause] Hubungkan SignalScore yang memicu entry ini
         # ke Trade yang baru dibuat. Sebelumnya related_trade_id TIDAK PERNAH
@@ -2838,7 +3073,38 @@ class TradingBot:
         # bukan exit_price (harga sinyal/parameter saat keputusan close
         # dibuat) — konsisten dengan realized_pnl yang sudah dihitung
         # dari actual_exit_price di atas.
-        await self.db.close_position(pos.symbol, actual_exit_price, realized_pnl)
+        #
+        # [ITEM #4 -- mitigasi root-cause phantom position] SEBELUMNYA baris
+        # ini TIDAK dibungkus try/except SAMA SEKALI (beda dari futures yang
+        # minimal sudah log.critical) -- kegagalan di sini propagate diam-
+        # diam, cuma tertangkap generik oleh backstop item #3 di
+        # run_sl_tp_monitor(). Sekarang: close_position_with_retry() (retry-
+        # backoff 3x utk kegagalan transien) + log.critical/save_log/
+        # notify_error eksplisit kalau semua retry tetap gagal (reuse pola
+        # yang sama dgn futures) -- LALU exception TETAP di-raise, supaya
+        # perilaku abort-sisa-fungsi TIDAK berubah (backstop item #3 & jalur
+        # lain yang mengandalkan propagasi ini tetap berfungsi sama).
+        try:
+            await self.db.close_position_with_retry(pos.symbol, actual_exit_price, realized_pnl)
+        except Exception as e:
+            msg = (
+                f"close_position (DB) GAGAL untuk {pos.symbol} setelah order sukses "
+                f"tereksekusi & 3 percobaan retry: {e}. Posisi is_open=True akan "
+                f"nyangkut di DB walau exchange sudah flat -- akan terdeteksi otomatis "
+                f"via run_position_sync_loop() (debounce 2 siklus, ~5-10 menit) kalau "
+                f"tidak diperbaiki manual lebih cepat."
+            )
+            log.critical(msg)
+            try:
+                await self.db.save_log("CRITICAL", "main", msg)
+            except Exception as _sl_err:
+                log.error("save_log (close_position gagal) gagal: %s", _sl_err)
+            if self.notifier:
+                try:
+                    await self.notifier.notify_error("close_position_db_failed", msg)
+                except Exception as _ne_err:
+                    log.error("notify_error (close_position gagal) gagal: %s", _ne_err)
+            raise
 
         async with self._equity_lock:
             current_eq = self.portfolio_state.get("total_equity", 0.0)
@@ -2983,15 +3249,47 @@ class TradingBot:
                 log.error("Portfolio refresh error: %s", e, exc_info=True)
 
     async def _on_trade_executed(self, trade) -> None:
+        # [BUG-FIX -- _equity_lock deadlock, kejadian nyata TOWNS/USDT
+        # 2026-07-17 15:00:07, melumpuhkan seluruh eksekusi spot ~12.5+ jam]
+        # SEBELUMNYA: `await self._refresh_portfolio()` langsung di sini.
+        # _on_trade_executed() dipanggil DI DALAM call-chain execute_signal()
+        # -- yaitu DI DALAM scope _equity_lock milik caller (_handle_buy()
+        # memegangnya sepanjang execute_signal(), sengaja lebar, lihat
+        # komentar "AIGENSYN & PYR" di _handle_buy()). _refresh_portfolio()
+        # sendiri mencoba `async with self._equity_lock:` lagi --
+        # asyncio.Lock TIDAK reentrant, task yang sama mencoba lock yang
+        # sama dua kali = deadlock permanen (hanya sembuh via restart
+        # proses, krn lock diinstansiasi ulang di __init__).
+        #
+        # FIX: kedua caller execute_signal() (_handle_buy() & baris
+        # _do_close_position() di atas) SEKARANG SUDAH memanggil
+        # _refresh_portfolio() sendiri secara eksplisit DI LUAR
+        # _equity_lock setelah execute_signal() selesai -- jadi refresh di
+        # sini redundan untuk keduanya. Dipertahankan sbg jaring pengaman
+        # utk caller execute_signal() masa depan yg mungkin lupa refresh
+        # sendiri, TAPI via asyncio.create_task() (fire-and-forget, BUKAN
+        # await) -- task baru menunggu lock dgn aman (task lain menunggu
+        # tidak memblokir task yang MEMEGANG lock utk selesai & melepasnya),
+        # tidak deadlock diri sendiri.
         import time as _t
         now = _t.monotonic()
         if now - self._last_refresh_time >= self._MIN_REFRESH_INTERVAL:
-            await self._refresh_portfolio()
+            asyncio.create_task(self._refresh_portfolio_safety_net())
         else:
             log.debug(
                 "Portfolio refresh di-skip (terlalu cepat dari refresh terakhir: %.1fs lalu).",
                 now - self._last_refresh_time,
             )
+
+    async def _refresh_portfolio_safety_net(self) -> None:
+        """Wrapper fire-and-forget utk _refresh_portfolio() dari
+        _on_trade_executed() -- exception ditangani di sini supaya task
+        yang di-fork via asyncio.create_task() tidak jadi "Task exception
+        was never retrieved" kalau _refresh_portfolio() gagal."""
+        try:
+            await self._refresh_portfolio()
+        except Exception as e:
+            log.warning("Refresh portfolio (safety-net pasca-fill) gagal: %s", e)
 
     async def run_config_watcher(self) -> None:
         import json
@@ -3103,6 +3401,11 @@ class TradingBot:
                                             api_passphrase=self.config.get("api_passphrase", ""),
                                             symbols=self.config["universe_watchlist"],
                                             testnet=self.config["testnet"],
+                                            # [AUDIT ITEM #8] Reinit HARUS ikut menyambungkan
+                                            # ulang on_ticker -- kalau tidak, tick stream
+                                            # mati diam-diam setelah config hot-reload
+                                            # exchange (mis. ganti credential).
+                                            on_ticker=ThrottledTickerPublisher(self.event_bus, market_type="spot"),
                                         )
                                         await self.ws_feed.start()
                                         log.info("[ConfigWatcher] WS feed reinit OK.")
@@ -3176,6 +3479,16 @@ class TradingBot:
                      self.portfolio_state.get("total_equity", 0))
         except Exception as _pe:
             log.warning("Portfolio startup refresh gagal: %s", _pe)
+        # [#27 -- audit fungsional] TITIK BERPASANGAN dgn assertion di
+        # start() (baris pemanggilan _reconcile_positions_on_startup()).
+        # self._tasks PERTAMA KALI terisi di sini -- SETELAH await
+        # self.start() (baris 3468) sudah selesai penuh, termasuk
+        # reconciliation di atasnya. JANGAN pindahkan create_task() manapun
+        # di bawah ini ke DALAM start()/sebelum start() selesai -- itu akan
+        # melanggar invarian "nol aktivitas trading konkuren saat
+        # reconciliation" yang jadi dasar auto-close-tanpa-debounce di
+        # _reconcile_positions_on_startup() genuinely aman. Assertion di
+        # start() akan gagal loud kalau ini dilanggar.
         self._tasks = [
             asyncio.create_task(self.run_scanner_loop(),      name="task_scanner"),
             asyncio.create_task(self.run_gate3_worker(),       name="task_gate3_worker"),
@@ -3183,6 +3496,7 @@ class TradingBot:
             asyncio.create_task(self.run_sl_tp_monitor(),     name="task_sl_tp"),
             asyncio.create_task(self.run_daily_summary(),     name="task_daily_summary"),
             asyncio.create_task(self.run_analytics_loop(),    name="task_analytics"),
+            asyncio.create_task(self.run_market_cache_refresh(), name="task_market_cache_refresh"),
             asyncio.create_task(self.run_coin_swap_loop(),   name="task_coin_swap"),
             asyncio.create_task(self.run_config_watcher(),    name="task_config_watcher"),
             asyncio.create_task(self.run_strategy_loop(),     name="task_strategy_loop"),
@@ -3211,18 +3525,54 @@ class TradingBot:
             await self.stop()
 
     async def run_position_sync_loop(self) -> None:
-        """Periodik cek posisi Binance yang tidak tertracking, adopt & kawal."""
+        """
+        Periodik cek posisi Binance yang tidak tertracking, adopt & kawal.
+
+        [#11 -- audit fungsional] Sebelumnya `while True:` -- BEDA dari
+        SEMUA loop lain di file ini (run_analytics_loop, run_sl_tp_monitor,
+        dkk, juga padanan futures-nya sendiri di main_future.py) yang
+        semuanya pakai `while self.is_running:`. Cancellation via
+        task.cancel() (dipanggil stop()) tetap propagate normal lewat
+        `except Exception` (CancelledError adalah BaseException sejak
+        Python 3.8, tidak tertangkap di situ) SELAMA tidak ada bare
+        except/except BaseException di jalur run_position_sync() --
+        dikonfirmasi tidak ada (position_sync_spot.py hanya pakai `except
+        Exception`). TAPI `while True:` tetap gap nyata: stop() men-set
+        `self.is_running=False` SEBAGAI jalur shutdown independen kedua
+        (defense-in-depth) yang dipakai konsisten oleh semua loop lain --
+        loop ini sebelumnya satu-satunya yang HANYA bergantung pada
+        cancellation berhasil sampai, tanpa jaring pengaman kedua. Sekarang
+        disamakan polanya.
+        """
         import asyncio
         log.info("Position Sync loop dimulai — interval 5 menit")
         await asyncio.sleep(30)  # Tunggu bot fully started
-        while True:
+        while self.is_running:
             try:
-                result = await run_position_sync(self.exchange, self.db)
+                result = await run_position_sync(
+                    self.exchange, self.db,
+                    notifier=self.notifier, phantom_suspects=self._phantom_suspects,
+                    amount_mismatch_suspects=self._amount_mismatch_suspects,
+                )
                 if result["adopted"] > 0:
                     log.info(
                         "PositionSync: %d diadopsi | %d ditolak | %d error",
                         result["adopted"], result["rejected"], result["errors"],
                     )
+                if result.get("phantom_confirmed", 0) > 0:
+                    log.warning(
+                        "PositionSync: %d phantom position terkonfirmasi -- "
+                        "lihat log CRITICAL di atas, butuh review manual.",
+                        result["phantom_confirmed"],
+                    )
+                if result.get("amount_mismatch_confirmed", 0) > 0:
+                    log.warning(
+                        "PositionSync: %d amount mismatch terkonfirmasi -- "
+                        "lihat log CRITICAL di atas, butuh review manual.",
+                        result["amount_mismatch_confirmed"],
+                    )
+            except asyncio.CancelledError:
+                break
             except Exception as e:
                 log.error("run_position_sync_loop error: %s", e)
             await asyncio.sleep(300)  # Cek setiap 5 menit

@@ -327,6 +327,45 @@ diklaim arah-agnostic).
 
 ---
 
+## 📌 TEMUAN TERPISAH (audit fungsional item #16): `market_structure_score`/`donchian_score` belum masuk `LEVEL2_WEIGHTS`
+
+Keputusan lama (2026-07-09, sebelum proyek MTF Composite Side-Aware ada):
+kedua skor ini (`engine/indicators/structure.py`, bobot 0.20+0.15 di
+`structure.composite_score`) dipakai gerbang MTF tapi SENGAJA tidak
+dimasukkan ke `LEVEL2_WEIGHTS` (`engine/profiles/weights.py`, key
+`"structure"` di keenam profil, cuma berisi ichimoku/sar/pivot/fibonacci)
+— ditunda karena belum ada backtest.
+
+**Diverifikasi ulang 2026-07-19 setelah proyek MTF Composite Side-Aware
+(Sub-Batch A-E) selesai — keputusan DITUNDA masih berlaku, TAPI
+konteksnya berubah:**
+- Kedua skor tetap mencapai keputusan trading lewat jalur terpisah:
+  `structure.composite_score` → `_compute_tf_score()` (`observer.py`,
+  bobot kategori `structure` 0.07) → `primary_tf_score`/
+  `confirmation_tf_score` → gerbang MTF (`strategy_base.py`).
+- **Risiko paling berbahaya dari penundaan ini — bias arah (long-only) di
+  jalur MTF tersebut — sudah TERTUTUP OTOMATIS** oleh Sub-Batch A-E:
+  `composite_score_short` (mencakup `market_structure_score_short`/
+  `donchian_score_short`, ditambahkan Sub-Batch A) sekarang genuinely
+  dipakai untuk sinyal short sejak Sub-Batch D men-thread `side` sampai
+  ke gate. Sebelum proyek ini selesai, sinyal short digerbang pakai
+  `composite_score` versi long — bias yang sekarang sudah tidak ada.
+- **Yang tersisa murni pertanyaan optimisasi** ("apakah kedua skor ini
+  juga layak dapat bobot eksplisit di L1/`LEVEL2_WEIGHTS`, bukan cuma
+  kontribusi implisit 0.07× ke MTF gate?"), BUKAN bug/risiko produksi —
+  butuh backtest dulu, prinsip sama persis dengan `_calc_atr_percentile()`
+  di atas.
+
+Komentar lengkap juga ada langsung di kode, di
+`engine/profiles/weights.py` tepat sebelum definisi `LEVEL2_WEIGHTS`.
+
+**Status:** DITUNDA (tidak berubah), tapi alasan penundaan sekarang murni
+optimisasi butuh-backtest, bukan lagi menyembunyikan risiko bias arah.
+JANGAN tambahkan `market_structure_score`/`donchian_score` ke
+`LEVEL2_WEIGHTS` manapun tanpa backtest & sign-off eksplisit terpisah.
+
+---
+
 ### Cakupan pekerjaan (status terkini per sub-batch)
 
 Dipecah jadi sub-batch, ikuti alur kerja standar di bagian bawah file ini

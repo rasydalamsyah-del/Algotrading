@@ -156,6 +156,32 @@ LEVEL1_WEIGHTS: Dict[str, Level1Weights] = {
 
 LEVEL2_WEIGHTS: Dict[str, Dict[str, Level2Weights]] = {
 
+    # [#16 -- audit fungsional, verifikasi 2026-07-19, memperbarui keputusan
+    # lama 2026-07-09] Setiap "structure" dict di bawah SENGAJA cuma berisi
+    # 4 key (ichimoku/sar/pivot/fibonacci) -- market_structure_score &
+    # donchian_score (engine/indicators/structure.py, bobot 0.20+0.15 di
+    # structure.composite_score) TIDAK dimasukkan ke L1/L2 scoring ini,
+    # DITUNDA, belum ada backtest.
+    #
+    # Konteks kenapa masih aman ditunda (diverifikasi ulang 2026-07-19,
+    # BUKAN cuma warisan catatan lama): risiko paling berbahaya dari
+    # penundaan ini -- bias arah di gerbang MTF -- sudah TERTUTUP OTOMATIS
+    # oleh proyek "MTF Composite Side-Aware" (Sub-Batch A-E, SELESAI).
+    # Kedua skor ini tetap mencapai keputusan trading lewat jalur TERPISAH:
+    # structure.composite_score -> _compute_tf_score() (observer.py, bobot
+    # kategori structure 0.07) -> primary_tf_score/confirmation_tf_score ->
+    # gerbang MTF (strategy_base.py). Jalur ini sekarang genuinely
+    # side-aware (composite_score_short dipakai utk sinyal short sejak
+    # Sub-Batch D), jadi TIDAK ADA LAGI bias long tersembunyi di jalur itu.
+    #
+    # Yang TERSISA murni pertanyaan optimisasi, bukan bug/risiko: "apakah
+    # kedua skor ini juga layak masuk L1/LEVEL2_WEIGHTS (bobot eksplisit
+    # per-profil, bukan cuma kontribusi implisit 0.07*composite_score ke
+    # MTF gate)?" -- butuh backtest dulu sebelum diubah, prinsip sama
+    # persis dengan item terpisah "_calc_atr_percentile() root-cause fix"
+    # (lihat CLAUDE.md bagian "TEMUAN TERPISAH"). JANGAN tambahkan kedua
+    # key ini ke LEVEL2_WEIGHTS manapun di bawah tanpa backtest & sign-off
+    # eksplisit terpisah.
     "hodl_accumulate": {
         "trend": {
             "ema_stack":   0.40,

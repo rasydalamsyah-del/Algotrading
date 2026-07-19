@@ -16,71 +16,117 @@ log = logging.getLogger("intelligence.position_sync")
 MIN_USDT_VALUE     = 1.0    # Abaikan dust < $1
 MIN_ADOPT_SCORE    = 45.0   # Score minimum agar posisi layak dikawal
 MIN_CANDLE_BARS    = 50     # Minimum candle untuk analisis
+# [#36 -- audit fungsional] Toleransi deteksi amount mismatch -- reuse
+# ambang PERSIS sama dgn _reconcile_positions_on_startup() (main_spot.py,
+# 5% relatif) supaya konsisten satu ambang di seluruh repo. Floor absolut
+# (MIN_USDT_VALUE) dipakai bersamaan -- lihat future/position_sync_futures.py
+# utk latar belakang lengkap (pola identik).
+AMOUNT_MISMATCH_TOLERANCE_PCT = 5.0
 
 async def fetch_binance_spot_positions(exchange) -> List[Dict]:
     """
     Fetch semua coin yang dipegang di Binance (balance > 0, bukan USDT).
     Return list of {symbol, amount, approx_usdt_value}
+
+    [ITEM #4 -- audit fungsional] Sebelumnya fungsi ini menelan SEMUA
+    exception dari fetch_balance() dan mengembalikan [] -- SAMA PERSIS
+    dengan hasil "genuinely tidak ada posisi". Aman untuk arah untracked
+    (fail-safe), TAPI berbahaya untuk deteksi phantom (arah baru, lihat
+    find_untracked_positions()) -- [] yang ambigu itu akan membuat SEMUA
+    posisi DB tampak "phantom" serentak dari satu hiccup API. Sekarang
+    exception dari fetch_balance() di-RAISE apa adanya -- pemanggil
+    (find_untracked_positions(), satu-satunya caller di repo ini,
+    diverifikasi via grep) yang memutuskan cara menangani kegagalan fetch
+    berbeda per arah perbandingan. Kegagalan fetch_ticker() PER-COIN di
+    bawah TETAP ditelan (try/except lokal tidak diubah) -- itu cuma
+    estimasi nilai USDT, bukan sinyal "posisi ada/tidak ada".
+    """
+    balance = await exchange.fetch_balance()
+    total   = balance.get("total", {})
+    results = []
+
+    for coin, amount in total.items():
+        if coin in ("USDT", "BUSD", "USDC", "TUSD", "DAI"):
+            continue
+        if not isinstance(amount, (int, float)) or amount <= 0:
+            continue
+
+        symbol = f"{coin}/USDT"
+        # Estimasi nilai USDT
+        # [BUG-FIX] Sebelumnya: exchange._ex.fetch_ticker(symbol) — akses
+        # langsung ke raw ccxt object (private attribute _ex), bypass
+        # wrapper publik ExchangeConnector.fetch_ticker() yang menyediakan
+        # throttling, retry/backoff, dan latency logging. Ini satu-satunya
+        # tempat di seluruh repo yang bypass wrapper (dicek via grep).
+        # Sekarang: pakai exchange.fetch_ticker(symbol) — return format
+        # sama persis (ccxt ticker dict), tapi dapat proteksi rate-limit.
+        try:
+            ticker = await exchange.fetch_ticker(symbol)
+            price  = ticker.get("last") or ticker.get("close") or 0.0
+            usdt_value = amount * price
+        except Exception:
+            usdt_value = 0.0
+            price      = 0.0
+
+        if usdt_value < MIN_USDT_VALUE:
+            continue
+
+        results.append({
+            "symbol":      symbol,
+            "coin":        coin,
+            "amount":      amount,
+            "price":       price,
+            "usdt_value":  usdt_value,
+        })
+
+    log.info("Binance spot: %d posisi aktif ditemukan", len(results))
+    return results
+
+
+async def find_untracked_positions(exchange, db_manager) -> Dict:
+    """
+    Bandingkan posisi Binance vs DB bot -- DUA ARAH.
+
+    [ITEM #4 -- audit fungsional] Sebelumnya fungsi ini HANYA mendeteksi
+    1 dari 3 kemungkinan mismatch: posisi ADA di Binance, TIDAK ADA di DB
+    ("untracked"). Sekarang JUGA mendeteksi arah sebaliknya: posisi ADA di
+    DB (is_open=True), TIDAK ADA LAGI di Binance ("phantom candidate") --
+    root cause konkret di spot: _paper_balance berkurang SEBELUM db.close_
+    position() (lihat _do_close_position() di main_spot.py), kalau db.close_
+    position() gagal setelahnya, DB nyangkut is_open=True permanen tanpa
+    ada yang pernah tahu.
+
+    [#36 -- audit fungsional] Mismatch tipe ke-3 (posisi ADA di KEDUA sisi
+    tapi `amount` beda > AMOUNT_MISMATCH_TOLERANCE_PCT & > MIN_USDT_VALUE)
+    SEKARANG JUGA dideteksi (sebelumnya "dicatat sbg item backlog terpisah"
+    -- item ini). Spot TIDAK punya partial-close (dikonfirmasi tidak ada
+    pemanggilan reduce_position_amount() di main_spot.py) -- penyebab
+    plausible di sini beda dari futures: fee/dust deduction (Binance
+    kadang potong fee dari coin yang sama) atau aktivitas manual eksternal
+    di akun, BUKAN kegagalan retry partial-close (itu murni futures/#28).
+    Symbol dgn is_closing=True DIKECUALIKAN (alasan sama dgn
+    phantom_candidates).
+
+    Return dict: lihat docstring future/position_sync_futures.py::
+    find_untracked_positions() (struktur & semantik IDENTIK -- untracked,
+    phantom_candidates, amount_mismatches, fetch_failed).
     """
     try:
-        balance = await exchange.fetch_balance()
-        total   = balance.get("total", {})
-        results = []
-
-        for coin, amount in total.items():
-            if coin in ("USDT", "BUSD", "USDC", "TUSD", "DAI"):
-                continue
-            if not isinstance(amount, (int, float)) or amount <= 0:
-                continue
-
-            symbol = f"{coin}/USDT"
-            # Estimasi nilai USDT
-            # [BUG-FIX] Sebelumnya: exchange._ex.fetch_ticker(symbol) — akses
-            # langsung ke raw ccxt object (private attribute _ex), bypass
-            # wrapper publik ExchangeConnector.fetch_ticker() yang menyediakan
-            # throttling, retry/backoff, dan latency logging. Ini satu-satunya
-            # tempat di seluruh repo yang bypass wrapper (dicek via grep).
-            # Sekarang: pakai exchange.fetch_ticker(symbol) — return format
-            # sama persis (ccxt ticker dict), tapi dapat proteksi rate-limit.
-            try:
-                ticker = await exchange.fetch_ticker(symbol)
-                price  = ticker.get("last") or ticker.get("close") or 0.0
-                usdt_value = amount * price
-            except Exception:
-                usdt_value = 0.0
-                price      = 0.0
-
-            if usdt_value < MIN_USDT_VALUE:
-                continue
-
-            results.append({
-                "symbol":      symbol,
-                "coin":        coin,
-                "amount":      amount,
-                "price":       price,
-                "usdt_value":  usdt_value,
-            })
-
-        log.info("Binance spot: %d posisi aktif ditemukan", len(results))
-        return results
-
+        binance_positions = await fetch_binance_spot_positions(exchange)
     except Exception as e:
-        log.error("fetch_binance_spot_positions error: %s", e)
-        return []
-
-
-async def find_untracked_positions(exchange, db_manager) -> List[Dict]:
-    """
-    Bandingkan posisi Binance vs DB bot.
-    Return posisi yang ada di Binance tapi TIDAK ada di DB.
-    """
-    binance_positions = await fetch_binance_spot_positions(exchange)
-    if not binance_positions:
-        return []
+        log.error(
+            "Fetch posisi Binance spot gagal -- skip perbandingan phantom "
+            "siklus ini (arah untracked tetap fail-safe kosong, coba lagi "
+            "siklus berikutnya): %s", e,
+        )
+        return {"untracked": [], "phantom_candidates": [], "amount_mismatches": [], "fetch_failed": True}
 
     # Ambil posisi terbuka di DB
     db_open = await db_manager.get_open_positions()
-    db_symbols = {p.symbol for p in db_open}
+    db_symbols       = {p.symbol for p in db_open}
+    db_by_symbol     = {p.symbol: p for p in db_open}
+    exchange_by_symbol = {pos["symbol"]: pos for pos in binance_positions}
+    exchange_symbols = set(exchange_by_symbol.keys())
 
     untracked = []
     for pos in binance_positions:
@@ -91,7 +137,146 @@ async def find_untracked_positions(exchange, db_manager) -> List[Dict]:
                 pos["symbol"], pos["amount"], pos["usdt_value"],
             )
 
-    return untracked
+    phantom_candidates = [
+        p.symbol for p in db_open
+        if p.symbol not in exchange_symbols and not p.is_closing
+    ]
+
+    # [#36] Amount mismatch -- symbol ADA di kedua sisi, is_closing=False,
+    # tapi amount beda signifikan.
+    amount_mismatches = []
+    for symbol in (db_symbols & exchange_symbols):
+        db_pos = db_by_symbol[symbol]
+        if db_pos.is_closing:
+            continue
+        db_amount = float(db_pos.amount or 0)
+        ex_amount = float(exchange_by_symbol[symbol]["amount"])
+        if db_amount <= 0:
+            continue
+        diff_pct = abs(db_amount - ex_amount) / db_amount * 100.0
+        if diff_pct <= AMOUNT_MISMATCH_TOLERANCE_PCT:
+            continue
+        price = float(exchange_by_symbol[symbol].get("price") or 0)
+        diff_usdt = abs(db_amount - ex_amount) * price
+        if price > 0 and diff_usdt < MIN_USDT_VALUE:
+            continue
+        amount_mismatches.append({
+            "symbol": symbol, "db_amount": db_amount,
+            "exchange_amount": ex_amount, "diff_pct": diff_pct,
+        })
+        log.warning(
+            "⚠️  Amount mismatch spot: %s | DB=%.8f vs exchange=%.8f (%.1f%%)",
+            symbol, db_amount, ex_amount, diff_pct,
+        )
+
+    return {
+        "untracked": untracked,
+        "phantom_candidates": phantom_candidates,
+        "amount_mismatches": amount_mismatches,
+        "fetch_failed": False,
+    }
+
+
+async def _process_phantom_candidates(
+    candidates: List[str],
+    phantom_suspects: Dict[str, int],
+    db_manager,
+    notifier,
+    result: Dict,
+) -> None:
+    """[ITEM #4] Mirror persis future/position_sync_futures.py::
+    _process_phantom_candidates() -- lihat docstring di sana untuk latar
+    belakang lengkap (debounce 2 siklus, filter is_closing di caller,
+    TIDAK PERNAH auto-close, reuse channel notifikasi yang sudah konvensi)."""
+    candidate_set = set(candidates)
+    for sym in list(phantom_suspects.keys()):
+        if sym not in candidate_set:
+            del phantom_suspects[sym]
+
+    for symbol in candidates:
+        phantom_suspects[symbol] = phantom_suspects.get(symbol, 0) + 1
+        count = phantom_suspects[symbol]
+
+        if count < 2:
+            log.warning(
+                "Kandidat phantom position (spot): %s TIDAK ada di Binance "
+                "tapi is_open=True di DB (siklus ke-%d/2 -- belum dikonfirmasi).",
+                symbol, count,
+            )
+            continue
+
+        result["phantom_confirmed"] = result.get("phantom_confirmed", 0) + 1
+        msg = (
+            f"PHANTOM POSITION terdeteksi (spot): {symbol} — is_open=True di "
+            f"DB TAPI tidak ada di Binance selama >= 2 siklus sync berturut-turut. "
+            f"Kemungkinan db.close_position() gagal setelah order close sukses "
+            f"tereksekusi (lihat _do_close_position()). TIDAK di-auto-close -- "
+            f"perlu review manual: cek riwayat order {symbol} di Binance, lalu "
+            f"close manual di DB kalau genuinely sudah tidak ada posisi."
+        )
+        log.critical(msg)
+        try:
+            await db_manager.save_log("CRITICAL", "position_sync_spot", msg)
+        except Exception as e:
+            log.error("save_log phantom position gagal: %s", e)
+        if notifier is not None:
+            try:
+                await notifier.notify_error("phantom_position_spot", msg)
+            except Exception as e:
+                log.error("notify_error phantom position gagal: %s", e)
+
+
+async def _process_amount_mismatch_candidates(
+    candidates: List[Dict],
+    mismatch_suspects: Dict[str, int],
+    db_manager,
+    notifier,
+    result: Dict,
+) -> None:
+    """
+    [#36 -- audit fungsional] Mirror persis future/position_sync_futures.py::
+    _process_amount_mismatch_candidates() -- debounce 2 siklus, TIDAK
+    PERNAH auto-correct DB (notify-only), counter TERPISAH dari
+    phantom_suspects. Lihat docstring di sana utk latar belakang lengkap.
+    """
+    candidate_symbols = {c["symbol"] for c in candidates}
+    for sym in list(mismatch_suspects.keys()):
+        if sym not in candidate_symbols:
+            del mismatch_suspects[sym]
+
+    for c in candidates:
+        symbol = c["symbol"]
+        mismatch_suspects[symbol] = mismatch_suspects.get(symbol, 0) + 1
+        count = mismatch_suspects[symbol]
+
+        if count < 2:
+            log.warning(
+                "Kandidat amount mismatch (spot): %s DB=%.8f vs exchange=%.8f "
+                "(%.1f%%) (siklus ke-%d/2 -- belum dikonfirmasi).",
+                symbol, c["db_amount"], c["exchange_amount"], c["diff_pct"], count,
+            )
+            continue
+
+        result["amount_mismatch_confirmed"] = result.get("amount_mismatch_confirmed", 0) + 1
+        msg = (
+            f"AMOUNT MISMATCH terdeteksi (spot): {symbol} — DB amount="
+            f"{c['db_amount']:.8f} vs exchange amount={c['exchange_amount']:.8f} "
+            f"({c['diff_pct']:.1f}%) selama >= 2 siklus sync berturut-turut. "
+            f"Kemungkinan fee/dust deduction atau aktivitas manual eksternal "
+            f"di akun. TIDAK di-auto-correct -- perlu review manual: cek "
+            f"riwayat transaksi {symbol} di Binance, lalu koreksi manual "
+            f"amount di DB kalau genuinely sudah berbeda."
+        )
+        log.critical(msg)
+        try:
+            await db_manager.save_log("CRITICAL", "position_sync_spot", msg)
+        except Exception as e:
+            log.error("save_log amount mismatch gagal: %s", e)
+        if notifier is not None:
+            try:
+                await notifier.notify_error("amount_mismatch_spot", msg)
+            except Exception as e:
+                log.error("notify_error amount mismatch gagal: %s", e)
 
 
 async def analyze_position(
@@ -273,21 +458,54 @@ async def adopt_position(
         return False
 
 
-async def run_position_sync(exchange, db_manager) -> Dict:
+async def run_position_sync(
+    exchange, db_manager, notifier=None, phantom_suspects: Optional[Dict[str, int]] = None,
+    amount_mismatch_suspects: Optional[Dict[str, int]] = None,
+) -> Dict:
     """
     Main entry point — dipanggil periodik dari main loop.
     Deteksi → Analisis → Adopt posisi yang tidak tertracking.
+
+    [ITEM #4] `notifier` opsional (default None -- notify_error() di-skip
+    kalau tidak diisi) & `phantom_suspects` opsional (default dict lokal
+    baru per panggilan -- TANPA debounce lintas-siklus kalau caller tidak
+    oper punya sendiri yang persist, mis. self._phantom_suspects milik
+    TradingBot). Backward-compatible dgn caller lama.
+
+    [#36] `amount_mismatch_suspects` opsional -- pola identik phantom_
+    suspects (dict TERPISAH), lihat future/position_sync_futures.py::
+    run_position_sync() utk latar belakang lengkap (pola identik).
     """
     result = {
         "untracked_found": 0,
         "adopted":         0,
         "rejected":        0,
         "errors":          0,
+        "phantom_candidates": 0,
+        "phantom_confirmed":  0,
+        "amount_mismatch_candidates": 0,
+        "amount_mismatch_confirmed":  0,
     }
+    if phantom_suspects is None:
+        phantom_suspects = {}
+    if amount_mismatch_suspects is None:
+        amount_mismatch_suspects = {}
 
     try:
-        untracked = await find_untracked_positions(exchange, db_manager)
+        sync_result = await find_untracked_positions(exchange, db_manager)
+        untracked = sync_result["untracked"]
         result["untracked_found"] = len(untracked)
+
+        if not sync_result["fetch_failed"]:
+            candidates = sync_result["phantom_candidates"]
+            result["phantom_candidates"] = len(candidates)
+            await _process_phantom_candidates(candidates, phantom_suspects, db_manager, notifier, result)
+
+            mismatch_candidates = sync_result["amount_mismatches"]
+            result["amount_mismatch_candidates"] = len(mismatch_candidates)
+            await _process_amount_mismatch_candidates(
+                mismatch_candidates, amount_mismatch_suspects, db_manager, notifier, result,
+            )
 
         if not untracked:
             log.info("✅ Semua posisi Binance sudah tertracking di DB")

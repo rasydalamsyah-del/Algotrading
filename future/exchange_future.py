@@ -617,6 +617,16 @@ async def auto_scan_and_populate_futures(
     kalau suatu saat DB pernah di-share (saat ini fisik terpisah, tapi
     defensif tetap penting).
 
+    [#22 -- audit fungsional, diverifikasi lewat kode] Flag ini SENGAJA
+    manual-only by design, BUKAN bug. Satu-satunya write ke flag ini ada di
+    baris ~667 di bawah, dan SELALU menulis "false" (reset setelah scan) --
+    tidak ada mekanisme manapun di repo (cron/scheduler/reconciliation loop/
+    stale-universe detector) yang pernah menulis "true" secara otomatis, dan
+    tidak ada endpoint API untuk men-set flag ini. Operator yang ingin
+    memicu re-scan universe futures harus set flag ini ke "true" langsung
+    lewat SQL: UPDATE bot_state SET value='true' WHERE key='auto_scan_universe_futures';
+    (padanan spot: 'auto_scan_universe', lifecycle identik).
+
     is_valid_symbol: [FIX] callback opsional (mis. self.exchange.get_market_info
     dibungkus jadi predicate) utk validasi tiap simbol hasil scan terhadap ccxt
     SEBELUM ditulis ke universe_futures.json/universe_overrides.

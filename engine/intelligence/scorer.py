@@ -38,8 +38,29 @@ from engine.profiles.thresholds import get_profile_thresholds, get_dynamic_thres
 
 log = logging.getLogger("intelligence.scorer")
 
-# Buffer konfirmasi sinyal BUY per symbol
-# Format: {symbol: {"count": int, "regime": str}}
+# Buffer konfirmasi sinyal BUY per (symbol, side).
+# Format: {(symbol, side): {"count": int, "regime": str}}
+#
+# [#25 -- audit fungsional, pola bug sama persis dgn _OBSERVATION_CACHE
+# sebelum Sub-Batch D (observer.py)] Sebelumnya key HANYA `symbol` --
+# main_future.py bisa mengevaluasi kedua sisi (long & short) utk simbol
+# yang sama dalam satu siklus (score_signal(..., side=)), jadi begitu skor
+# genuinely beda per side (efek proyek MTF Composite Side-Aware yang
+# sudah selesai), permintaan side="short" bisa diam-diam dapat/menimpa
+# entry buffer confirm-count milik side="long" utk simbol yang sama --
+# silent cross-side contamination, belum termanifestasi krn belum ada
+# short yang lolos threshold utk memicu buffer ini saat gap ini ditemukan.
+#
+# [BEDA dari _OBSERVATION_CACHE, TIDAK straight-copy] _OBSERVATION_CACHE
+# pakai string key dgn `side` sbg SUFFIX krn ADA consumer lain yang match
+# key via `key.startswith(f"{symbol}|{timeframe}|")` (get_cached_observation()/
+# clear_cache()) -- suffix dipilih supaya prefix-matching itu tetap jalan
+# tanpa diubah. _SIGNAL_CONFIRM_BUFFER TIDAK punya consumer serupa (dicek
+# lewat grep repo-wide -- symbol/scorer.py adalah satu-satunya pembaca/
+# penulis, tidak ada clear_cache()-like function, tidak ada prefix-matching
+# manapun) -- jadi tuple key (symbol, side) dipakai di sini, LEBIH
+# SEDERHANA & lebih aman dari isu delimiter (tidak perlu asumsi symbol
+# tidak pernah mengandung karakter pemisah).
 _SIGNAL_CONFIRM_BUFFER: dict = {}
 
 def _check_primary_trigger(
@@ -250,9 +271,28 @@ def _suggest_sl_tp(
     current_price: float,
     atr: Optional[float],
     profile_cfg,
+    side: str = "long",
+    # [BUG-FIX -- audit item #19] Sebelumnya fungsi ini TIDAK PUNYA parameter
+    # side sama sekali -- SL selalu di bawah harga, TP selalu di atas,
+    # regardless caller-nya sinyal long atau short. side="long" default
+    # (SEMUA caller lama yang tidak eksplisit mengirim side, termasuk spot,
+    # tetap dapat hasil IDENTIK PERSIS dengan sebelum parameter ini ada).
 ) -> Tuple[Optional[float], Optional[float]]:
     if current_price <= 0:
         return None, None
+
+    if side == "short":
+        if atr is not None and atr > 0:
+            sl = current_price + atr * profile_cfg.atr_sl_mult
+            tp = current_price - atr * profile_cfg.atr_tp_mult
+        else:
+            sl = current_price * (1 + profile_cfg.quick_sl_pct / 100)
+            tp = current_price * (1 - profile_cfg.quick_tp_pct / 100)
+
+        if sl <= current_price or tp >= current_price:
+            return None, None
+
+        return round(sl, 8), round(tp, 8)
 
     if atr is not None and atr > 0:
         sl = current_price - atr * profile_cfg.atr_sl_mult
@@ -442,23 +482,24 @@ def score_signal(
         # Konfirmasi BUY berdasarkan regime
         regime_key = regime.value
         required   = SIGNAL_CONFIRMATION_MATRIX.get(regime_key, 6)
-        buf        = _SIGNAL_CONFIRM_BUFFER.get(symbol, {"count": 0, "regime": regime_key})
+        buffer_key = (symbol, side)
+        buf        = _SIGNAL_CONFIRM_BUFFER.get(buffer_key, {"count": 0, "regime": regime_key})
 
         # Reset jika regime berubah
         if buf["regime"] != regime_key:
             buf = {"count": 0, "regime": regime_key}
 
         buf["count"] += 1
-        _SIGNAL_CONFIRM_BUFFER[symbol] = buf
+        _SIGNAL_CONFIRM_BUFFER[buffer_key] = buf
 
         if buf["count"] >= required:
             signal.signal_type = "buy"
             log.info(
-                "%s | ✅ Konfirmasi BUY terpenuhi: %d/%d (regime=%s)",
-                symbol, buf["count"], required, regime_key,
+                "%s | ✅ Konfirmasi BUY terpenuhi: %d/%d (regime=%s, side=%s)",
+                symbol, buf["count"], required, regime_key, side,
             )
             # Reset setelah execute
-            _SIGNAL_CONFIRM_BUFFER[symbol] = {"count": 0, "regime": regime_key}
+            _SIGNAL_CONFIRM_BUFFER[buffer_key] = {"count": 0, "regime": regime_key}
 
             # ── Validasi conf_score pakai confirmation_min_score dari profil ──
             conf_score  = observation.confirmation_tf_score
@@ -486,19 +527,29 @@ def score_signal(
         else:
             signal.signal_type = "hold"
             log.info(
-                "%s | ⏳ Menunggu konfirmasi BUY: %d/%d (regime=%s)",
-                symbol, buf["count"], required, regime_key,
+                "%s | ⏳ Menunggu konfirmasi BUY: %d/%d (regime=%s, side=%s)",
+                symbol, buf["count"], required, regime_key, side,
             )
     else:
         signal.signal_type = "hold"
         signal.trigger_met = False  # FIX: score < threshold, trigger harus False
         # Reset buffer jika score turun
-        if symbol in _SIGNAL_CONFIRM_BUFFER:
-            _SIGNAL_CONFIRM_BUFFER[symbol] = {"count": 0, "regime": regime.value}
+        buffer_key = (symbol, side)
+        if buffer_key in _SIGNAL_CONFIRM_BUFFER:
+            _SIGNAL_CONFIRM_BUFFER[buffer_key] = {"count": 0, "regime": regime.value}
 
     atr = iset.volatility.atr
     price = iset.current_price
-    suggested_sl, suggested_tp = _suggest_sl_tp(price, atr, profile_cfg)
+    # [BUG-FIX -- ditemukan saat investigasi audit item #19, forecast/diagnosa
+    # bidirectional futures] side= sudah tersedia di scope (parameter fungsi
+    # ini, baris 341) tapi TIDAK PERNAH diteruskan ke _suggest_sl_tp() --
+    # akibatnya suggested_sl/suggested_tp SELALU dihitung pakai formula long
+    # (sl di bawah harga, tp di atas) bahkan untuk signal side="short".
+    # Field ini advisory-only (dipakai forecast/dashboard, BUKAN SL/TP order
+    # sungguhan -- itu dihitung terpisah & sudah side-aware oleh
+    # RiskManager.evaluate_order()), jadi TIDAK mempengaruhi eksekusi trade
+    # nyata, tapi tetap salah utk ditampilkan. Fix: teruskan side.
+    suggested_sl, suggested_tp = _suggest_sl_tp(price, atr, profile_cfg, side=side)
     signal.suggested_sl = suggested_sl
     signal.suggested_tp = suggested_tp
 

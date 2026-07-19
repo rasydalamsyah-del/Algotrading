@@ -22,6 +22,8 @@ from sqlalchemy.ext.asyncio import (
 )
 from sqlalchemy.orm import DeclarativeBase
 
+from engine.event_bus import EventBus
+
 log = logging.getLogger("db")
 
 def _utcnow() -> datetime:
@@ -364,6 +366,19 @@ class DatabaseManager:
         self.database_url = database_url
         self._pg = _is_postgres(database_url)
 
+        # [AUDIT ITEM #8 -- push/SSE] Injeksi OPSIONAL, pola sama persis dgn
+        # WebSocketFeed.on_ticker (spot/exchange_spot.py) -- default None,
+        # tidak memaksa dependency ke context yang tidak serve API (test,
+        # script, migrasi). Bot (main_spot.py/main_future.py) assign
+        # `self.db.event_bus = self.event_bus` SETELAH keduanya dikonstruksi
+        # di start(), pola inject-pasca-konstruksi yang sudah dipakai
+        # berulang di codebase ini (mis. self.strategy._notifier = ...).
+        # publish() di titik Tier 1 (lihat masing-masing method) TIDAK
+        # PERNAH di-await -- EventBus.publish() sinkron & non-blocking by
+        # design (lihat engine/event_bus.py), commit DB tidak pernah
+        # tertunda menunggu subscriber SSE.
+        self.event_bus: Optional[EventBus] = None
+
         if self._pg:
             self._engine = create_async_engine(
                 database_url,
@@ -519,6 +534,12 @@ class DatabaseManager:
                     s.add(trade)
                     await s.commit()
                     await s.refresh(trade)
+                    # [AUDIT ITEM #8] Publish HANYA di jalur INSERT genuinely
+                    # baru -- SENGAJA TIDAK di 2 titik `return existing` di
+                    # bawah (baris ~550, ~574), itu jalur duplikat/race
+                    # recovery (trade SUDAH ada sebelumnya), bukan trade baru.
+                    if self.event_bus:
+                        self.event_bus.publish("trade", trade)
                     return trade
                 except IntegrityError:
                     await s.rollback()
@@ -933,6 +954,8 @@ class DatabaseManager:
                 s.add(pos)
             await s.commit()
             await s.refresh(pos)
+            if self.event_bus:
+                self.event_bus.publish("position_upserted", pos)
             return pos
 
     async def update_position_sl(self, symbol: str, new_sl: float) -> None:
@@ -1013,6 +1036,12 @@ class DatabaseManager:
                 .values(is_closing=True)
             )
             await s.commit()
+        # [AUDIT ITEM #8] UPDATE massal ini tidak RETURNING baris -- publish
+        # dict minimal {symbol}, BUKAN objek Position penuh spt method Tier 1
+        # lain (pengecualian sengaja, query full row di sini cuma utk publish
+        # tidak sepadan dgn 1 extra round-trip DB).
+        if self.event_bus:
+            self.event_bus.publish("position_closing", {"symbol": symbol})
 
     async def update_position_entry_fee(self, symbol: str, fee: float) -> None:
         async with self._session() as s:
@@ -1124,7 +1153,132 @@ class DatabaseManager:
                     )
                 )
             await s.commit()
+        # [AUDIT ITEM #8] close_position_with_retry() (item #4) memanggil
+        # method ini internal -- publish di sini SATU-SATUNYA tempat sudah
+        # cover kedua caller (langsung & lewat retry wrapper), tidak perlu
+        # duplikasi di close_position_with_retry().
+        if self.event_bus:
+            self.event_bus.publish("position_closed", pos)
         return pos
+
+    async def close_position_with_retry(
+        self,
+        symbol:       str,
+        exit_price:   float,
+        realized_pnl: float,
+        retries:      int   = 3,
+        delay:        float = 1.5,
+    ) -> Optional[Position]:
+        """
+        [ITEM #4 -- audit fungsional, mitigasi root-cause phantom position]
+        Retry-backoff di sekitar close_position() -- root cause phantom yang
+        terdokumentasi: exchange (paper _paper_positions/_paper_balance ATAU
+        exchange asli) sudah commit fill SEBELUM close_position() dipanggil
+        (urutan ini TIDAK bisa dibalik -- DB harus mencerminkan REALITAS
+        fill, bukan sebaliknya), jadi kalau close_position() gagal karena
+        kegagalan TRANSIEN (lock SQLite, hiccup koneksi Postgres), DB
+        nyangkut is_open=True permanen padahal exchange sudah flat.
+
+        Pola sama dgn BaseExchangeConnector._retry() (engine/exchange_base.py,
+        item #6) -- TAPI diadaptasi: exception di sini generik (bukan
+        ccxt-typed), krn driver DB bisa macam-macam (sqlite3.OperationalError,
+        asyncpg/psycopg, dst) -- tidak ada hierarki exception yang bisa
+        diasumsikan seperti ccxt. Semua Exception diperlakukan sebagai
+        potentially-transient & di-retry (beda dari _retry() yang langsung
+        re-raise utk Exception generik) -- masuk akal krn caller (
+        _do_close_position() di kedua bot) SUDAH memperlakukan kegagalan
+        akhir sebagai kondisi kritis (log.critical + save_log + notify_error)
+        terlepas dari jenis exception-nya.
+
+        TIDAK menggantikan close_position() -- method asli tetap ada apa
+        adanya (dipakai di tempat lain yang tidak butuh retry, mis.
+        _reconcile_positions_on_startup() di spot -- di luar cakupan item
+        #4 ini, TIDAK diubah).
+
+        Raise exception TERAKHIR setelah retries habis -- caller yang
+        menentukan tindakan (log.critical/save_log/notify_error), bukan
+        method ini (konsisten dgn _retry() yang juga cuma re-raise, tidak
+        mengambil aksi notifikasi sendiri).
+        """
+        last_exc: Exception = RuntimeError(
+            f"close_position_with_retry({symbol}): tidak ada percobaan dijalankan"
+        )
+        for attempt in range(1, retries + 1):
+            try:
+                return await self.close_position(symbol, exit_price, realized_pnl)
+            except Exception as e:
+                last_exc = e
+                if attempt < retries:
+                    wait = delay * (2 ** attempt)
+                    log.warning(
+                        "close_position gagal utk %s, percobaan %d/%d — retry dlm %.1fs: %s",
+                        symbol, attempt, retries, wait, e,
+                    )
+                    await asyncio.sleep(wait)
+                else:
+                    log.error(
+                        "close_position gagal utk %s setelah %d percobaan: %s",
+                        symbol, retries, e,
+                    )
+        raise last_exc
+
+    async def reduce_position_amount_with_retry(
+        self,
+        symbol:               str,
+        reduce_amount:        float,
+        realized_pnl_partial: float,
+        exit_price:           float,
+        retries:              int   = 3,
+        delay:                float = 1.5,
+    ) -> Optional[Position]:
+        """
+        [#28 -- audit fungsional] Retry-backoff di sekitar
+        reduce_position_amount() -- pola IDENTIK dgn close_position_with_retry()
+        (item #4), sama root-cause-nya: order partial-close SUDAH commit fill
+        di exchange SEBELUM method ini dipanggil (urutan tidak bisa dibalik),
+        jadi kalau reduce_position_amount() gagal karena kegagalan TRANSIEN
+        (lock SQLite/hiccup koneksi), DB nyangkut `amount` LAMA (full) padahal
+        exchange sudah lebih kecil.
+
+        [BEDA PENTING dari close_position_with_retry -- WAJIB diketahui
+        caller] Kegagalan di sini TIDAK akan terdeteksi otomatis oleh
+        run_position_sync_loop()/find_untracked_positions() seperti phantom
+        position full-close -- detector phantom itu HANYA membandingkan
+        KEBERADAAN posisi (symbol ada/tidak di exchange vs DB, is_open),
+        BUKAN membandingkan `amount`. Posisi tetap is_open=True valid di
+        kedua sisi setelah partial close gagal ditulis -- jadi DB akan
+        nyangkut menampilkan amount yang TERLALU BESAR (mismatch senyap,
+        tidak pernah self-heal) sampai direview manual. Caller WAJIB
+        menyampaikan pesan kegagalan yang BEDA dari phantom position biasa
+        (lihat _do_close_position() di future/main_future.py).
+
+        Raise exception TERAKHIR setelah retries habis -- caller yang
+        menentukan tindakan, pola sama persis dgn close_position_with_retry().
+        """
+        last_exc: Exception = RuntimeError(
+            f"reduce_position_amount_with_retry({symbol}): tidak ada percobaan dijalankan"
+        )
+        for attempt in range(1, retries + 1):
+            try:
+                return await self.reduce_position_amount(
+                    symbol, reduce_amount=reduce_amount,
+                    realized_pnl_partial=realized_pnl_partial, exit_price=exit_price,
+                )
+            except Exception as e:
+                last_exc = e
+                if attempt < retries:
+                    wait = delay * (2 ** attempt)
+                    log.warning(
+                        "reduce_position_amount gagal utk %s, percobaan %d/%d — retry dlm %.1fs: %s",
+                        symbol, attempt, retries, wait, e,
+                    )
+                    await asyncio.sleep(wait)
+                else:
+                    log.error(
+                        "reduce_position_amount gagal utk %s setelah %d percobaan: %s",
+                        symbol, retries, e,
+                    )
+        raise last_exc
 
     async def save_snapshot(self, data: dict) -> None:
         async with self._session() as s:
@@ -1142,8 +1296,19 @@ class DatabaseManager:
                         age_secs, self.SNAPSHOT_DEDUP_SECS,
                     )
                     return
-            s.add(PortfolioSnapshot(**data))
+            snap = PortfolioSnapshot(**data)
+            s.add(snap)
             await s.commit()
+            await s.refresh(snap)
+        # [AUDIT ITEM #8 -- Tier 2] save_snapshot() sendiri sudah punya
+        # dedup 55 detik (SNAPSHOT_DEDUP_SECS) di atas -- frekuensi genuinely
+        # rendah (~tiap SNAPSHOT_INTERVAL=900 detik dari caller normal),
+        # jadi publish langsung di sini AMAN (bukan per-write flood spt
+        # update_position_price() Tier 2 lain -- itu diagregasi di caller,
+        # lihat run_sl_tp_monitor() main_spot.py/main_future.py, BUKAN di
+        # database.py, krn dipanggil per-posisi per-cycle).
+        if self.event_bus:
+            self.event_bus.publish("snapshot", snap)
         await self._prune_snapshots()
 
     async def get_equity_curve(self, limit: int = 500) -> List[PortfolioSnapshot]:
@@ -1916,6 +2081,8 @@ class DatabaseManager:
                 await s.commit()
                 await s.refresh(rec)
                 row_id = rec.id
+                if self.event_bus:
+                    self.event_bus.publish("parameter_changed", rec)
             await self._prune_parameter_history()
             return row_id
         except Exception as e:
@@ -2158,16 +2325,21 @@ class DatabaseManager:
                     row.source     = source
                     row.notes      = notes
                     row.updated_at = _utcnow()
+                    override_row = row
                 else:
-                    s.add(WatchlistOverride(
+                    override_row = WatchlistOverride(
                         symbol    = symbol,
                         source    = source,
                         is_active = True,
                         notes     = notes,
                         added_at  = _utcnow(),
                         updated_at= _utcnow(),
-                    ))
+                    )
+                    s.add(override_row)
+            await s.refresh(override_row)
         log.info("WatchlistOverride upsert: %s [%s]", symbol, source)
+        if self.event_bus:
+            self.event_bus.publish("universe_override_added", override_row)
 
     async def deactivate_universe_override(self, symbol: str) -> None:
         """Nonaktifkan symbol dari universe_overrides (tanpa hapus baris)."""
@@ -2179,3 +2351,7 @@ class DatabaseManager:
                     .values(is_active=False, updated_at=_utcnow())
                 )
         log.info("WatchlistOverride deactivated: %s", symbol)
+        # [AUDIT ITEM #8] UPDATE massal, tidak RETURNING baris -- dict
+        # minimal, pengecualian sama spt mark_position_closing().
+        if self.event_bus:
+            self.event_bus.publish("universe_override_removed", {"symbol": symbol})

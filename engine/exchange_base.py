@@ -179,8 +179,22 @@ class BaseExchangeConnector:
         bisa salah menolaknya sebagai "tidak dikenal". Pure refresh read,
         tidak menyentuh order/saldo/posisi -- kalau data pasar tidak
         berubah, hasilnya identik dengan cache lama.
+
+        [ITEM #6 -- refresh periodik] Sekarang juga dipanggil dari loop
+        periodik terjadwal (run_market_cache_refresh() di main_spot.py/
+        main_future.py, tiap market_cache_refresh_interval detik, default
+        3600) supaya self._markets tidak stale sepanjang umur proses --
+        sebelumnya cuma di-set sekali di connect() (dan sekali lagi manual
+        sebelum auto-scan futures). Dibungkus self._retry() (pola yang sama
+        dgn fetch_ohlcv/fetch_ticker/dkk di file ini) supaya rate-limit/
+        network blip sesaat tidak bikin reload gagal total -- kegagalan
+        SETELAH retry habis tetap dibiarkan naik (raise) ke pemanggil, yang
+        untuk loop periodik berarti cache lama dipertahankan sampai siklus
+        berikutnya (fail-safe, self._markets tidak pernah ditimpa None/kosong).
         """
-        self._markets = await self._ex.load_markets(reload=True)
+        self._markets = await self._retry(
+            self._ex.load_markets, reload=True, _ep="load_markets",
+        )
 
     def amount_to_precision(self, symbol: str, amount: float) -> float:
         try:

@@ -310,6 +310,41 @@ class BaseRiskManager:
                 self._free_balance, low_balance_threshold * 1.1,
             )
 
+    def reserve_position_slot(self) -> None:
+        """[Opsi 1 -- audit item #2] Increment in-memory _open_positions_count
+        SEGERA saat evaluate_order() approve entry baru, dipanggil dari dalam
+        critical section _evaluate_lock yang SAMA dengan pengecekan
+        max_open_positions (lihat tail _evaluate_order_locked() di
+        spot/risk_spot.py & future/risk_future.py) -- menutup race window
+        antar-worker GATE3_WORKERS yang sebelumnya cuma mengandalkan
+        _refresh_portfolio() (DB re-fetch periodik/event-driven, bisa basi
+        sampai 900 detik). Simetris dengan release_position_slot(), yang
+        WAJIB dipanggil caller (_handle_buy()/_handle_entry()) kalau entry
+        yang sudah di-reserve ini gagal genuinely dieksekusi (posisi tidak
+        benar-benar terbuka). Reservasi ini murni jembatan sementara antara
+        approval dan _refresh_portfolio() berikutnya -- kalau caller lupa
+        rilis pada satu jalur kegagalan, refresh berikutnya (setiap close
+        atau tiap 900 detik) tetap mengoreksi ke nilai DB yang benar.
+        """
+        self._open_positions_count += 1
+
+    def release_position_slot(self) -> None:
+        """Pasangan reserve_position_slot() -- dipanggil saat entry yang
+        sudah disetujui GAGAL genuinely dieksekusi (tidak ada posisi baru
+        yang benar-benar terbuka), supaya slot yang direservasi tidak
+        nyangkut sampai refresh berikutnya. Floor di 0: _open_positions_count
+        negatif akan membuat gate max_open_positions salah LONGGAR (lebih
+        berbahaya drpd salah ketat), jadi diblok + di-log sebagai sinyal
+        reserve/release tidak seimbang di caller (bug, bukan kondisi normal).
+        """
+        if self._open_positions_count > 0:
+            self._open_positions_count -= 1
+        else:
+            log.warning(
+                "release_position_slot() dipanggil saat _open_positions_count "
+                "sudah 0 -- kemungkinan reserve/release tidak seimbang di caller."
+            )
+
     def halt_trading(
         self, reason: HaltReason = HaltReason.MANUAL, detail: str = ""
     ) -> None:
@@ -318,6 +353,7 @@ class BaseRiskManager:
         self._halt_detail = detail
         log.critical("TRADING HALTED [%s]: %s", reason.value, detail)
         self._persist_halt()
+        self._publish_halt_event(halted=True, reason=reason.value, detail=detail)
 
     def resume_trading(self) -> None:
         if self._halt_reason in (HaltReason.MAX_DRAWDOWN, HaltReason.PANIC_BUTTON):
@@ -334,6 +370,29 @@ class BaseRiskManager:
         self._halt_detail = ""
         log.info("Trading resumed.")
         self._clear_halt_persist()
+        self._publish_halt_event(halted=False, reason="", detail="")
+
+    def _publish_halt_event(self, halted: bool, reason: str, detail: str) -> None:
+        # [AUDIT ITEM #8 -- push/SSE] Semua caller halt_trading()/_resume()
+        # (baik manual via API, panic-close, MAUPUN otomatis krn breach
+        # drawdown/daily-loss/low-balance -- dikonfirmasi SEMUA jalur
+        # otomatis sudah guard `and not self._halted`/`self._halted` sebelum
+        # manggil, jadi method ini SELALU genuinely dipanggil pas transisi,
+        # tidak pernah berulang tiap cycle sementara status tidak berubah)
+        # otomatis ikut ter-publish lewat SATU titik ini -- tidak perlu
+        # wiring terpisah di tiap caller. self._db.event_bus dipakai
+        # (BUKAN atribut event_bus terpisah di RiskManager) krn self._db
+        # SUDAH SELALU instance DatabaseManager yang SAMA dgn milik bot
+        # (RiskManager(..., db=self.db) di kedua bot), yang sudah dapat
+        # event_bus dari bot di start(). market_type SENGAJA tidak disertakan
+        # di sini (BaseRiskManager genuinely market-agnostic, tidak tahu
+        # spot/futures) -- konsumen SSE sudah tahu market_type dari port/
+        # koneksi yang dipakai (2 EventSource terpisah per desain #8).
+        if self._db is not None and getattr(self._db, "event_bus", None):
+            self._db.event_bus.publish(
+                "halt_changed",
+                {"halted": halted, "reason": reason, "detail": detail},
+            )
 
     def _persist_halt(self) -> None:
         if self._db is None:

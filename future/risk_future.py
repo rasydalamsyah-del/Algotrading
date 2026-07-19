@@ -330,6 +330,14 @@ class RiskManager(BaseRiskManager):
             liquidation_price=liq_result.liquidation_price,
         )
         log.info("Risk (futures): %s | %s | leverage=%dx", symbol, assessment, eff_leverage)
+        # [Opsi 1 -- audit item #2] Reserve slot ATOMIK di sini, masih di
+        # dalam _evaluate_lock yang sama dgn pengecekan max_open_positions
+        # di atas -- menutup race antar-worker GATE3_WORKERS. Hanya utk
+        # is_opening_new (add/reduce/close tidak konsumsi slot baru, sudah
+        # di-return lebih awal). Caller (_handle_entry) WAJIB
+        # release_position_slot() kalau entry gagal setelah titik ini.
+        if is_opening_new and assessment.is_approved:
+            self.reserve_position_slot()
         return assessment
 
     def _compute_position_size(

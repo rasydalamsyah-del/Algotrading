@@ -303,6 +303,29 @@ class WebSocketFeed:
         # perlu tahu simbol ini ada, statusnya cuma "dead" untuk WS).
         self._ws_excluded_symbols: set = set()
 
+        # [BUG-FIX -- self-healing _watch_orderbook(), pola sama dgn
+        # _ws_ticker_task/_ws_restart_count di atas] _watch_orderbook(symbol)
+        # SEBELUMNYA mati PERMANEN per-symbol setelah max_retries, TANPA
+        # mekanisme restart -- beda dari _watch_tickers_all yang sudah
+        # dibereskan (lihat _poll_tickers()). Severity lebih rendah drpd bug
+        # ticker asli krn _poll_orderbooks_rest() SUDAH jalan unconditional
+        # utk SEMUA symbol (bukan cuma failover), jadi live_orderbooks tetap
+        # ter-update via REST walau WS per-symbol mati -- tapi tetap
+        # inkonsisten desain dibanding ticker, dan WS orderbook (kalau
+        # sehat) lebih rendah latency drpd REST polling murni. Beda dari
+        # ticker (SATU task multiplexed, jadi cukup 1 counter/timestamp),
+        # orderbook watch PER-SYMBOL -- perlu cooldown independen per symbol
+        # (counter/timestamp GLOBAL tunggal akan salah: satu symbol yang
+        # baru saja direstart bisa memblokir symbol LAIN yang juga mati
+        # ikut direstart, krn cooldown dicek bersama).
+        # `_ws_orderbook_tasks` HANYA berisi entry utk symbol yang PERNAH
+        # dapat WS orderbook (dipicu add_symbols(), bukan semua self.symbols
+        # -- WS orderbook memang "on-demand saat koin masuk pipeline",
+        # lihat catatan di start()/add_symbols()).
+        self._ws_orderbook_tasks:  Dict[str, asyncio.Task] = {}
+        self._ob_restart_count:    Dict[str, int]   = {}
+        self._ob_last_restart_ts:  Dict[str, float] = {}
+
         rest_cls = getattr(ccxt, exchange_id)
         self._rest_exchange: ccxt.Exchange = rest_cls({
             "apiKey":          api_key,
@@ -491,12 +514,16 @@ class WebSocketFeed:
                     )
                 )
             if ws_supported:
-                self._tasks.append(
-                    asyncio.create_task(
-                        self._watch_orderbook(symbol),
-                        name=f"ws_ob_{symbol}",
-                    )
+                # [BUG-FIX -- self-healing] Simpan referensi task per-symbol
+                # di _ws_orderbook_tasks -- dipakai _poll_orderbooks_rest()
+                # utk deteksi task yang sudah mati (.done()) dan restart
+                # otomatis dgn cooldown, sama seperti _ws_ticker_task.
+                ob_task = asyncio.create_task(
+                    self._watch_orderbook(symbol),
+                    name=f"ws_ob_{symbol}",
                 )
+                self._tasks.append(ob_task)
+                self._ws_orderbook_tasks[symbol] = ob_task
             else:
                 self._feed_mode[symbol] = "REST_POLLING"
 
@@ -673,6 +700,64 @@ class WebSocketFeed:
                     break
                 await asyncio.sleep(wait)
 
+    def _maybe_restart_orderbook_task(self, symbol: str) -> None:
+        """
+        [BUG-FIX -- self-healing _watch_orderbook(), mirror _poll_tickers()]
+        Dipanggil dari _poll_orderbooks_rest() utk SATU symbol per iterasi
+        (bukan pass terpisah) -- restart tersebar alami mengikuti jeda 50ms
+        antar-symbol yang sudah ada di loop REST, bukan burst semua sekaligus
+        di satu titik.
+
+        Cooldown eksponensial PERSIS formula _ws_ticker_task (min(30*2^n,
+        600)) -- konsistensi disengaja, bukan hasil optimasi terpisah.
+        Beda dari ticker: counter/timestamp di sini PER-SYMBOL (dict), krn
+        orderbook watch memang banyak task independen, bukan satu task
+        multiplexed.
+
+        [KNOWN LIMITATION -- belum divalidasi, TIDAK diperbaiki di sini,
+        di luar cakupan fix ini] watch_order_book() (dipanggil di dalam
+        _watch_orderbook()) TIDAK dibungkus self._throttler, beda dari
+        REST calls di engine/exchange_base.py. Kalau BANYAK symbol mati
+        bersamaan (mis. gangguan WS luas yang mempengaruhi semua koin
+        aktif-pipeline sekaligus), restart per-symbol yang independen ini
+        BISA menghasilkan burst percobaan re-subscribe WS ke exchange
+        hampir bersamaan, tanpa rate-limit lokal yang menahannya. Belum
+        ada bukti ini bermasalah nyata (WS subscribe bukan endpoint REST
+        yang kena rate limit ketat), tapi perlu diperhatikan ulang kalau
+        jumlah symbol aktif-pipeline membesar jauh dari kondisi saat ini.
+        """
+        task = self._ws_orderbook_tasks.get(symbol)
+        if task is None or not task.done():
+            return
+
+        now      = time.time()
+        count    = self._ob_restart_count.get(symbol, 0)
+        cooldown = min(30 * (2 ** count), 600)  # max 10 menit, sama dgn ticker
+        last_restart = self._ob_last_restart_ts.get(symbol, 0.0)
+        if now - last_restart < cooldown:
+            return
+
+        self._ob_restart_count[symbol]   = count + 1
+        self._ob_last_restart_ts[symbol] = now
+        log.warning(
+            "WS orderbook task [%s] mati (done) — restart otomatis "
+            "#%d (cooldown %ds berikutnya kalau gagal lagi).",
+            symbol, count + 1, cooldown,
+        )
+        try:
+            new_task = asyncio.create_task(
+                self._watch_orderbook(symbol), name=f"ws_ob_{symbol}",
+            )
+            # [PENTING] Task LAMA sudah .done() (dicek di atas) sebelum
+            # referensinya diganti -- tidak ada dua koneksi WS aktif
+            # bersamaan utk symbol yang sama (beda dari bug resource-leak
+            # lama di add_symbols(), yang terjadi krn spawn task BARU tanpa
+            # mengecek task LAMA masih hidup atau tidak).
+            self._ws_orderbook_tasks[symbol] = new_task
+            self._tasks.append(new_task)
+        except Exception as re_err:
+            log.error("Gagal restart WS orderbook task [%s]: %s", symbol, re_err)
+
     async def _poll_orderbooks_rest(self) -> None:
         """
         Poll orderbook via REST untuk semua koin secara bergiliran.
@@ -683,6 +768,7 @@ class WebSocketFeed:
                 for symbol in list(self.symbols):
                     if not self._running:
                         break
+                    self._maybe_restart_orderbook_task(symbol)
                     try:
                         ob = await self._ex.fetch_order_book(symbol, limit=20)
                         self.live_orderbooks[symbol] = {
@@ -1013,11 +1099,41 @@ def load_universe_json() -> list:
         return []
 
 
-async def auto_scan_and_populate(db) -> list:
+async def auto_scan_and_populate(
+    db,
+    is_valid_symbol: Optional[Callable[[str], bool]] = None,
+) -> list:
     """
     Fungsi utama dipanggil saat bot startup.
     Cek DB apakah perlu scan ulang, lakukan scan, populate universe_overrides.
     Return: list symbol aktif (dari DB universe_overrides atau universe.json)
+
+    [BUG-FIX #35 -- ditemukan saat membangun endpoint futures, diperbaiki
+    di jalur yang sama (auto_scan_and_populate_futures(), dipicu insiden
+    EVAA/USDT) tapi jalur spot ini SEBELUMNYA tidak pernah dapat perbaikan
+    yang sama, dikonfirmasi baca kode langsung -- bukan diasumsikan
+    otomatis sama.] is_valid_symbol: callback opsional (main_spot.py kirim
+    self.exchange.is_symbol_supported) utk validasi tiap simbol hasil scan
+    terhadap ccxt SEBELUM ditulis ke universe.json/universe_overrides.
+    scan_binance_universe() sendiri hit REST Binance mentah, independen
+    dari ccxt -- bisa menghasilkan simbol yang secara teknis
+    TRADING/listing di Binance tapi entah kenapa tidak dikenali objek ccxt
+    yang benar-benar dipakai bot (kelas masalah sama dgn insiden EVAA/USDT
+    di futures, walau spot genuinely belum pernah punya insiden serupa
+    tercatat -- risiko strukturalnya identik, tetap layak ditutup).
+    Kalau None (default), tidak ada validasi -- perilaku lama, tidak
+    breaking utk caller lain.
+
+    [#22 -- audit fungsional, diverifikasi lewat kode] Flag 'auto_scan_
+    universe' ini SENGAJA manual-only by design, BUKAN bug. Satu-satunya
+    write ke flag ini ada di baris ~1178 di bawah, dan SELALU menulis
+    "false" (reset setelah scan) -- tidak ada mekanisme manapun di repo
+    (cron/scheduler/reconciliation loop/stale-universe detector) yang
+    pernah menulis "true" secara otomatis, dan tidak ada endpoint API
+    untuk men-set flag ini. Operator yang ingin memicu re-scan universe
+    harus set flag ini ke "true" langsung lewat SQL:
+    UPDATE bot_state SET value='true' WHERE key='auto_scan_universe';
+    (padanan futures: 'auto_scan_universe_futures', lifecycle identik).
     """
     # Cek flag auto_scan di DB
     flag = await db.get_bot_state("auto_scan_universe")
@@ -1037,6 +1153,17 @@ async def auto_scan_and_populate(db) -> list:
         coins = await loop.run_in_executor(
             None, scan_binance_universe, _scan_min_volume, 500,
         )
+
+        if coins and is_valid_symbol is not None:
+            before  = len(coins)
+            invalid = [c["symbol"] for c in coins if not is_valid_symbol(c["symbol"])]
+            coins   = [c for c in coins if is_valid_symbol(c["symbol"])]
+            if invalid:
+                log.warning(
+                    "auto_scan: %d/%d simbol hasil scan tidak dikenali ccxt, "
+                    "dibuang sebelum ditulis ke universe.json: %s",
+                    len(invalid), before, invalid,
+                )
 
         if coins:
             # Simpan ke universe.json

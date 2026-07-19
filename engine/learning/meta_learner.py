@@ -199,6 +199,7 @@ class MetaLearner:
         min_projected_improvement: float = META_MIN_PROJECTED_IMPROVEMENT,
         track_trades_after:      int   = META_TRACK_TRADES_AFTER_APPLY,
         revert_win_rate_drop:    float = META_REVERT_WIN_RATE_DROP,
+        market_type:             str   = "spot",
     ):
         if mode not in ("advisory", "autonomous"):
             raise ValueError(
@@ -217,6 +218,18 @@ class MetaLearner:
         self._wr_high              = win_rate_high_threshold
         self._min_improvement      = min_projected_improvement
         self._track_trades         = track_trades_after
+        # [FUTURES -- audit item #18] market_type="spot" (default, TIDAK
+        # mengubah perilaku existing caller manapun) vs "futures". Dipakai
+        # SATU-SATUNYA di _apply_suggestion() utk memblokir suggestion tipe
+        # weight_* (kategori indikator) secara teknis, bukan cuma dokumentasi
+        # -- lihat komentar di _apply_suggestion() utk alasan lengkap
+        # (engine/profiles/weights.py adalah file SHARED dipakai spot MAUPUN
+        # futures, MetaLearner futures yang menulisnya bisa diam-diam
+        # mengubah scoring live spot saat spot restart berikutnya).
+        # Suggestion tipe threshold (entry_threshold, dst) TETAP boleh jalan
+        # normal utk market_type apa pun -- itu per-bot (in-memory
+        # _ACTIVE_OVERRIDES + persist ke DB bot itu sendiri), aman.
+        self._market_type          = market_type
         self._revert_drop          = revert_win_rate_drop
         
         self._cooling_cache: Dict[str, datetime] = {}
@@ -971,6 +984,36 @@ class MetaLearner:
             return False, "Cooldown apply 1 jam aktif untuk parameter ini."
 
         if sug.parameter_name.startswith("weight_"):
+            # [FUTURES -- audit item #18, blokir teknis BUKAN cuma dokumentasi]
+            # _apply_weight_change() menulis LANGSUNG ke file
+            # engine/profiles/weights.py di disk -- file itu SHARED, dipakai
+            # BERSAMA oleh proses spot maupun futures (LEVEL1_WEIGHTS di-key
+            # nama profile generik spt "scalp_volatile", TANPA namespace
+            # market-type). Kalau instance MetaLearner ini milik futures dan
+            # suggestion weight_* di-approve (manual DI MODE ADVISORY
+            # SEKALIPUN, atau otomatis di mode autonomous -- keduanya lewat
+            # titik ini), file itu tertimpa berdasar hasil trading futures
+            # SAJA, lalu diam-diam ikut terbawa ke scoring live SPOT begitu
+            # spot suatu saat restart (proses beda, file sama). Diblokir DI
+            # SINI (satu-satunya titik dispatch weight_*, dipakai baik oleh
+            # approve_suggestion() manual maupun _auto_apply_eligible()
+            # otonom) -- BUKAN sekadar dilarang di dokumentasi/komentar.
+            # Suggestion threshold (di bawah, cabang lain) TETAP jalan normal
+            # utk futures -- itu per-bot, aman (lihat komentar __init__).
+            if self._market_type != "spot":
+                msg = (
+                    f"Suggestion tipe weight_* DIBLOKIR utk market_type="
+                    f"'{self._market_type}' -- engine/profiles/weights.py "
+                    f"adalah file shared dgn spot, menulisnya dari futures "
+                    f"berisiko diam-diam mengubah scoring live spot saat "
+                    f"restart berikutnya. Butuh namespace per market-type di "
+                    f"weights.py dulu sebelum ini bisa diaktifkan utk futures."
+                )
+                log.warning(
+                    "MetaLearner[%s]: suggestion weight_* DITOLAK (shared-file guard): %s",
+                    self._market_type, sug.parameter_name,
+                )
+                return False, msg
             indicator = sug.parameter_name.replace("weight_", "")
             ok, msg = _apply_weight_change(
                 profile=sug.profile or "",

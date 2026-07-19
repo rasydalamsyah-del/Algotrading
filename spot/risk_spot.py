@@ -232,6 +232,14 @@ class RiskManager(BaseRiskManager):
             take_profit=round(tp, 8) if tp is not None else None,
         )
         log.info("Risk: %s | %s", symbol, assessment)
+        # [Opsi 1 -- audit item #2] Reserve slot ATOMIK di sini, masih di
+        # dalam _evaluate_lock yang sama dgn pengecekan max_open_positions
+        # di atas -- menutup race antar-worker GATE3_WORKERS. side="buy" di
+        # spot SELALU berarti posisi baru (side="sell" SELALU menutup
+        # existing, tidak lewat jalur ini). Caller (_handle_buy) WAJIB
+        # release_position_slot() kalau entry gagal setelah titik ini.
+        if side == "buy" and assessment.is_approved:
+            self.reserve_position_slot()
         return assessment
 
     def _compute_position_size(

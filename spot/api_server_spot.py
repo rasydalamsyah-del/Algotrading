@@ -70,6 +70,30 @@ v9 — TIER-A SECURITY AUDIT (full line-by-line read, 2156 → 2210 baris):
     yang baru diproteksi, 200 dengan key yang benar (auth tidak false-positive
     blokir akses legit), 429 muncul setelah >120 req/menit per IP (rate
     limiter benar-benar trigger, bukan cuma terpasang tapi diam).
+
+v10 — AUDIT ITEM #8: GENUINELY EVENT-DRIVEN /api/stream:
+  [ARSITEKTUR] /api/stream SEBELUMNYA (v8) transport SSE tapi mekanismenya
+    `while True: ... await asyncio.sleep(2.0)` -- server tetap POLLING DB
+    tiap 2 detik lalu push apa pun yang didapat, TIDAK dipicu oleh
+    perubahan state genuinely terjadi. Investigasi juga menemukan frontend
+    produksi (dashboard/*.dc.html) TIDAK PERNAH memakai endpoint ini sama
+    sekali (grep "EventSource" nihil) -- endpoint lama genuinely dead code
+    dari sisi client walau backend-nya ada.
+  [FIX] Subscribe ke TradingBot.event_bus (EventBus in-process baru,
+    engine/event_bus.py) -- event dipublish dari titik Tier 1 (engine/
+    database.py: save_trade/upsert_position/close_position/
+    mark_position_closing/upsert_universe_override/
+    deactivate_universe_override/save_parameter_change), transisi
+    halt/resume (engine/risk_base.py, satu choke point cover SEMUA jalur
+    halt: manual API, panic-close, auto drawdown/daily-loss/low-balance),
+    Tier 2 teragregasi (positions_snapshot per cycle SL/TP monitor,
+    snapshot equity), dan ticker (WebSocketFeed.on_ticker -- hook itu
+    SUDAH ADA sejak awal di exchange_spot.py tapi TIDAK PERNAH
+    disambungkan ke apa pun, throttled 1.5 detik/symbol sekarang).
+    Serialisasi payload TETAP di lapis API (_pos_dict()/_trade_dict()
+    lokal, disuntik ke engine/event_bus.py::serialize_event()) --
+    engine/database.py hanya publish objek ORM mentah, tidak tahu bentuk
+    field spot vs futures.
 """
 
 from __future__ import annotations
@@ -111,6 +135,8 @@ from engine.profiles.registry      import get_coin_profile, select_profile_from_
 from engine.profiles.base_profile  import PROFILE_EMOJI
 from engine.profiles.thresholds    import get_dynamic_threshold, DYNAMIC_THRESHOLD_MATRIX, ENTRY_THRESHOLDS
 from engine.profiles.weights       import LEVEL1_WEIGHTS
+from engine.event_bus              import serialize_event
+from engine.indicators.orderbook   import WhaleDetector
 from spot.risk_spot                   import HaltReason
 
 if TYPE_CHECKING:
@@ -770,6 +796,60 @@ def create_app(bot_getter) -> FastAPI:
                 for l in logs
             ]
         }
+
+    @app.get("/api/candles/{symbol:path}/indicators")
+    async def get_candles_with_indicators(
+        symbol:    str,
+        timeframe: str = "15m",
+        limit:     int = 100,
+        _: str = Depends(verify_api_key),
+    ):
+        """[BUG-FIX #34 -- ditemukan saat membangun endpoint futures]
+        SEBELUMNYA didaftarkan SETELAH `/api/candles/{symbol:path}` --
+        karena converter `:path` Starlette greedy (match termasuk slash
+        lanjutan) dan resolusi rute pakai urutan registrasi
+        pertama-menang, `/api/candles/X/indicators` SELALU ketangkap
+        handler get_candles() yang polos (return {candles, markers}),
+        endpoint ini TIDAK PERNAH genuinely reachable sejak dibuat.
+        Dibuktikan lewat TestClient langsung (bukan asumsi) sebelum fix:
+        response persis field get_candles(), bukan field endpoint ini.
+
+        Fix (pola sama dgn future/api_server_future.py, sudah diperbaiki
+        di task #16): route LEBIH SPESIFIK didaftarkan SEBELUM
+        `/api/candles/{symbol:path}`, supaya benar-benar reachable. Urutan
+        registrasi dicek langsung sebelum fix (grep -n), bukan diasumsikan
+        sama dgn futures. Isi handler sendiri TIDAK diubah -- OHLCV + kolom
+        enrich_production, straight (60 kolom indikator utk chart/debug)."""
+        b   = bot()
+        sym = urllib.parse.unquote(symbol).upper()
+        if not b.exchange or not b.exchange.is_connected:
+            raise HTTPException(status_code=503, detail="Exchange belum terhubung")
+        try:
+            raw  = await b.exchange.fetch_ohlcv(sym, timeframe, limit=limit + 50)
+            cols = ["timestamp", "open", "high", "low", "close", "volume"]
+            df   = pd.DataFrame(raw, columns=cols)
+            df["timestamp"] = pd.to_datetime(df["timestamp"], unit="ms")
+            df.set_index("timestamp", inplace=True)
+            df.ta.enrich_production()
+            # Kembalikan hanya N bar terakhir setelah indikator stabil
+            df = df.iloc[-limit:]
+            records = []
+            for ts, row in df.iterrows():
+                rec = {"timestamp": int(ts.timestamp() * 1000)}
+                for col in df.columns:
+                    v = row[col]
+                    rec[col] = None if (isinstance(v, float) and (math.isnan(v) or math.isinf(v))) else (float(v) if hasattr(v, "item") else v)
+                records.append(rec)
+            return {
+                "symbol":    sym,
+                "timeframe": timeframe,
+                "columns":   list(df.columns),
+                "candles":   records,
+                "count":     len(records),
+                "timestamp": _iso(_utcnow()),
+            }
+        except Exception as e:
+            raise HTTPException(status_code=502, detail=str(e))
 
     @app.get("/api/candles/{symbol:path}")
     async def get_candles(
@@ -2084,6 +2164,29 @@ def create_app(bot_getter) -> FastAPI:
                 coins      = [{"symbol": s, "volume_24h": 0}
                               for s in b.config.get("universe_watchlist", [])]
                 scanned_at = ""
+
+            # [BUG-FIX #32 -- ditemukan saat membangun endpoint futures]
+            # SEBELUMNYA `coins` cuma dari universe.json (atau fallback
+            # config["universe_watchlist"]) -- db.get_active_universe_
+            # overrides() TIDAK PERNAH dikonsultasi di sini. Symbol yang
+            # ditambah manual lewat POST /api/universe/add genuinely ikut
+            # discan/trading (scanner loop main_spot.py hot-reload dari DB
+            # overrides terpisah, sudah benar), TAPI tidak pernah muncul
+            # di tampilan endpoint ini -- gap TAMPILAN, bukan gap
+            # fungsional (dikonfirmasi lewat baca kode scanner loop
+            # sebelum fix ini). Fix: gabungkan symbol dari DB overrides yg
+            # belum ada di `coins`, volume_24h default 0 (belum ter-scan
+            # volume-nya, sama pola dgn fallback config di atas).
+            try:
+                db_overrides    = await b.db.get_active_universe_overrides()
+                existing_symbols = {c["symbol"] for c in coins}
+                for ov_sym in db_overrides:
+                    if ov_sym not in existing_symbols:
+                        coins.append({"symbol": ov_sym, "volume_24h": 0})
+                        existing_symbols.add(ov_sym)
+            except Exception as _ov_err:
+                log.debug("universe/detail: gagal baca DB overrides: %s", _ov_err)
+
             result = []
             for c in coins:
                 symbol = c["symbol"]
@@ -2148,18 +2251,55 @@ def create_app(bot_getter) -> FastAPI:
         symbol: str,
         _: str = Depends(verify_api_key),
     ):
-        """[NEW v8] Live orderbook + danger level dari ws_feed."""
+        """[BUG-FIX #33 -- ditemukan saat membangun endpoint futures]
+        SEBELUMNYA memanggil `_get_ob_danger_level(ob)` dengan HANYA 1
+        argumen (dict orderbook mentah) -- tapi fungsi aslinya butuh 5
+        argumen wajib (symbol, bids, asks, ratio, confidence), ratio/
+        confidence datang dari WhaleDetector.analyze(), BUKAN dari
+        orderbook mentah. Endpoint ini SELALU TypeError -> HTTP 502 setiap
+        dipanggil sejak dibuat, dikonfirmasi lewat pembacaan kode langsung
+        (bukan asumsi) -- endpoint tidak pernah genuinely berfungsi.
+
+        Fix (pola sama dgn future/api_server_future.py::get_orderbook(),
+        TAPI TIDAK straight-copy -- lihat catatan wall_first_seen di
+        bawah): hitung ratio/confidence sungguhan lewat
+        WhaleDetector.analyze(), pakai instance WhaleDetector() BARU per
+        request (bukan reuse b._whale_detectors[symbol] yang dipegang live
+        scanner loop) -- supaya panggilan endpoint read-only ini TIDAK
+        mengotori state internal (_prev_bids/_prev_asks utk spoofing
+        detection) yang dipakai keputusan trading live.
+
+        [BEDA STRUKTURAL dari futures, diverifikasi bukan diasumsikan]
+        Scanner loop spot (run_scanner()) memanggil wd.analyze() dengan
+        `self._ob_wall_first_seen` -- dict PERSISTEN milik bot (beda dari
+        futures yang selalu pakai `{}` di jalur live-nya, futures memang
+        tidak punya atribut _ob_wall_first_seen sama sekali). Di sini
+        SENGAJA tetap pakai `{}` baru (BUKAN self._ob_wall_first_seen
+        milik bot), konsisten dgn alasan yang sama persis kenapa
+        WhaleDetector()-nya juga instance baru: endpoint read-only ini
+        tidak boleh menyentuh dict yang sama yang dipegang scanner loop
+        live (wd.analyze() me-mutasi dict wall_first_seen yang diteruskan,
+        `wfs[key]=now`/`wfs.pop(key,None)`) -- kalau pakai
+        self._ob_wall_first_seen, panggilan API ini akan diam-diam
+        mengubah wall-age tracking yang dipakai keputusan Gate 2 live."""
         b   = bot()
         sym = urllib.parse.unquote(symbol).upper()
         if not b.ws_feed:
             raise HTTPException(status_code=503, detail="WebSocket feed tidak aktif")
         try:
-            ob = b.ws_feed.get_orderbook(sym) or {}
-            danger = getattr(b, "_get_ob_danger_level", lambda *a: 0.0)(ob)
+            ob   = b.ws_feed.get_orderbook(sym) or {}
+            bids = ob.get("bids", [])
+            asks = ob.get("asks", [])
+            if bids and asks:
+                wd  = WhaleDetector()
+                res = wd.analyze(sym, bids, asks, {})
+                danger = b._get_ob_danger_level(sym, bids, asks, res["ratio"], res["confidence"])
+            else:
+                danger = 10  # orderbook kosong -- persis _get_ob_danger_level(bids/asks kosong)
             return {
                 "symbol":       sym,
-                "bids":         ob.get("bids", [])[:20],
-                "asks":         ob.get("asks", [])[:20],
+                "bids":         bids[:20],
+                "asks":         asks[:20],
                 "spread_pct":   b.ws_feed.get_spread(sym),
                 "mid_price":    b.ws_feed.get_mid_price(sym),
                 "danger_level": round(danger, 4),
@@ -2214,9 +2354,40 @@ def create_app(bot_getter) -> FastAPI:
         req: UniverseAddRequest,
         _:   str = Depends(verify_api_key),
     ):
-        """[NEW v8] Tambah coin ke universe override (hot-reload tanpa restart)."""
+        """[BUG-FIX #31 -- ditemukan saat membangun endpoint futures]
+        SEBELUMNYA nol validasi sebelum menulis symbol ke universe_overrides
+        -- ditelusuri seluruh pipeline (endpoint -> DB -> main_spot.py
+        run_scanner hot-reload -> WebSocketFeed.add_symbols) dan dikonfirmasi
+        NOL validasi exchange di titik manapun. Symbol arbitrer bisa masuk
+        DB lalu bikin ws_feed subscription yang permanen gagal (REST_
+        FALLBACK loop error berulang) tanpa pernah ketahuan lewat API
+        response manapun.
+
+        Fix (pola sama dgn future/api_server_future.py::universe_add()):
+        validasi is_symbol_supported() SEBELUM tulis ke DB, reject 400
+        kalau symbol tidak dikenal, 503 kalau exchange belum connect.
+
+        [Diverifikasi, BUKAN diasumsikan, tidak straight-copy] is_symbol_
+        supported() didefinisikan di engine/exchange_base.py::
+        BaseExchangeConnector (shared) -- spot/exchange_spot.py::
+        ExchangeConnector genuinely subclass base itu & pass
+        default_type="spot" eksplisit ke super().__init__() (dicek
+        langsung), jadi method ini resolve simbol lewat ccxt instance yang
+        SUDAH benar dikonfigurasi utk market spot -- tidak ada penyesuaian
+        struktural yang diperlukan spt kasus _ob_wall_first_seen (#33)
+        sebelumnya. Catatan terpisah, DI LUAR scope fix ini: spot/
+        exchange_spot.py::auto_scan_and_populate() (auto-scan universe)
+        JUGA tidak punya parameter is_valid_symbol spt versi futures-nya --
+        gap serupa di jalur berbeda, tidak diperbaiki di sini."""
         b   = bot()
         sym = req.symbol.upper().strip()
+        if not b.exchange or not b.exchange.is_connected:
+            raise HTTPException(status_code=503, detail="Exchange belum terhubung")
+        if not b.exchange.is_symbol_supported(sym):
+            raise HTTPException(
+                status_code=400,
+                detail=f"Symbol {sym} tidak dikenali/tidak tersedia di Binance.",
+            )
         try:
             # [BUG-FIX -- ditemukan lewat eksperimen] Sebelumnya memanggil
             # upsert_universe_override(..., is_active=True, ...) -- tapi
@@ -2300,74 +2471,73 @@ def create_app(bot_getter) -> FastAPI:
             log.warning("force_analyze [%s]: %s", sym, e)
             raise HTTPException(status_code=500, detail=str(e))
 
-    @app.get("/api/candles/{symbol:path}/indicators")
-    async def get_candles_with_indicators(
-        symbol:    str,
-        timeframe: str = "15m",
-        limit:     int = 100,
-        _: str = Depends(verify_api_key),
-    ):
-        """[NEW v8] OHLCV + semua 60 kolom enrich_production untuk chart + debug."""
-        b   = bot()
-        sym = urllib.parse.unquote(symbol).upper()
-        if not b.exchange or not b.exchange.is_connected:
-            raise HTTPException(status_code=503, detail="Exchange belum terhubung")
-        try:
-            raw  = await b.exchange.fetch_ohlcv(sym, timeframe, limit=limit + 50)
-            cols = ["timestamp", "open", "high", "low", "close", "volume"]
-            df   = pd.DataFrame(raw, columns=cols)
-            df["timestamp"] = pd.to_datetime(df["timestamp"], unit="ms")
-            df.set_index("timestamp", inplace=True)
-            df.ta.enrich_production()
-            # Kembalikan hanya N bar terakhir setelah indikator stabil
-            df = df.iloc[-limit:]
-            records = []
-            for ts, row in df.iterrows():
-                rec = {"timestamp": int(ts.timestamp() * 1000)}
-                for col in df.columns:
-                    v = row[col]
-                    rec[col] = None if (isinstance(v, float) and (math.isnan(v) or math.isinf(v))) else (float(v) if hasattr(v, "item") else v)
-                records.append(rec)
-            return {
-                "symbol":    sym,
-                "timeframe": timeframe,
-                "columns":   list(df.columns),
-                "candles":   records,
-                "count":     len(records),
-                "timestamp": _iso(_utcnow()),
-            }
-        except Exception as e:
-            raise HTTPException(status_code=502, detail=str(e))
-
     @app.get("/api/stream")
     async def stream_events(
         _: str = Depends(verify_api_key),
         request: Request = None,
     ):
-        """
-        [NEW v8] Server-Sent Events — posisi + ticker real-time setiap 2 detik.
+        """[AUDIT ITEM #8 -- genuinely event-driven, BUKAN polling berbalut
+        SSE] Versi SEBELUMNYA (dikonfirmasi lewat investigasi #8): transport
+        SSE, tapi mekanismenya sendiri `while True: ... await asyncio.
+        sleep(2.0)` -- server tetap POLLING DB tiap 2 detik lalu push apa
+        pun yang didapat, TIDAK dipicu oleh perubahan state genuinely
+        terjadi (dan frontend produksi -- dashboard/*.dc.html -- bahkan
+        TIDAK PERNAH memakai endpoint ini sama sekali, dikonfirmasi grep
+        "EventSource" nihil di seluruh direktori dashboard).
+
+        Sekarang: subscribe ke b.event_bus (in-process, lihat
+        engine/event_bus.py), tiap event yang dipublish dari titik Tier 1/
+        Tier 2 (engine/database.py, engine/risk_base.py) atau ticker
+        (WebSocketFeed.on_ticker, throttled) diteruskan APA ADANYA begitu
+        terjadi -- genuinely push, bukan interval tetap yang tidak
+        berhubungan dgn kapan state sungguhan berubah.
+
         Client: const es = new EventSource('/api/stream', {headers: {'X-API-Key': key}})
         """
         b = bot()
 
         async def event_generator():
-            while True:
-                if request and await request.is_disconnected():
-                    break
+            async with b.event_bus.subscribe() as sub:
+                # Snapshot awal saat connect -- client tidak perlu nunggu
+                # event pertama utk tahu state saat ini (pola sama dgn versi
+                # lama, sekadar sekali di awal, bukan diulang tiap 2 detik).
                 try:
                     positions = await b.db.get_open_positions()
                     tickers   = b.ws_feed.live_tickers if b.ws_feed else {}
-                    payload   = json.dumps({
-                        "positions": [_pos_dict(p) for p in positions],
-                        "tickers":   {k: {"last": v.get("last"), "change_pct": v.get("change_pct")}
-                                      for k, v in tickers.items()},
-                        "halted":    b.risk_manager.is_halted if b.risk_manager else False,
-                        "ts":        _iso(_utcnow()),
-                    }, ensure_ascii=False)
-                    yield f"data: {payload}\n\n"
+                    initial = {
+                        "type": "initial_snapshot",
+                        "market_type": "spot",
+                        "ts": time.time(),
+                        "data": {
+                            "positions": [_pos_dict(p) for p in positions],
+                            "tickers":   {k: {"last": v.get("last"), "change_pct": v.get("change_pct")}
+                                          for k, v in tickers.items()},
+                            "halted":    b.risk_manager.is_halted if b.risk_manager else False,
+                        },
+                    }
+                    yield f"data: {json.dumps(initial, ensure_ascii=False)}\n\n"
                 except Exception as exc:
-                    yield f"data: {{\"error\": \"{exc}\"}}\n\n"
-                await asyncio.sleep(2.0)
+                    yield f"data: {json.dumps({'type': 'error', 'data': str(exc)}, ensure_ascii=False)}\n\n"
+
+                while True:
+                    if request and await request.is_disconnected():
+                        break
+                    try:
+                        # Timeout HANYA utk periodik cek disconnect + kirim
+                        # heartbeat (cegah proxy/load-balancer memutus koneksi
+                        # idle) -- BUKAN polling DB, queue.get() menunggu
+                        # genuinely event baru dari EventBus.
+                        event = await asyncio.wait_for(sub.queue.get(), timeout=15.0)
+                    except asyncio.TimeoutError:
+                        yield ": heartbeat\n\n"
+                        continue
+                    try:
+                        payload = serialize_event(
+                            event, pos_dict_fn=_pos_dict, trade_dict_fn=_trade_dict, iso_fn=_iso,
+                        )
+                        yield f"data: {json.dumps(payload, ensure_ascii=False, default=str)}\n\n"
+                    except Exception as exc:
+                        log.warning("SSE serialize error [%s]: %s", event.type, exc)
 
         return StreamingResponse(
             event_generator(),

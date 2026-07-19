@@ -1131,6 +1131,7 @@ class VolumetricBreakoutStrategyBase(BaseStrategy):
                         suggested_tp=scored.suggested_tp,
                         signal_confidence=getattr(scored, "confidence", None),
                         sentiment_score=_sentiment_for_log,
+                        side=side,
                     )
                 except Exception as _se:
                     log.debug("Gagal save signal_score dari strategy: %s", _se)
