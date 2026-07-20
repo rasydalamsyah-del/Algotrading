@@ -135,9 +135,16 @@ class ExchangeConnector(BaseExchangeConnector):
         side:       str,
         amount:     float,
         price:      Optional[float],
+        reduce_only: bool = False,
     ) -> Dict:
         """[PAPER TRADING] Simulasikan fill order pakai harga pasar RIIL
         (fetch_ticker asli, read-only, tidak pernah menyentuh endpoint order).
+
+        [ITEM #15 -- Temuan C] `reduce_only` diterima HANYA utk kompatibilitas
+        signature dgn dispatcher generik (engine/exchange_base.py::create_order())
+        -- TIDAK DIPAKAI di sini. Spot paper trading mensimulasikan SALDO
+        per-currency (bukan "posisi" spt futures), item #15 (root cause
+        _paper_positions futures) tidak berlaku di spot sama sekali.
 
         Untuk order "market": fill di best ask (buy) / best bid (sell) harga
         SAAT INI dari exchange sungguhan.

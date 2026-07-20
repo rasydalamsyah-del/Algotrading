@@ -321,9 +321,375 @@ test baru di level classifier (belum ada sama sekali), dan sign-off
 eksplisit terpisah karena risiko produksi — bukan sesuatu yang aman
 dilipat ke pekerjaan wiring `composite_score_short`.
 
-**Status:** DITUNDA. Sub-Batch B jalan terus dengan `atr_score_short`
-di-alias ke `atr_score` (known limitation, didokumentasikan, BUKAN
-diklaim arah-agnostic).
+**Status:** ✅ SELESAI (dikerjakan sbg proyek terpisah 19-20 Juli) — lihat
+bagian "PROYEK: Root-Cause Fix `_calc_atr_percentile()` (Item Audit #4)"
+di bawah utk detail lengkap. `classifier.py` SUDAH bermigrasi ke
+`atr_percentile_normalized` (Opsi 1, direct switch), field lama tetap
+ada sbg jalan mundur, regresi 824/824 PASS. **Bot BELUM direstart** —
+fix ini belum aktif di produksi sampai restart dilakukan. Sub-Batch B
+(MTF, proyek lama, sudah CLOSED) tetap jalan dengan `atr_score_short`
+di-alias ke `atr_score` seperti semula — tidak disentuh oleh pekerjaan
+#4 ini (`atr_score`/`atr_score_short` beda field dari `atr_percentile`,
+lihat item audit #37 utk kaitannya).
+
+---
+
+## ✅ PROYEK: Root-Cause Fix `_calc_atr_percentile()` (Item Audit #4) — SELESAI, MENUNGGU RESTART
+
+Proyek terpisah dari MTF Composite Side-Aware (yang sudah CLOSED di atas)
+dan terpisah dari "24 sub-score, 8 batch". Base: `_calc_atr_percentile()`
+me-ranking ATR **absolut** (dolar) terhadap window historis, bukan
+`atr_pct` (ternormalisasi harga) — bias arah yang mempengaruhi regime
+detection LIVE (`classifier.py::_is_volatile()`/`_calc_confidence()`).
+Full detail blast-radius & investigasi awal ada di bagian "TEMUAN
+TERPISAH" di atas. Entri backlog: `docs/AUDIT_FUNGSIONAL_MENDALAM.md`
+item #4.
+
+**Aturan kerja khusus proyek ini** (disepakati eksplisit karena menyentuh
+regime detection live): dikerjakan tahap-per-tahap dengan checkpoint —
+(a) investigasi Tahap 0, (b) test baseline dari NOL sebelum kode apa pun
+diubah, (c) opsi perbaikan + trade-off dijelaskan, TUNGGU keputusan, (d)
+implementasi, (e) regresi penuh, (f) update dokumentasi HANYA setelah
+kode+test lolos. Tidak ada bot yang di-restart selama proyek ini
+dikerjakan.
+
+### ✅ Tahap 0 — Investigasi (selesai)
+Baca tuntas `_is_volatile()`, `_calc_confidence()`, `_classify_raw()`,
+`_calc_atr_percentile()`. Blast radius dikonfirmasi ulang via grep (bukan
+cuma warisan catatan lama): `classifier.py` (decision-making, live),
+`volatility.py::_score_atr()` (feeds composite), `spot/future
+api_server_*.py` (read-only), `ta_compat.py::atr_percentile()` (dead
+code, nol call site di luar filenya sendiri). Tidak ada bukti magic
+number regime dikalibrasi thd bias (literal polos, nol komentar
+kalibrasi).
+
+### ✅ Data historis riil — TIDAK tersedia di sandbox
+`./data/` kosong (lokasi default `DATABASE_URL` sqlite), dan bahkan
+seandainya ada, tabel `ohlcv` (`engine/database.py::OHLCVBar`) adalah
+**dead schema** — didefinisikan tapi tidak pernah ditulis/dibaca di
+manapun di seluruh codebase (candle difetch live dari exchange, tidak
+pernah dipersist). Validasi proyek ini karena itu pakai data SINTETIS
+(random walk persentase, seed tetap, pola fuzz Sub-Batch B) —
+didokumentasikan eksplisit di setiap test sebagai representatif, BUKAN
+klaim "persis begini di pasar riil".
+
+### ✅ Test baseline (50 test, `engine/intelligence/test_classifier_regime_baseline.py`)
+`_is_volatile()`, `_calc_confidence()`, `_classify_raw()` sebelumnya NOL
+test coverage di seluruh repo (dikonfirmasi: `test_regime_side_aware.py`
+23 test beroperasi di level `MarketRegime` enum langsung, tidak pernah
+construct `IndicatorSet`/panggil fungsi ini). Test baseline dibangun
+MENGUNCI perilaku SAAT INI (termasuk bias yang belum diperbaiki) sbg
+jaring pengaman before/after — mencakup semua breakpoint ADX, urutan
+prioritas penuh `_classify_raw()` (validity → volatile → bear → bull →
+ranging → undefined), plus karakterisasi kuantitatif bias `_calc_atr_percentile()`
+via data sintetis (choppy kontrol, tren sedang/kuat) sebelum fix apa pun.
+
+### ✅ Tahap A — Validasi independen `atr_pct` SEBELUM dipakai sbg basis fix
+1. **Formula dikonfirmasi identik referensi resmi**: `atr_pct =
+   (atr/close)*100` cocok PERSIS dgn source code `pandas_ta`
+   (`atr(..., percent=True)` → `atr *= 100/close`, dicek langsung dari
+   source, bukan dokumentasi/asumsi).
+2. **Swap-symmetry test (geometric mirror, `anchor²/close`) menemukan
+   `atr_pct` SENDIRI punya bias residual** — BEDA KATEGORI & JAUH LEBIH
+   KECIL dari bug `_calc_atr_percentile()`: root cause smoothing-lag
+   (ATR dolar di-Wilder-smooth dari bar-bar lampau yg harganya sudah
+   beda level, baru dibagi close HARI INI). Terukur: tanpa drift ~0-8%
+   relatif (noise-level); drift sedang ~10-25%; drift kuat sustained
+   ~40-70%. Dikonfirmasi mekanismenya via sweep `period` (period=1 →
+   ~2% nyaris nol; period=14 produksi → ~50%; period=28 → ~101%) — bukan
+   formula salah, karakteristik struktural yg SAMA dgn `pandas_ta`
+   (`atr(..., percent=True)` konstruksinya identik).
+3. **Keputusan pemilik proyek**: LANJUT pakai `atr_pct` apa adanya
+   sbg basis ranking (Opsi 1) — bias ini order-of-magnitude lebih kecil
+   dari #4 & bukan blocker. Didokumentasikan sbg **item audit #37**
+   terpisah di `docs/AUDIT_FUNGSIONAL_MENDALAM.md` (blast radius LEBIH
+   LUAS dari #4: `risk_base.py` dynamic daily limit LIVE,
+   `compute_adaptive_leverage()` LIVE, `validator.py`) — status "diketahui,
+   di luar scope #4, risiko rendah di kondisi pasar normal", BUKAN
+   diperbaiki di proyek ini.
+
+### ✅ Tahap B — Perluas skenario data uji (2 fixture baru, 5 test baru)
+Fixture Tahap A (drift konstan monoton) diperluas dgn 2 skenario lebih
+realistis, seed TETAP (`PULLBACK_FIXTURE_SEED=10`, `REGIME_SHIFT_FIXTURE_SEED=20`,
+dicatat eksplisit di kode utk dipakai ulang Tahap D):
+- **Pullback berkala** (tren + retracement tiap 20 bar) — bias tetap ada,
+  gap 13-50 poin tergantung kekuatan drift (lebih kecil & lebih "berisik"
+  dari drift monoton murni, tapi arahnya konsisten).
+- **Regime shift** (choppy 80 bar → trending kuat 100 bar → choppy 80 bar)
+  — temuan baru: bias TIDAK langsung hilang saat regime kembali choppy,
+  "melekat" (lag) ~30 poin gap di segmen choppy PASCA-transisi krn
+  lookback window 100-bar masih memuat data periode trending. Segmen
+  choppy SEBELUM shift jadi kontrol yg identik 100% (drift=0 di kedua
+  arah) — bukti metodologi pengukuran sendiri tidak bias.
+
+### ✅ Tahap C — Implementasi Opsi B (dual-field aditif)
+`engine/indicators/volatility.py::calculate_atr_enhanced()`: `atr_pct`
+dihitung sbg SERIES penuh (`atr_pct_series = atr_series/close_safe*100`,
+bukan cuma bar terakhir), field baru `atr_percentile_normalized` diisi
+via `_calc_atr_percentile(atr_pct_series, ...)` — REUSE fungsi ranking
+yang SAMA persis (generic, tidak spesifik ke "ATR" apa pun), cuma input
+series-nya beda dari `atr_percentile` lama. `engine/core/models.py`:
+field baru `atr_percentile_normalized: Optional[float] = None` di
+`VolatilityIndicators`, default `None` di semua early-return path
+(konsisten konvensi `atr_percentile`).
+**Bug copy-omission ditemukan & diperbaiki sendiri** (pola yg sama
+persis diwanti-wanti CLAUDE.md sejak Sub-Batch A): `score_volatility()`
+hand-copy field dari `calculate_atr_enhanced()` ke `result` satu-satu —
+`atr_percentile_normalized` KETINGGALAN di baris copy tsb, ditemukan
+sebelum jadi bug produksi (bukan sesudah), 1 baris fix.
+`classifier.py` **TIDAK disentuh** (field lama `atr_percentile` tetap
+dipakai, sesuai instruksi eksplisit). Field lama (`atr_percentile`,
+`composite_score`, dst) dibuktikan byte-identical via regresi penuh
+(murni aditif).
+
+### ✅ Tahap D — Before/after pada seri IDENTIK (9 test baru)
+Reuse 5 fixture Tahap A + 2 fixture Tahap B (seed sama persis), ukur gap
+`atr_percentile` (lama) vs `atr_percentile_normalized` (baru):
+
+| Skenario | gap lama | gap baru | reduksi |
+|---|---|---|---|
+| Choppy kontrol | 0.00 | 0.00 | — (tetap simetris) |
+| Tren sedang | 36.67 | 1.81 | 95.1% |
+| Tren kuat | 78.24 | -6.12 | 92.2% |
+| Pullback sedang | 13.37 | -7.14 | 46.6% |
+| Pullback kuat | 50.11 | -2.08 | 95.9% |
+| Regime-shift, trending | 48.73 | 5.36 | 89.0% |
+| Regime-shift, choppy PASCA-transisi | 29.75 | 8.00 | 73.1% |
+
+Semua 7 skenario reduksi signifikan (46.6-95.9%), nol yang membesar —
+kriteria sukses TERPENUHI. **Catatan penting**: beberapa skenario tanda
+gap BERBALIK (bukan cuma mengecil ke nol) — EKSPEKTASI BENAR (field
+baru mewarisi bias residual `atr_pct`/item #37, mekanisme berbeda dari
+#4), dinilai berdasar MAGNITUDE (`|gap|`), bukan tanda. Efek "lingering"
+Tahap B (bias melekat ke choppy pasca-transisi) TIDAK hilang total di
+field baru, tapi tereduksi 73.1% — konsisten dgn sifat strukturalnya
+(lookback window, bukan mekanisme ranking-absolut #4).
+
+### ✅ Tahap E — Swap-symmetry lock-in (4 test baru)
+Reuse metodologi geometric-mirror `test_atr_percentile_known_bug_documented_geometric_mirror`
+(existing, Sub-Batch B) persis apples-to-apples. Field lama dikonfirmasi
+TIDAK berubah (99.5 vs 2.5, byte-identical). Field baru: pada fixture
+EKSTREM tunggal (seed=7, window pendek 120 bar drift tinggi tanpa
+noise-reset) gap masih ~50 poin -- **BUKAN diklaim mendekati simetri
+sempurna di titik ekstrem ini**, TAPI signifikan lebih baik dari gap
+lama 97 poin (~48% reduksi bahkan di skenario terburuk). Karakterisasi
+multi-seed (20 seed) lebih meyakinkan: gap lama konsisten parah (mean
+>85, tidak pernah < 84 poin), gap baru mean ~80% lebih kecil & worst-case
+jauh lebih rendah (bounded, bukan konsisten near-total-flip spt bug
+lama).
+
+Total test s.d. Tahap E: 68 (`test_classifier_regime_baseline.py`).
+Regresi penuh: engine 504/504, spot 107/107, future 206/206 — nol
+regresi, `classifier.py` dikonfirmasi byte-identical (belum disentuh
+sampai titik ini).
+
+### ✅ Tahap F — Validasi data riil (Binance, read-only, 2 bagian)
+
+**Bagian 1 — temuan sampingan dicatat sbg item audit #38** (BUKAN
+dikerjakan di proyek ini): validasi dampak riil utk temuan bias
+Sub-Batch A/B (`bb_score`/`kc_score`/`atr_score_short`) ternyata BELUM
+PERNAH dilakukan — semua divalidasi cuma via fuzz test sintetis, sama
+seperti #4 sebelum Tahap F ini. Dicatat di
+`docs/AUDIT_FUNGSIONAL_MENDALAM.md`, status "diketahui, bukan blocker,
+tidak mendesak" — proyek MTF (Sub-Batch A/B) CLOSED, TIDAK disentuh
+ulang.
+
+**Bagian 2 — validasi data riil diperluas, 7 simbol × 22 periode ×
+9 tahun histori** (BTC sejak 2017, DOGE/LINK/XRP/SOL/BONK/ARB dari
+watchlist aktual `.env`, dipilih algoritmik dari statistik return/vol
+riil — BUKAN cherry-pick):
+
+| Kondisi riil | Simbol/tahun | Return |
+|---|---|---|
+| Bull run historis | BTC 2017 | +416% (90 hari) |
+| Crash historis | BTC 2018 | -61.3% (90 hari) |
+| Crash COVID | LINK Mar 2020 | -54.4% |
+| Crypto winter Terra/Luna | LINK & SOL Apr-Jul 2022 (window kalender SAMA) | -65.6% / -75.6% |
+| Krisis FTX | SOL Nov 2022 | -63.7% |
+| Bull run awal 2021 | XRP | +528% (90 hari) |
+| Pump meme ekstrem | DOGE Nov 2024, BONK 2025 | +106% / +227% |
+
+Hasil: gap `atr_percentile` (lama) vs `atr_percentile_normalized` (baru)
+pada 8 pasangan up-vs-down riil: **|gap| 0.34-3.59 poin** — jauh lebih
+kecil dari sintetis (13-97 poin), krn pasar riil bergerak lewat ledakan
+volatilitas singkat (volatility clustering) diselingi konsolidasi,
+BUKAN drift konstan sepanjang seluruh window lookback 100-bar (25 jam)
+spt fixture sintetis idealisasi (dibuktikan lewat zoom ke breakout BTC
+Nov 2024: metrik melonjak benar saat breakout asli, lalu ternormalisasi
+lagi setelah lewat — bukan bias, tapi volatilitas riil yg terdeteksi
+benar). **TAPI arah bias tetap konsisten scr agregat**: gap lama rata2
+bertanda **+1.68** (6 dari 8 pasangan searah hipotesis bug — uptrend
+lbh tinggi dari downtrend), gap baru rata2 **-0.08** (nyaris nol, tilt
+sistematis hilang) — fix genuinely menghilangkan bias arah rata-rata,
+meski di level periode individual efeknya kecil dibanding noise pasar.
+Semua data mentah (23 CSV, script fetch+analisis) tersimpan di
+scratchpad sesi, bisa direproduksi ulang.
+
+### ✅ Tahap G — Migrasi `classifier.py` (keputusan final: Opsi 1, direct switch)
+
+**Keputusan pemilik proyek**: migrasi LANGSUNG (Opsi 1), BUKAN
+staged-rollout via config flag (Opsi C yg tadinya dipertimbangkan) —
+dasar keputusan: dampak riil kecil (Tahap F, gap 0.34-3.59 poin, bukan
+puluhan poin spt sintetis) + arah bias tetap konsisten scr agregat
+(worth fixing) + dual logging (bukan flag) sudah cukup sbg jaring
+pengaman ringan tanpa kompleksitas tambahan.
+
+**Implementasi**: `_is_volatile()` & `_calc_confidence()`
+(`engine/intelligence/classifier.py`) sekarang baca
+`iset.volatility.atr_percentile_normalized`, BUKAN `atr_percentile`
+lagi. Field lama **TIDAK dihapus** dari `models.py` — tetap terisi
+produksi (dashboard/API/referensi, jalan mundur kalau perlu rollback
+tanpa perlu code change, cukup baca field lama lagi). 1 baris
+`log.debug()` ditambahkan di tiap titik pemakaian (`_is_volatile()`
+& `_calc_confidence()`), mencatat KEDUA nilai (lama vs baru)
+berdampingan setiap panggilan — jejak retrospektif pasca-restart nanti,
+tanpa flag config terpisah.
+
+**Test**: 5 test lama (`TestIsVolatileBaseline`,
+`TestCalcConfidenceVolatileExpansionBranch`,
+`TestClassifyRawPriorityOrder`) di-update dari set field lama →
+field baru (sesuai field yg SEKARANG benar-benar dibaca produksi) +
+6 test baru (`TestItem4ClassifierMigrationDirectSwitch`) yg secara
+eksplisit membuktikan: field lama diabaikan, field baru yg menentukan,
+field lama tetap terisi di `calculate_atr_enhanced()` (bukti non-removal),
+`log.debug()` mencatat kedua nilai, dan alur `_classify_raw()` end-to-end
+memakai field baru. Total test proyek: **75**
+(`test_classifier_regime_baseline.py`).
+
+**Regresi penuh (dijalankan ULANG dari nol setelah sesi sempat
+terputus di tengah jalan, integritas file diverifikasi dulu sebelum
+regresi ulang)**: engine 511/511, spot 107/107, future 206/206 —
+**824/824 total PASS, 0 gagal, 0 error**. Import sweep tambahan
+(`classifier.py`, `observer.py`, `scorer.py`, `commander.py`,
+`strategy_base.py`, `main_spot.py`, `main_future.py`,
+`position_sync_spot.py`, `position_sync_futures.py`) — semua OK.
+
+**Status akhir #4: SELESAI (implementasi + migrasi + regresi lolos).**
+`atr_percentile` (lama) tetap ada di `models.py` sbg jalan mundur.
+**Bot BELUM direstart** — keputusan restart TERPISAH, menunggu
+pemilik proyek. **Belum di-push ke GitHub.**
+
+---
+
+## ✅ PROYEK: Root-Cause Fix `_paper_positions` Phantom Position (Item Audit #15) — SELESAI, MENUNGGU RESTART
+
+Proyek terpisah dari #4, dikerjakan setelahnya (urutan disepakati:
+#4 dulu, baru #15). Base temuan: `_paper_positions` (futures,
+`FutureExchangeConnector`) adalah sumber kebenaran ke-3 independen dari
+DB — urutan operasi close TIDAK atomic lintas paper-state & DB,
+mekanisme KONKRET penyebab posisi phantom (temuan #10 lama). Investigasi
+Tahap 0 (read-only) + simulasi (Tahap 1, tanpa bot live — bot sedang
+mati, DB/log sudah dihapus manual) menemukan TIGA temuan konkret lewat
+pembacaan kode langsung + reproduksi via test, BUKAN observasi live:
+
+**Temuan A** — `close_position_with_retry()` (engine/database.py) TIDAK
+PERNAH reset `is_closing=False` kalau semua retry gagal (cuma direset di
+jalur SUKSES) — filter `not p.is_closing` di phantom detector (#10)
+PERMANEN mengecualikan symbol itu, walau exchange genuinely sudah flat.
+
+**Temuan B** — futures TIDAK PUNYA padanan
+`spot::_reconcile_positions_on_startup()` sama sekali — beda dari spot,
+phantom futures tidak self-heal bahkan lewat restart.
+
+**Temuan C (paling kritis, berlaku exchange REAL)** — retry-close pada
+posisi yang exchange-nya sudah flat (krn Temuan A) disalahartikan
+`_simulate_order_fill()` sbg MEMBUKA posisi baru arah berlawanan —
+dikonfirmasi genuinely retrigger via `run_sl_tp_monitor()` (gerbang
+anti-duplikat cuma in-memory `_closing_symbols`, lepas otomatis lewat
+`finally` terlepas dari kolom DB `is_closing`).
+
+**Dependency A/C dibuktikan, bukan diasumsikan**: fix Temuan A (reset
+`is_closing`) TIDAK mencegah Temuan C — dibuktikan empiris (test tetap
+gagal dgn hasil sama sebelum C2/C1 ada, walau A sudah aktif) — keduanya
+independen krn gerbang retrigger baca `_closing_symbols` in-memory,
+bukan kolom `is_closing`.
+
+### Opsi yang dipilih per temuan
+
+- **Temuan A → Opsi A2**: reset `is_closing=False` terpusat di
+  `close_position_with_retry()` (bukan di tiap caller bot), dibungkus
+  try/except sendiri (kegagalan reset TIDAK menutupi exception asli).
+  Terbukti AMAN — tidak menciptakan race baru (guard concurrency
+  sebenarnya di in-memory, bukan kolom ini).
+- **Temuan B → Opsi B2 minimal**: `_reconcile_phantom_positions_on_startup()`
+  (futures, baru) reuse `find_untracked_positions()` ASLI, HANYA
+  `phantom_candidates` (auto-close tanpa debounce, aman krn dipanggil
+  sebelum task periodik dibuat — invarian `assert not self._tasks`,
+  pola sama persis spot). `untracked`/`amount_mismatches` SENGAJA di
+  luar scope (tetap jalur periodik existing). Koreksi diri penting saat
+  implementasi: `fetch_binance_futures_positions()` RAISE saat fetch
+  gagal, TAPI `find_untracked_positions()` (pembungkusnya) MENANGKAP
+  exception itu & return `fetch_failed=True` — bukan re-raise. Fix:
+  cek flag eksplisit, bukan cuma try/except.
+- **Temuan C → Opsi C3 (kombinasi C1+C2)**: **C2** (verify-before-send)
+  — `_do_close_position()` cek `_verify_position_exists_at_exchange()`
+  SEBELUM kirim order; kalau exchange sudah flat, skip order sama
+  sekali, langsung `_sync_db_close_without_order()` (harga terakhir
+  diketahui, bukan fetch ulang). Fail-safe ke `True` kalau fetch GAGAL
+  (bukan `False`) — mencegah kelas bug baru yang sama seriusnya
+  (auto-close DB padahal posisi asli mungkin masih ada). **C1**
+  (reduce-only backstop) — `reduce_only=True` diteruskan ke SEMUA jalur
+  order (`_execute_market`/`_execute_limit`/`_execute_iceberg`,
+  `engine/execution_base.py`) via `signal.metadata`; paper
+  (`_simulate_order_fill()`) menolak (`ReduceOnlyRejected`) kalau order
+  BUKAN genuinely mengurangi posisi existing berlawanan arah (termasuk
+  kasus "ada tapi searah = nambah"); live memakai `params={"reduceOnly":
+  True}` native (Binance/ccxt menolak sendiri). **Asimetri desain
+  disengaja**: paper — rejection auto-sync DB langsung (kondisi pasti
+  diketahui, deterministik); live — rejection JATUH ke jalur
+  "CLOSE ORDER GAGAL" existing (retry counter + notify manual), TIDAK
+  auto-sync, krn mem-parsing kode error exchange spesifik utk
+  memastikan penyebabnya PASTI "sudah closed duluan" berisiko salah
+  klasifikasi di uang sungguhan — proteksi utama live cukup "order
+  ditolak, tidak pernah buka posisi salah arah".
+
+### Bukti test (6 file baru, 63 test)
+
+- `test_item15_paper_position_race_simulation.py` — reproduksi awal
+  ketiga bug (paper connector langsung), diperbarui bertahap jadi bukti
+  fix (Temuan A, lalu C2) seiring tiap tahap selesai.
+- `test_item15_reconcile_phantom_startup.py` — 11 test Temuan B,
+  termasuk 3 test fetch-gagal eksplisit (diminta khusus).
+- `test_item15_verify_before_send.py` — 15 test C2 (unit
+  `_verify_position_exists_at_exchange`/`_sync_db_close_without_order` +
+  integrasi routing `_do_close_position()`).
+- `test_item15_reduce_only_backstop.py` — 15 test C1, termasuk bukti
+  TOCTOU spesifik (`assertLogs` konfirmasi C1 — bukan C2 — yang menutup
+  celah race sempit, dikoreksi sendiri dari desain awal yang keliru
+  memicu race 2x via panggilan verify terpisah).
+- `test_item15_final_integration.py` — **Tahap 3**, 1 test end-to-end
+  merekonstruksi race asli lewat pipeline produksi SUNGGUHAN (bukan
+  stub) dgn Temuan A + C2 + C1 aktif bersamaan dalam satu alur 2 siklus
+  SL/TP — hasil akhir: DB sinkron, exchange genuinely NOL posisi (bukan
+  cuma "tidak long lagi"), nol order baru di siklus ke-2.
+- 2 file test lama (`test_main_future_close_position_retry.py`,
+  `test_main_future_reduce_position_amount_retry.py`) disesuaikan
+  (exchange fake ditambah) supaya tetap menguji jalur normal (posisi
+  ada, order dikirim) tanpa diam-diam berubah makna oleh C2/C1.
+
+**Regresi penuh (final, semua tahap A+B+C1+C2+C3)**: engine 511/511,
+spot 107/107, future 254/254 — **872/872 total PASS, 0 gagal, 0 error**.
+Import sweep (`main_future`, `exchange_future`, `execution_future`,
+`exchange_base`, `execution_base`, `spot/exchange_spot`,
+`spot/main_spot`) — semua OK.
+
+**Status akhir #15: SELESAI (Temuan A + B + C1 + C2, semua
+diimplementasikan + diuji + regresi lolos).** **Bot BELUM direstart —
+keputusan restart TERPISAH, menunggu pemilik proyek. Belum di-push ke
+GitHub.**
+
+**📌 Temuan sampingan DICATAT, SENGAJA belum diperbaiki (butuh keputusan
+terpisah)**: `reduce_position_amount_with_retry()` (partial-close, item
+#28) punya pola gap IDENTIK dgn Temuan A SEBELUM fix — `is_closing`
+cuma direset di jalur sukses `reduce_position_amount()`, retry-exhausted
+TIDAK menyentuhnya. Gap yang sama utk amount-mismatch detector (item
+#36, filter `is_closing` sama persis spt phantom detector). Keputusan
+eksplisit Temuan A HANYA menyebut `close_position_with_retry()` (full
+close) — `reduce_position_amount_with_retry()` (partial close) BELUM
+disentuh, didokumentasikan langsung di komentar kode
+(`engine/database.py::close_position_with_retry()`) & di sini supaya
+tidak hilang. Perlu keputusan terpisah kalau mau diperbaiki (kemungkinan
+Opsi sama, A2-style, tapi butuh sign-off eksplisit sendiri).
 
 ---
 

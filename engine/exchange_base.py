@@ -35,6 +35,37 @@ def _utcnow() -> datetime:
     return datetime.now(timezone.utc).replace(tzinfo=None)
 
 
+class ReduceOnlyRejected(Exception):
+    """
+    [ITEM #15 -- Temuan C, Opsi C1] Dilempar saat order reduce-only
+    ditolak karena tidak ada posisi (cocok arah) untuk direduce SAAT
+    ORDER BENAR-BENAR DIEKSEKUSI -- backstop TOCTOU utk celah sisa Opsi
+    C2 (verify-before-send): antara _verify_position_exists_at_exchange()
+    dicek dan order dikirim, posisi bisa berubah (race sempit).
+
+    Paper mode (FutureExchangeConnector._simulate_order_fill()): dilempar
+    deterministik, kondisinya genuinely diketahui pasti -- caller
+    (_do_close_position()) BOLEH mempercayai ini sbg "sudah closed
+    duluan" dan langsung sinkron DB TANPA order baru.
+
+    Live mode: exchange asli (Binance Futures via ccxt) menerima
+    reduceOnly=True di params order sungguhan -- exchange SENDIRI yang
+    menolak kalau tidak ada posisi utk direduce (proteksi native,
+    dikonfirmasi ccxt/Binance API docs). TAPI penolakan itu datang
+    sbg exception ccxt generik (kode error spesifik Binance), BUKAN
+    exception class ini -- exception ini HANYA dipakai jalur paper.
+    Keputusan desain sengaja: untuk live, order yang ditolak exchange
+    tetap jatuh ke jalur "CLOSE ORDER GAGAL" existing (retry counter +
+    notify manual setelah 3x) -- BUKAN auto-sync DB seperti paper,
+    karena mem-parsing kode error exchange spesifik utk memastikan
+    penyebabnya PASTI "sudah closed duluan" (bukan sebab lain) berisiko
+    salah klasifikasi pada uang sungguhan. Proteksi UTAMA utk live
+    adalah order-nya DITOLAK exchange (tidak pernah membuka posisi salah
+    arah) -- itu sudah cukup sbg backstop, auto-sync DB cuma kenyamanan
+    tambahan yang aman diberikan di paper (kondisinya pasti diketahui).
+    """
+
+
 class BaseExchangeConnector:
     """
     Base class market-agnostic. Subclass (ExchangeConnector di spot/,
@@ -291,6 +322,13 @@ class BaseExchangeConnector:
         (WAJIB diimplementasikan subclass). Kalau tidak, kirim order asli ke
         exchange via ccxt. Logic dispatch ini sendiri market-agnostic --
         yang beda per market cuma ISI _simulate_order_fill().
+
+        [ITEM #15 -- Temuan C, Opsi C1] `params["reduceOnly"]` (kalau ada)
+        diteruskan APA ADANYA ke ccxt utk live (sudah didukung signature
+        sebelumnya, TIDAK BERUBAH) DAN SEKARANG JUGA diterjemahkan jadi
+        kwarg `reduce_only=` ke _simulate_order_fill() utk paper mode --
+        sebelumnya `params` sama sekali tidak diteruskan ke paper dispatch,
+        jadi reduce-only tidak pernah tersimulasikan paper trading.
         """
         params = params or {}
         amount = self.amount_to_precision(symbol, amount)
@@ -300,6 +338,7 @@ class BaseExchangeConnector:
         if self.paper_trading:
             return await self._simulate_order_fill(
                 symbol, order_type, side, amount, price,
+                reduce_only=bool(params.get("reduceOnly", False)),
             )
 
         t0 = time.monotonic()
@@ -323,6 +362,7 @@ class BaseExchangeConnector:
         side:       str,
         amount:     float,
         price:      Optional[float],
+        reduce_only: bool = False,
     ) -> Dict:
         raise NotImplementedError(
             "_simulate_order_fill() WAJIB diimplementasikan di subclass "

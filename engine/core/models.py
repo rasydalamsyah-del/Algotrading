@@ -336,6 +336,14 @@ class VolatilityIndicators:
     atr:              Optional[float] = None
     atr_pct:          Optional[float] = None
     atr_percentile:   Optional[float] = None
+    # [ITEM #4 -- Tahap C, Opsi B dual-field aditif] Ranking atr_pct
+    # (ternormalisasi harga) alih-alih ATR absolut -- root-cause fix utk
+    # bias arah di atr_percentile (lihat CLAUDE.md, item audit #4). Field
+    # LAMA (atr_percentile) TIDAK diubah/dihapus -- classifier.py masih
+    # baca field lama sampai keputusan terpisah diambil (lihat CLAUDE.md).
+    # atr_pct sendiri punya bias residual JAUH lebih kecil (item audit
+    # #37, terdokumentasi terpisah, PRE-EXISTING, di luar scope fix ini).
+    atr_percentile_normalized: Optional[float] = None
     atr_trend:        Optional[str]   = None
     atr_score:        float           = 50.0
     # [MTF-BIAS-FIX -- Sub-Batch B, KNOWN LIMITATION] alias = atr_score.

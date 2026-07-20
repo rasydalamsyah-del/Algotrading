@@ -27,7 +27,7 @@ from typing import Callable, Dict, List, Optional, Tuple
 
 from engine.constants import APP_VERSION
 from engine.database import DatabaseManager, Trade
-from engine.exchange_base import BaseExchangeConnector
+from engine.exchange_base import BaseExchangeConnector, ReduceOnlyRejected
 from engine.risk_base import RiskAssessment
 from engine.core.models import SignalEvent, SignalType
 from typing import Any
@@ -36,6 +36,26 @@ log = logging.getLogger("execution_base")
 
 def _utcnow() -> datetime:
     return datetime.now(timezone.utc).replace(tzinfo=None)
+
+
+def _reduce_only_params(signal: SignalEvent) -> Optional[Dict]:
+    """
+    [ITEM #15 -- Temuan C, Opsi C1] signal.metadata["reduce_only"]=True
+    (diset _do_close_position() futures, main_future.py) -> params=
+    {"reduceOnly": True}, diteruskan create_order() -- native utk live
+    (ccxt/Binance Futures menolak sendiri kalau tidak ada posisi utk
+    direduce) DAN diterjemahkan balik jadi kwarg reduce_only= ke
+    _simulate_order_fill() paper mode (lihat create_order() dispatcher
+    di engine/exchange_base.py).
+
+    Default None (perilaku lama TIDAK BERUBAH) utk SEMUA signal lain
+    (spot, futures open posisi baru, dst) yang tidak pernah set metadata
+    ini -- generic/shared oleh spot & futures, tapi hanya futures close
+    path yang pernah mengisinya.
+    """
+    if signal.metadata and signal.metadata.get("reduce_only"):
+        return {"reduceOnly": True}
+    return None
 
 class BaseOrderExecutionManager:
 
@@ -472,6 +492,7 @@ class BaseOrderExecutionManager:
                 order_type="market",
                 side=side,
                 amount=amount,
+                params=_reduce_only_params(signal),
             )
             # [BUG-FIX — kritis] Sebelumnya: order langsung diteruskan ke
             # _process_fill() tanpa verifikasi status sama sekali. Lihat
@@ -487,6 +508,12 @@ class BaseOrderExecutionManager:
             return await self._process_fill(
                 verified, signal, assessment, signal.price, side
             )
+        except ReduceOnlyRejected:
+            # [ITEM #15 -- Temuan C, Opsi C1] JANGAN ditelan sbg kegagalan
+            # order biasa -- caller (_do_close_position()) perlu tahu ini
+            # spesifik reduce-only rejection utk langsung sinkron DB, bukan
+            # retry order biasa.
+            raise
         except Exception as e:
             log.error("Market order GAGAL [%s]: %s", signal.symbol, e)
             await self.db.save_log(
@@ -507,7 +534,8 @@ class BaseOrderExecutionManager:
 
         try:
             order    = await self.exchange.create_order(
-                signal.symbol, "limit", side, amount, limit_price
+                signal.symbol, "limit", side, amount, limit_price,
+                params=_reduce_only_params(signal),
             )
             order_id = order.get("id", "")
             log.info("Limit order submitted: %s @ %.8f", order_id, limit_price)
@@ -617,6 +645,12 @@ class BaseOrderExecutionManager:
             self._exec_stats["limit_fallback_to_market_count"] += 1
             return await self._execute_market(signal, assessment, side, amount)
 
+        except ReduceOnlyRejected:
+            # [ITEM #15 -- Temuan C, Opsi C1] Sama alasan dgn _execute_market()
+            # -- jangan ditelan, caller butuh tahu ini spesifik reduce-only
+            # rejection (bisa datang dari create_order() limit awal DI SINI,
+            # ATAU dari fallback _execute_market() di atas).
+            raise
         except Exception as e:
             log.error("Limit order GAGAL [%s]: %s", signal.symbol, e)
             await self.db.save_log(
@@ -786,7 +820,8 @@ class BaseOrderExecutionManager:
     
             try:
                 order = await self.exchange.create_order(
-                    signal.symbol, "market", side, chunk
+                    signal.symbol, "market", side, chunk,
+                    params=_reduce_only_params(signal),
                 )
                 # [BUG-FIX — kritis] Pola bug IDENTIK dengan _execute_market:
                 # chunk langsung dianggap filled tanpa verifikasi status, dan
@@ -824,6 +859,15 @@ class BaseOrderExecutionManager:
                     done.append(trade)
                 if i < chunk_count - 1:
                     await asyncio.sleep(0.8)
+            except ReduceOnlyRejected:
+                # [ITEM #15 -- Temuan C, Opsi C1] BEDA dari kegagalan chunk
+                # biasa (log & lanjut ke chunk berikutnya) -- reduce-only
+                # rejection artinya TIDAK ADA (lagi) posisi utk direduce
+                # SAMA SEKALI, melanjutkan ke chunk berikutnya cuma akan
+                # ditolak lagi berulang-ulang tanpa guna. Propagate ke
+                # caller (_do_close_position()) supaya bisa langsung sinkron
+                # DB, sama seperti jalur market/limit.
+                raise
             except Exception as e:
                 log.error(
                     "Iceberg chunk %d/%d GAGAL [%s]: %s",

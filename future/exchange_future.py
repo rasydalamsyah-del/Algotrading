@@ -29,7 +29,7 @@ import uuid
 from datetime import datetime, timezone
 from typing import Optional, Dict, List, Callable
 
-from engine.exchange_base import BaseExchangeConnector
+from engine.exchange_base import BaseExchangeConnector, ReduceOnlyRejected
 from future.liquidation import calculate_liquidation_price
 
 log = logging.getLogger("exchange_future")
@@ -282,6 +282,7 @@ class FutureExchangeConnector(BaseExchangeConnector):
         side:       str,
         amount:     float,
         price:      Optional[float],
+        reduce_only: bool = False,
     ) -> Dict:
         """
         [PAPER TRADING FUTURES] Simulasikan fill order dengan leverage-aware
@@ -294,6 +295,14 @@ class FutureExchangeConnector(BaseExchangeConnector):
         ⚠️ BELUM MENDUKUNG: hedge-mode (long & short bersamaan utk symbol
         sama), partial close dengan margin_mode campuran, cross margin
         (raise dari future.liquidation kalau margin_mode='cross' diminta).
+
+        [ITEM #15 -- Temuan C, Opsi C1] `reduce_only=True` (diset caller,
+        lihat _do_close_position() di main_future.py) -- backstop TOCTOU
+        thd Opsi C2 (verify-before-send): kalau order ini TERNYATA akan
+        MEMBUKA posisi baru atau MENAMBAH posisi existing (bukan genuinely
+        MENGURANGI/MENUTUP), tolak dgn ReduceOnlyRejected, JANGAN pernah
+        eksekusi. Ini menutup celah race sempit antara verify-before-send
+        (C2) dicek dan order ini benar-benar diproses.
         """
         ticker = await self.fetch_ticker(symbol)
         bid = float(ticker.get("bid") or ticker.get("last") or price or 0.0)
@@ -306,6 +315,24 @@ class FutureExchangeConnector(BaseExchangeConnector):
         fill_price = self.price_to_precision(symbol, fill_price) or fill_price
 
         existing = self._paper_positions.get(symbol)
+
+        if reduce_only:
+            # Order ini genuinely MENGURANGI/MENUTUP hanya kalau ADA posisi
+            # existing DAN arahnya BERLAWANAN dari `side` (persis kondisi
+            # cabang "TUTUP" di bawah) -- selain itu (tidak ada posisi SAMA
+            # SEKALI, atau ada tapi searah/nambah) HARUS ditolak.
+            would_reduce = (
+                existing is not None
+                and existing["side"] == ("short" if side == "buy" else "long")
+            )
+            if not would_reduce:
+                raise ReduceOnlyRejected(
+                    f"[PAPER FUTURES] reduce-only order DITOLAK utk {symbol} "
+                    f"({side}, amount={amount:.8f}): tidak ada posisi cocok "
+                    f"utk direduce (existing={existing}) -- kemungkinan sudah "
+                    f"closed duluan (item #15, race TOCTOU sisa Opsi C2)."
+                )
+
         order_id = f"PAPER-FUT-{uuid.uuid4().hex[:16]}"
         now_iso = datetime.now(timezone.utc).isoformat()
         fee_rate = self.get_taker_fee(symbol)

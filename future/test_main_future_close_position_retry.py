@@ -63,6 +63,24 @@ def _build_fake_self(close_position_side_effect=None):
     fake_self._refresh_portfolio = AsyncMock()
     fake_self._reconcile_pending_candidates = AsyncMock()
 
+    # [ITEM #15 -- Temuan C, Opsi C2] _do_close_position() SEKARANG verify-
+    # before-send lewat self._verify_position_exists_at_exchange() sebelum
+    # kirim order -- exchange fake di sini SELALU punya posisi cocok, supaya
+    # test file ini TETAP menguji jalur "posisi genuinely ada, order dikirim
+    # spt biasa" (perilaku lama, tidak berubah). Skenario "posisi sudah
+    # tidak ada" diuji terpisah di future/test_item15_verify_before_send.py.
+    fake_self.exchange = SimpleNamespace(
+        fetch_positions=AsyncMock(return_value=[
+            {"symbol": "TEST/USDT", "side": "long", "amount": 1.0},
+        ]),
+    )
+    fake_self._verify_position_exists_at_exchange = (
+        lambda symbol, side: TradingBot._verify_position_exists_at_exchange(fake_self, symbol, side)
+    )
+    fake_self._sync_db_close_without_order = (
+        lambda *a, **kw: TradingBot._sync_db_close_without_order(fake_self, *a, **kw)
+    )
+
     return fake_self
 
 

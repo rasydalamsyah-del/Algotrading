@@ -595,6 +595,7 @@ def calculate_atr_enhanced(
                 atr=None,
                 atr_pct=None,
                 atr_percentile=None,
+                atr_percentile_normalized=None,
                 atr_trend="flat",
                 atr_score=SCORE_NEUTRAL,
                 atr_score_short=SCORE_NEUTRAL,
@@ -611,6 +612,7 @@ def calculate_atr_enhanced(
             atr=None,
             atr_pct=None,
             atr_percentile=None,
+            atr_percentile_normalized=None,
             atr_trend="flat",
             atr_score=SCORE_NEUTRAL,
             atr_score_short=SCORE_NEUTRAL,
@@ -628,6 +630,7 @@ def calculate_atr_enhanced(
             atr=None,
             atr_pct=None,
             atr_percentile=None,
+            atr_percentile_normalized=None,
             atr_trend="flat",
             atr_score=SCORE_NEUTRAL,
             atr_score_short=SCORE_NEUTRAL,
@@ -648,9 +651,23 @@ def calculate_atr_enhanced(
     atr_trend = _atr_trend_direction(atr_clean)
     score = _score_atr(atr_pct, atr_percentile, atr_trend)
 
+    # [ITEM #4 -- Tahap C, Opsi B dual-field aditif] atr_pct sebagai SERIES
+    # penuh (bukan cuma bar terakhir) -- ranking dilakukan thd nilai yang
+    # SUDAH ternormalisasi harga (atr_pct), bukan ATR absolut spt
+    # atr_percentile lama. Reuse _calc_atr_percentile() apa adanya (fungsi
+    # itu generic -- murni ranking percentile suatu series, tidak spesifik
+    # ke "ATR" apa pun) supaya algoritma ranking-nya PROVABLY identik dgn
+    # field lama, cuma input series-nya beda. close_safe: hindari div/0
+    # konsisten dgn guard skalar atr_pct di atas (close mendekati nol ->
+    # NaN, bukan inf, supaya tidak ikut masuk window ranking).
+    close_safe = close.where(close > 1e-9)
+    atr_pct_series = (atr_series / close_safe) * 100.0
+    atr_pct_clean = atr_pct_series.dropna()
+    atr_percentile_normalized = _calc_atr_percentile(atr_pct_clean, atr_pct, percentile_lookback)
+
     log.debug(
-        "atr_enhanced: atr=%.5f pct=%.3f%% percentile=%.1f trend=%s → score=%.1f",
-        atr_val, atr_pct, atr_percentile, atr_trend, score,
+        "atr_enhanced: atr=%.5f pct=%.3f%% percentile=%.1f (normalized=%.1f) trend=%s → score=%.1f",
+        atr_val, atr_pct, atr_percentile, atr_percentile_normalized, atr_trend, score,
     )
 
     # [MTF-BIAS-FIX -- Sub-Batch B, KNOWN LIMITATION] alias, BUKAN diklaim
@@ -663,6 +680,7 @@ def calculate_atr_enhanced(
         atr=atr_val,
         atr_pct=atr_pct,
         atr_percentile=atr_percentile,
+        atr_percentile_normalized=atr_percentile_normalized,
         atr_trend=atr_trend,
         atr_score=score,
         atr_score_short=score,
@@ -737,6 +755,7 @@ def score_volatility(
     result.atr            = atr.atr
     result.atr_pct        = atr.atr_pct
     result.atr_percentile = atr.atr_percentile
+    result.atr_percentile_normalized = atr.atr_percentile_normalized   # [ITEM #4 -- Tahap C]
     result.atr_trend      = atr.atr_trend
     result.atr_score      = atr.atr_score
     result.atr_score_short = atr.atr_score_short   # [MTF-BIAS-FIX -- Sub-Batch B, KNOWN LIMITATION -- alias]

@@ -130,8 +130,18 @@ def _supertrend_is_bull(iset: IndicatorSet) -> Optional[bool]:
 
 def _is_volatile(iset: IndicatorSet) -> bool:
     vol = iset.volatility
-    atr_pct = vol.atr_percentile
+    # [ITEM #4 -- migrasi classifier.py, Opsi 1 direct switch] Baca
+    # atr_percentile_normalized (ranking atr_pct, ternormalisasi harga),
+    # BUKAN atr_percentile lagi (ranking ATR absolut, bias arah -- lihat
+    # CLAUDE.md item audit #4). Field lama TETAP ada di models.py (tidak
+    # dihapus) utk referensi/dashboard & jalan mundur kalau perlu rollback.
+    atr_pct = vol.atr_percentile_normalized
     bb_w    = vol.bb_width
+
+    log.debug(
+        "_is_volatile: atr_percentile(lama)=%s atr_percentile_normalized(baru)=%s bb_width=%s",
+        vol.atr_percentile, vol.atr_percentile_normalized, bb_w,
+    )
 
     if atr_pct is not None and atr_pct >= REGIME_VOLATILE_ATR_PERCENTILE_MIN:
         return True
@@ -155,8 +165,16 @@ def _is_ranging(iset: IndicatorSet) -> bool:
 
 def _calc_confidence(iset: IndicatorSet, regime: MarketRegime) -> float:
     adx = iset.strength.adx
-    atr_pct = iset.volatility.atr_percentile
+    # [ITEM #4 -- migrasi classifier.py, Opsi 1 direct switch] Sama seperti
+    # _is_volatile() di atas -- baca atr_percentile_normalized, bukan
+    # atr_percentile lagi.
+    atr_pct = iset.volatility.atr_percentile_normalized
     bb_w    = iset.volatility.bb_width
+
+    log.debug(
+        "_calc_confidence[%s]: atr_percentile(lama)=%s atr_percentile_normalized(baru)=%s bb_width=%s adx=%s",
+        regime.value, iset.volatility.atr_percentile, iset.volatility.atr_percentile_normalized, bb_w, adx,
+    )
 
     if regime in (MarketRegime.TRENDING_BULL, MarketRegime.TRENDING_BEAR):
         if adx is None:

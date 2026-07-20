@@ -1199,6 +1199,34 @@ class DatabaseManager:
         menentukan tindakan (log.critical/save_log/notify_error), bukan
         method ini (konsisten dgn _retry() yang juga cuma re-raise, tidak
         mengambil aksi notifikasi sendiri).
+
+        [ITEM #15 -- Temuan A, Opsi A2] Sebelum ini: kalau SEMUA retry
+        gagal, is_closing (di-set True oleh mark_position_closing() di
+        caller SEBELUM close attempt manapun) tertinggal True SELAMANYA --
+        close_position() cuma reset is_closing=False di jalur SUKSES. Filter
+        `not p.is_closing` di find_untracked_positions() (phantom detector,
+        item #10) jadi PERMANEN mengecualikan symbol ini, walau exchange
+        genuinely sudah flat. Sekarang: reset is_closing=False di sini
+        (terpusat, otomatis berlaku ke SEMUA caller -- saat ini spot &
+        futures) SETELAH retries habis, SEBELUM raise. Reset dibungkus
+        try/except sendiri -- kegagalannya TIDAK BOLEH menutupi/mengganti
+        exception asli yang tetap di-raise di bawah.
+
+        [Analisis race -- TIDAK ada race baru] Guard anti-duplikat-close
+        yang SEBENARNYA (`_closing_symbols`, in-memory per-proses di
+        TradingBot, dicek run_sl_tp_monitor()/`_close_position_market()`)
+        SUDAH lepas otomatis lewat `finally` di `_close_position_market()`
+        terlepas dari kolom is_closing ini -- reset di sini murni
+        memperbaiki VISIBILITAS ke phantom detector, tidak mengubah
+        mekanisme concurrency apa pun.
+
+        [DI LUAR SCOPE, dicatat bukan diperbaiki diam-diam]
+        reduce_position_amount_with_retry() (partial-close, item #28)
+        punya pola IDENTIK (is_closing cuma direset di jalur sukses) --
+        gap yang sama utk amount-mismatch detector (item #36, filter
+        `is_closing` sama). BELUM diperbaiki di sini -- keputusan eksplisit
+        Temuan A cuma menyebut close_position_with_retry(); reduce_
+        position_amount_with_retry() perlu keputusan terpisah.
         """
         last_exc: Exception = RuntimeError(
             f"close_position_with_retry({symbol}): tidak ada percobaan dijalankan"
@@ -1220,7 +1248,40 @@ class DatabaseManager:
                         "close_position gagal utk %s setelah %d percobaan: %s",
                         symbol, retries, e,
                     )
+                    try:
+                        await self._reset_position_closing_flag(symbol)
+                        log.warning(
+                            "is_closing direset ke False utk %s -- supaya phantom "
+                            "detector (find_untracked_positions()) bisa menangkapnya "
+                            "lagi di siklus sync berikutnya (item audit #15, Temuan A).",
+                            symbol,
+                        )
+                    except Exception as reset_exc:
+                        log.error(
+                            "Reset is_closing utk %s JUGA gagal (non-fatal -- "
+                            "exception asli tetap di-raise di bawah, phantom detector "
+                            "TETAP akan miss symbol ini sampai reset manual): %s",
+                            symbol, reset_exc,
+                        )
         raise last_exc
+
+    async def _reset_position_closing_flag(self, symbol: str) -> None:
+        """[ITEM #15 -- Temuan A] Helper kecil, HANYA dipanggil dari
+        close_position_with_retry() di atas saat retry exhausted. TIDAK
+        menyentuh is_open (posisi tetap tercatat "open" -- itu memang
+        status yang benar, DB belum bisa mengonfirmasi close beneran
+        terjadi). Query di-scope ke is_open==True (bukan symbol saja) --
+        konsisten dgn pola mark_position_closing()/update_position_sl()
+        di file ini, aman kalau posisi sudah closed lewat jalur lain
+        di antara mark_position_closing() & titik ini (WHERE tidak match,
+        UPDATE jadi no-op, bukan error)."""
+        async with self._session() as s:
+            await s.execute(
+                update(Position)
+                .where(Position.symbol == symbol, Position.is_open == True)
+                .values(is_closing=False)
+            )
+            await s.commit()
 
     async def reduce_position_amount_with_retry(
         self,

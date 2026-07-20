@@ -53,6 +53,7 @@ import uvicorn
 from dotenv import load_dotenv
 
 from engine.constants import APP_VERSION
+from engine.exchange_base import ReduceOnlyRejected
 from engine.profiles.registry import get_coin_profile
 from engine.database import DatabaseManager
 from engine.event_bus import EventBus, ThrottledTickerPublisher, KeyedLogThrottle
@@ -436,10 +437,149 @@ class TradingBot:
 
         await self._initialize_intelligence_pipeline()
 
+        # [ITEM #15 -- Temuan B, Opsi B2] INVARIAN WAJIB, TITIK BERPASANGAN
+        # dgn komentar di run() (baris pembuatan self._tasks) -- pola SAMA
+        # PERSIS dgn spot::start()/_reconcile_positions_on_startup() (item
+        # #27 audit fungsional). Titik ini HARUS dieksekusi SEBELUM task
+        # periodik manapun dibuat (asyncio.create_task(...) di run(), SEMUA
+        # SETELAH start() ini selesai) -- _reconcile_phantom_positions_on_
+        # startup() auto-close phantom TANPA debounce, aman HANYA karena
+        # nol aktivitas trading konkuren berjalan pada titik ini. JANGAN
+        # pindahkan pemanggilan ini ke setelah task periodik dibuat tanpa
+        # meninjau ulang invarian ini.
+        assert not self._tasks, (
+            "_reconcile_phantom_positions_on_startup() HARUS dipanggil sebelum "
+            "task periodik dibuat (self._tasks masih kosong) -- lihat komentar "
+            "[#15 Temuan B] di sini & di run(). Kalau ini gagal, urutan startup "
+            "sudah berubah & asumsi keamanan auto-close-tanpa-debounce perlu "
+            "ditinjau ulang."
+        )
+        await self._reconcile_phantom_positions_on_startup()
+
         self.is_running = True
         self.start_time = _utcnow_dt()
         log.info("Bot futures started — leverage default=%dx margin_mode=%s",
                   self.config["default_leverage"], self.config["margin_mode"])
+
+    async def _reconcile_phantom_positions_on_startup(self) -> None:
+        """
+        [ITEM #15 -- Temuan B, Opsi B2 MINIMAL] Futures sebelumnya TIDAK
+        PUNYA padanan spot::_reconcile_positions_on_startup() sama sekali
+        (dikonfirmasi grep -- nol referensi). Gap ini ditemukan investigasi
+        item #15 Tahap 0: kombinasi "is_closing stuck forever setelah retry
+        exhausted" (Temuan A, SUDAH diperbaiki di close_position_with_retry())
+        + "futures nol mekanisme reconcile startup" berarti SEBELUM fix ini,
+        phantom position futures TIDAK PERNAH self-heal bahkan lewat restart
+        (beda dari spot, yang punya jaring pengaman ini).
+
+        SENGAJA MINIMAL (keputusan eksplisit pemilik proyek) -- HANYA
+        menangani `phantom_candidates` (posisi DB is_open=True TAPI TIDAK
+        ADA di exchange), auto-close TANPA debounce. Aman dengan alasan
+        IDENTIK spot: dipanggil SEBELUM task periodik manapun dibuat (lihat
+        assertion di start()), jadi race yang jadi alasan debounce di jalur
+        periodik (posisi genuinely sedang closing normal, belum sempat
+        is_closing=True) SECARA STRUKTURAL tidak bisa terjadi di sini.
+
+        `untracked` & `amount_mismatches` (juga dikembalikan
+        find_untracked_positions() yang sama) SENGAJA DIABAIKAN di sini --
+        di luar scope Opsi B2. Tetap ditangani lewat jalur periodik existing
+        (item #10/#36) dengan lag beberapa menit yang bisa diterima.
+
+        Reuse find_untracked_positions() ASLI (future/position_sync_futures.py,
+        BUKAN reimplementasi) -- fungsi ini genuinely bekerja baik utk paper
+        (_paper_positions via fetch_positions() yang di-override
+        FutureExchangeConnector) maupun live (fetch_positions() ccxt asli).
+
+        [PENTING -- penanganan error fetch, DIKOREKSI dari asumsi awal
+        setelah baca ulang kode find_untracked_positions() persis]
+        fetch_binance_futures_positions() SENGAJA RAISE kalau fetch gagal
+        (item #4 lama). TAPI find_untracked_positions() SENDIRI (pembungkus
+        yang dipanggil di sini) MENANGKAP exception itu secara internal dan
+        mengembalikan dict fail-safe `{"phantom_candidates": [], ...,
+        "fetch_failed": True}` -- BUKAN meneruskan raise ke pemanggil. Jadi
+        penanganan yang benar di sini adalah CEK FLAG `fetch_failed`, bukan
+        try/except semata (try/except di bawah tetap dipertahankan sbg
+        backstop tambahan utk exception TAK TERDUGA lain, mis.
+        db_manager.get_open_positions() di dalam find_untracked_positions()
+        sendiri TIDAK dibungkus try/except & BISA raise kalau DB genuinely
+        error). Kedua jalur (flag True ATAU exception) sama-sama harus:
+        log warning + skip reconciliation kali ini + LANJUT start() (BUKAN
+        crash total) -- exchange API down/DB error saat startup tidak boleh
+        mencegah bot hidup sama sekali.
+        """
+        from future.position_sync_futures import find_untracked_positions
+
+        log.info("Reconciliation (futures): cek phantom position DB vs exchange...")
+
+        try:
+            result = await find_untracked_positions(self.exchange, self.db)
+        except Exception as e:
+            log.warning(
+                "Reconciliation (futures) startup: find_untracked_positions() "
+                "error tak terduga — skip reconciliation kali ini, lanjut "
+                "startup normal: %s", e,
+            )
+            return
+
+        if result.get("fetch_failed"):
+            log.warning(
+                "Reconciliation (futures) startup: fetch posisi exchange gagal "
+                "— skip reconciliation kali ini, lanjut startup normal."
+            )
+            return
+
+        phantom_candidates = result["phantom_candidates"]
+        if not phantom_candidates:
+            log.info("Reconciliation (futures): tidak ada phantom position di startup.")
+            return
+
+        for symbol in phantom_candidates:
+            try:
+                pos = await self.db.get_open_position_by_symbol(symbol)
+                if not pos:
+                    continue  # sudah closed lewat jalur lain di antara fetch & titik ini
+
+                exit_price = float(pos.current_price or pos.entry_price or 0)
+                try:
+                    mark_price = await self.exchange.fetch_mark_price(symbol)
+                    if mark_price and mark_price > 0:
+                        exit_price = float(mark_price)
+                except Exception:
+                    pass
+
+                realized_pnl = 0.0
+                if pos.entry_price and pos.amount:
+                    if pos.side == "long":
+                        realized_pnl = (exit_price - pos.entry_price) * pos.amount
+                    else:
+                        realized_pnl = (pos.entry_price - exit_price) * pos.amount
+
+                log.warning(
+                    "Reconciliation (futures): %s TIDAK ada di exchange — menutup "
+                    "di DB (startup, auto-close TANPA debounce, aman krn nol "
+                    "aktivitas trading konkuren pada titik ini). Est PnL=%+.4f",
+                    symbol, realized_pnl,
+                )
+                await self.db.close_position(symbol, exit_price, realized_pnl)
+                await self.db.save_log(
+                    "WARNING", "reconcile_futures",
+                    f"Posisi {symbol} di-close via reconciliation startup (tidak "
+                    f"ada di exchange). Est PnL={realized_pnl:+.4f}",
+                )
+                if self.notifier:
+                    try:
+                        await self.notifier.notify_trade_closed(
+                            symbol=symbol, side=pos.side,
+                            entry_price=float(pos.entry_price or 0),
+                            exit_price=exit_price,
+                            amount=float(pos.amount or 0),
+                            realized_pnl=realized_pnl,
+                            reason="Reconciliation startup (futures) — posisi hilang di exchange",
+                        )
+                    except Exception:
+                        pass
+            except Exception as e:
+                log.error("Reconciliation (futures) error untuk %s: %s", symbol, e)
 
     async def _initialize_intelligence_pipeline(self) -> None:
         """
@@ -903,6 +1043,122 @@ class TradingBot:
             async with self._closing_lock:
                 self._closing_symbols.discard(pos.symbol)
 
+    async def _verify_position_exists_at_exchange(self, symbol: str, side: str) -> bool:
+        """
+        [ITEM #15 -- Temuan C, Opsi C2 verify-before-send] Cek LANGSUNG ke
+        exchange (paper ATAU live, transparan lewat fetch_positions() yang
+        sudah di-override FutureExchangeConnector utk paper mode -- baca
+        _paper_positions internal) apakah posisi `symbol` dengan `side`
+        yang diminta MASIH genuinely ada. Dipanggil dari _do_close_position()
+        SEBELUM mengirim order close apa pun.
+
+        Root cause yang ditutup: _paper_positions/exchange asli bisa sudah
+        genuinely flat (attempt close SEBELUMNYA sukses di exchange, tapi
+        gagal tercatat di DB -- item #15 Temuan A) padahal DB masih percaya
+        posisi terbuka. Order close BARU yang dikirim ke posisi yang sudah
+        tidak ada disalahartikan sbg MEMBUKA posisi baru arah berlawanan
+        (Temuan C) -- verify-before-send ini mencegah order itu dikirim
+        SAMA SEKALI kalau memang tidak ada apa-apa lagi yang perlu ditutup.
+
+        [Keputusan fail-safe -- PENTING] Kalau fetch GAGAL (network/rate-
+        limit/dst) -- return True (anggap posisi MASIH ada), BUKAN False.
+        Alasan: False akan membuat caller SKIP order close & langsung tulis
+        DB "closed" TANPA order beneran terkirim -- kalau ternyata posisi
+        ASLI masih ada (fetch cuma gagal network, bukan genuinely tidak
+        ada), ini MENCIPTAKAN phantom arah sebaliknya (DB bilang closed
+        padahal exchange masih punya posisi terbuka tak terkelola) --
+        persis kebalikan dari yang mau dicegah. Fail ke True (proses close
+        seperti biasa, order tetap dikirim) jauh lebih aman: worst-case
+        cuma balik ke perilaku LAMA sebelum fix ini (Opsi C1 reduce-only,
+        Tahap 2, tetap jadi backstop TOCTOU kalau di titik pengiriman order
+        ternyata posisi genuinely sudah tidak ada).
+        """
+        try:
+            positions = await self.exchange.fetch_positions([symbol])
+        except Exception as e:
+            log.warning(
+                "_verify_position_exists_at_exchange(%s): fetch gagal, "
+                "fail-safe anggap posisi MASIH ada (proses close spt biasa): %s",
+                symbol, e,
+            )
+            return True
+
+        for p in positions:
+            if p.get("symbol") != symbol:
+                continue
+            amount = float(p.get("amount") or p.get("contracts") or 0)
+            if amount <= 0:
+                continue
+            if p.get("side", "long") == side:
+                return True
+        return False
+
+    async def _sync_db_close_without_order(
+        self, pos, exit_price: float, reason: str, full_amount: float,
+    ) -> None:
+        """
+        [ITEM #15 -- Temuan C, Opsi C2] Dipanggil HANYA dari _do_close_
+        position() saat _verify_position_exists_at_exchange() memastikan
+        exchange sudah genuinely flat -- selaraskan DB langsung TANPA
+        mengirim order apa pun (tidak ada apa-apa lagi yang perlu ditutup
+        di exchange). Pakai exit_price yang diteruskan caller ("harga
+        terakhir yang diketahui", sesuai instruksi eksplisit -- BUKAN
+        fetch ulang, krn posisi sudah tidak ada, tidak ada fill price baru
+        yang genuinely relevan).
+
+        Selalu close PENUH (bukan reduce_position_amount) -- kalau exchange
+        menunjukkan NOL posisi utk symbol+side ini, tidak ada sisa yang bisa
+        "dikurangi sebagian" secara logis, terlepas apakah caller aslinya
+        minta partial atau full close.
+        """
+        entry_price = float(pos.entry_price or 0)
+        if pos.side == "long":
+            realized_pnl = (exit_price - entry_price) * full_amount
+        else:
+            realized_pnl = (entry_price - exit_price) * full_amount
+
+        try:
+            await self.db.close_position_with_retry(
+                pos.symbol, exit_price=exit_price, realized_pnl=realized_pnl,
+            )
+            log.warning(
+                "_do_close_position(%s): posisi TIDAK ditemukan di exchange "
+                "(sudah closed duluan -- kemungkinan attempt close sebelumnya "
+                "sukses di exchange tapi gagal tercatat DB, item #15). DB "
+                "diselaraskan TANPA kirim order baru, exit_price=%.8f "
+                "(harga terakhir diketahui) realized_pnl=%+.4f.",
+                pos.symbol, exit_price, realized_pnl,
+            )
+            if self.notifier:
+                try:
+                    await self.notifier.notify_trade_closed(
+                        symbol=pos.symbol, side=pos.side,
+                        entry_price=entry_price, exit_price=exit_price,
+                        amount=full_amount, realized_pnl=realized_pnl,
+                        reason=f"{reason} (disinkronkan tanpa order — exchange "
+                               f"sudah flat, item #15 Temuan C)",
+                    )
+                except Exception:
+                    pass
+        except Exception as e:
+            msg = (
+                f"close_position (DB) GAGAL untuk {pos.symbol} saat sinkronisasi "
+                f"verify-before-send (exchange sudah genuinely flat, TAPI DB "
+                f"tetap gagal ditulis setelah retry): {e}. Posisi is_open=True "
+                f"akan nyangkut -- akan terdeteksi otomatis via phantom detector "
+                f"(item #10, is_closing sudah direset via item #15 Temuan A)."
+            )
+            log.critical(msg)
+            try:
+                await self.db.save_log("CRITICAL", "main_future", msg)
+            except Exception as _sl_err:
+                log.error("save_log (verify-before-send sync gagal) gagal: %s", _sl_err)
+            if self.notifier:
+                try:
+                    await self.notifier.notify_error("close_position_verify_sync_failed", msg)
+                except Exception as _ne_err:
+                    log.error("notify_error (verify-before-send sync gagal) gagal: %s", _ne_err)
+
     async def _do_close_position(
         self, pos, exit_price: float, reason: str, close_amount: Optional[float] = None,
     ) -> None:
@@ -931,11 +1187,25 @@ class TradingBot:
             return
         is_partial = amount_to_close < full_amount - 1e-9
 
+        # [ITEM #15 -- Temuan C, Opsi C2] Verify-before-send: cek exchange
+        # SEBELUM mengirim order close apa pun. Kalau sudah genuinely tidak
+        # ada, selaraskan DB langsung & STOP di sini -- tidak lanjut ke
+        # risk_manager.evaluate_order()/execute_signal() sama sekali.
+        position_exists = await self._verify_position_exists_at_exchange(pos.symbol, pos.side)
+        if not position_exists:
+            await self._sync_db_close_without_order(pos, exit_price, reason, full_amount)
+            return
+
         close_signal_type = SignalType.CLOSE_LONG if pos.side == "long" else SignalType.CLOSE_SHORT
         close_signal = SignalEvent(
             symbol=pos.symbol, signal_type=close_signal_type, price=exit_price,
             timestamp=_utcnow_dt(), strategy=pos.strategy_name or "risk_monitor",
-            metadata={"exit_reason": reason, "partial": is_partial},
+            # [ITEM #15 -- Temuan C, Opsi C1] reduce_only=True -- backstop
+            # TOCTOU thd Opsi C2 (verify-before-send di atas). Dibaca
+            # engine/execution_base.py::_reduce_only_params() -> diteruskan
+            # sbg params={"reduceOnly": True} ke create_order() (native utk
+            # live) & reduce_only= ke _simulate_order_fill() (paper).
+            metadata={"exit_reason": reason, "partial": is_partial, "reduce_only": True},
         )
 
         # order_side level-exchange: tutup long="sell", tutup short="buy"
@@ -952,7 +1222,25 @@ class TradingBot:
             stop_loss=None, take_profit=None,
         )
 
-        trade = await self.executor.execute_signal(close_signal, close_assessment)
+        try:
+            trade = await self.executor.execute_signal(close_signal, close_assessment)
+        except ReduceOnlyRejected as e:
+            # [ITEM #15 -- Temuan C, Opsi C1] Backstop TOCTOU: order ditolak
+            # KARENA reduce-only, bukan kegagalan biasa -- sinyal PASTI
+            # "sudah closed duluan" (posisi berubah tepat di celah antara
+            # verify-before-send di atas & order ini benar-benar terkirim).
+            # JANGAN retry order biasa (_close_retry_count dkk) -- langsung
+            # sinkron DB via jalur yang SAMA dgn Opsi C2 (reuse, bukan
+            # jalur baru), pakai exit_price yang sama (harga terakhir
+            # diketahui, TIDAK ada fill price baru krn order ditolak).
+            log.warning(
+                "_do_close_position(%s): order reduce-only DITOLAK exchange "
+                "(%s) -- celah TOCTOU sisa verify-before-send, posisi "
+                "berubah tepat sebelum order terkirim. Sinkron DB langsung, "
+                "TANPA retry order.", pos.symbol, e,
+            )
+            await self._sync_db_close_without_order(pos, exit_price, reason, full_amount)
+            return
 
         if trade is None:
             log.error("CLOSE ORDER GAGAL untuk %s — posisi TETAP terbuka di DB! Tutup manual di Binance Futures.", pos.symbol)
@@ -2388,6 +2676,16 @@ class TradingBot:
         # position_sync_futures.py sudah dibangun & diverifikasi end-to-end.
         # run_coin_swap_loop() TETAP TIDAK diikutsertakan -- sistem itu
         # deprecated permanen, tidak relevan sama sekali di futures.
+        #
+        # [#15 Temuan B] TITIK BERPASANGAN dgn assertion di start() (baris
+        # pemanggilan _reconcile_phantom_positions_on_startup()). self._tasks
+        # PERTAMA KALI terisi di sini -- SETELAH await self.start() di atas
+        # sudah selesai penuh, termasuk reconciliation di dalamnya. JANGAN
+        # pindahkan create_task() manapun di bawah ini ke DALAM start()/
+        # sebelum start() selesai -- itu melanggar invarian "nol aktivitas
+        # trading konkuren saat reconciliation" yang jadi dasar
+        # auto-close-tanpa-debounce genuinely aman. Assertion di start()
+        # akan gagal loud kalau ini dilanggar.
         self._tasks = [
             asyncio.create_task(self.run_scanner_loop(),       name="task_scanner_futures"),
             asyncio.create_task(self.run_gate3_worker(),       name="task_gate3_worker_futures"),
