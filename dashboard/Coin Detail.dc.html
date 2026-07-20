@@ -23,7 +23,7 @@
   </style>
 </helmet>
 
-<div style="min-height:100vh;background:#0b0e11;color:#e6eaf2;font-family:'Inter',system-ui,sans-serif;font-size:13px;line-height:1.5">
+<div style="min-height:100vh;background:#0b0e11;color:#e6eaf2;font-family:'Inter',system-ui,sans-serif;font-size:13px;line-height:1.5;overflow-x:hidden">
 
   <!-- DRAWER HEADER -->
   <div style="padding:0 24px;height:58px;display:flex;align-items:center;gap:14px;background:rgba(11,14,17,0.97);backdrop-filter:blur(20px);border-bottom:1px solid #1e2d45;position:sticky;top:0;z-index:10;flex-wrap:wrap">
@@ -117,7 +117,7 @@
       </div>
     </div>
 
-    <!-- BOTTOM GRID: FORECAST + KEY LEVELS -->
+    <!-- BOTTOM GRID: FORECAST + ORDERBOOK + KEY LEVELS -->
     <div style="display:grid;grid-template-columns:{{ bottomCols }};gap:16px">
 
       <!-- FORECAST -->
@@ -160,6 +160,38 @@
               <div style="font-size:13px;font-weight:800;font-family:'JetBrains Mono',monospace;color:#f0455a">{{ potLoss }}</div>
             </div>
           </div>
+        </div>
+      </div>
+
+      <!-- ORDERBOOK -->
+      <div style="background:#111722;border:1px solid #1e2d45;border-radius:10px;overflow:hidden">
+        <div style="padding:11px 14px;border-bottom:1px solid #1e2d45;font-size:11px;font-weight:700;display:flex;align-items:center;justify-content:space-between">
+          <span>📚 Orderbook</span>
+          <sc-if value="{{ obDangerLabel }}" hint-placeholder-val="{{ false }}">
+            <span style="font-size:9px;font-weight:700;padding:2px 7px;border-radius:10px;background:{{ obDangerBg }};color:{{ obDangerColor }}">{{ obDangerLabel }}</span>
+          </sc-if>
+        </div>
+        <div style="padding:14px">
+          <sc-if value="{{ hasOrderbook }}" hint-placeholder-val="{{ false }}">
+            <div style="display:flex;justify-content:space-between;font-size:9.5px;color:#4a5878;font-weight:600;text-transform:uppercase;letter-spacing:.4px;margin-bottom:6px"><span>Bid Size</span><span>Price</span></div>
+            <sc-for list="{{ obBids }}" as="ob" hint-placeholder-count="5">
+              <div style="position:relative;display:flex;justify-content:space-between;padding:3px 6px;font-size:10.5px;font-family:'JetBrains Mono',monospace;overflow:hidden;border-radius:3px">
+                <div style="position:absolute;inset:0;right:auto;width:{{ ob.barPct }}%;background:rgba(0,214,143,0.1)"></div>
+                <span style="position:relative;color:#8a9bba">{{ ob.size }}</span><span style="position:relative;color:#00d68f;font-weight:600">{{ ob.price }}</span>
+              </div>
+            </sc-for>
+            <div style="text-align:center;padding:6px 0;font-size:9.5px;color:#4a5878;border-top:1px solid #1e2d45;border-bottom:1px solid #1e2d45;margin:6px 0">Spread: {{ obSpread }}</div>
+            <div style="display:flex;justify-content:space-between;font-size:9.5px;color:#4a5878;font-weight:600;text-transform:uppercase;letter-spacing:.4px;margin-bottom:6px"><span>Price</span><span>Ask Size</span></div>
+            <sc-for list="{{ obAsks }}" as="oa" hint-placeholder-count="5">
+              <div style="position:relative;display:flex;justify-content:space-between;padding:3px 6px;font-size:10.5px;font-family:'JetBrains Mono',monospace;overflow:hidden;border-radius:3px">
+                <div style="position:absolute;inset:0;left:auto;width:{{ oa.barPct }}%;background:rgba(240,69,90,0.1)"></div>
+                <span style="position:relative;color:#f0455a;font-weight:600">{{ oa.price }}</span><span style="position:relative;color:#8a9bba">{{ oa.size }}</span>
+              </div>
+            </sc-for>
+          </sc-if>
+          <sc-if value="{{ noOrderbook }}" hint-placeholder-val="{{ true }}">
+            <div style="text-align:center;padding:24px;color:#4a5878;font-size:11.5px">Orderbook tidak tersedia</div>
+          </sc-if>
         </div>
       </div>
 
@@ -255,11 +287,14 @@ class Component extends DCLogic {
 
   async fetchAll() {
     const sym = this.state.symbol;
-    const [fcData, candleData, posData] = await Promise.all([
+    const [fcData, candleData, posData, obData] = await Promise.all([
       this.apiGet('/forecast'),
       this.apiGet('/candles/' + encodeURIComponent(sym) + '?timeframe=' + this.state.tf + '&limit=60'),
       this.apiGet('/positions'),
+      this.apiGet('/orderbook/' + encodeURIComponent(sym)),
     ]);
+    this.setState({ orderbook: obData });
+    this.connectStream();
     const fc = fcData && Array.isArray(fcData.forecasts) ? fcData.forecasts.find(f => f.symbol === sym) : null;
     const candles = candleData && Array.isArray(candleData.candles) ? candleData.candles : null;
 
@@ -279,6 +314,33 @@ class Component extends DCLogic {
   }
 
   setTF(tf) { this.setState({ tf, isLoading: true }); this.fetchAll(); }
+
+  async connectStream() {
+    if (!this.state.apiKey || this._streamCtrl) return;
+    this._streamCtrl = new AbortController();
+    try {
+      const r = await fetch(this.state.apiBase + '/stream', { headers: { 'X-API-Key': this.state.apiKey, 'Accept': 'text/event-stream' }, signal: this._streamCtrl.signal });
+      if (!r.ok || !r.body) throw new Error('http ' + r.status);
+      const reader = r.body.getReader(); const decoder = new TextDecoder(); let buf = '';
+      while (true) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        buf += decoder.decode(value, { stream: true });
+        const chunks = buf.split('\n\n'); buf = chunks.pop();
+        for (const chunk of chunks) {
+          const line = chunk.split('\n').find(l => l.startsWith('data:'));
+          if (!line) continue;
+          try {
+            const evt = JSON.parse(line.slice(5).trim());
+            if (evt.type === 'ticker' && evt.data && evt.data.symbol === this.state.symbol) {
+              this.setState(s => ({ forecast: s.forecast ? { ...s.forecast, current_price: evt.data.last ?? s.forecast.current_price } : s.forecast }));
+            }
+          } catch (e) {}
+        }
+      }
+    } catch (e) {}
+  }
+  componentWillUnmount() { if (this._streamCtrl) this._streamCtrl.abort(); }
 
   renderVals() {
     const sym = this.state.symbol;
@@ -346,7 +408,7 @@ class Component extends DCLogic {
       symbol: sym, price: fmtP(price), chg: (up ? '▲ +' : '▼ ') + Math.abs(chgPct).toFixed(2) + '%', chgColor: up ? '#00d68f' : '#f0455a',
       isLoading: this.state.isLoading, showContent: !this.state.isLoading,
       usingDemo: this.state.usingDemo, demoMessage: this.state.demoMessage,
-      mainCols: isMobile ? '1fr' : '1fr 340px', bottomCols: isMobile ? '1fr' : '1fr 1fr',
+      mainCols: isMobile ? '1fr' : '1fr 340px', bottomCols: isMobile ? '1fr' : '1fr 1fr 1fr',
       tfPills,
       chartPolyline, chartFillPolygon, chartPoints, chartColor,
       totalScore: Math.round(score), scoreColor,
@@ -366,6 +428,33 @@ class Component extends DCLogic {
       potLoss: fc.potential_loss_pct != null ? '-' + fc.potential_loss_pct.toFixed(2) + '%' : '—',
       nearestSupport: fmtP(mn), rangeLow: fmtP(mn), nearestResistance: fmtP(mx), rangeHigh: fmtP(mx),
       pills,
+      ...this.renderOrderbookVals(),
+    };
+  }
+
+  // /api/orderbook/{symbol} -- bids/asks [[price, amount], ...] + ob_danger (WhaleDetector)
+  renderOrderbookVals() {
+    const ob = this.state.orderbook;
+    if (!ob || !Array.isArray(ob.bids) || !Array.isArray(ob.asks) || !ob.bids.length) {
+      return { hasOrderbook: false, noOrderbook: true, obBids: [], obAsks: [], obSpread: '\u2014', obDangerLabel: '' };
+    }
+    const bids = ob.bids.slice(0, 5), asks = ob.asks.slice(0, 5);
+    const maxSize = Math.max(1, ...bids.map(b => b[1]), ...asks.map(a => a[1]));
+    const obBids = bids.map(([price, size]) => ({ price: fmtP(price), size: (+size).toFixed(3), barPct: Math.min(100, (size / maxSize) * 100) }));
+    const obAsks = asks.map(([price, size]) => ({ price: fmtP(price), size: (+size).toFixed(3), barPct: Math.min(100, (size / maxSize) * 100) }));
+    const bestBid = bids[0][0], bestAsk = asks[0][0];
+    const spreadPct = bestBid ? ((bestAsk - bestBid) / bestBid * 100) : 0;
+    // danger_level asli: angka 0-10 (lihat spot/api_server_spot.py::get_orderbook,
+    // main_spot.py::_get_ob_danger_level) -- BUKAN string 'high'/'low' seperti asumsi awal.
+    const danger = ob.danger_level;
+    const dangerHigh = danger != null && danger >= 6;
+    const dangerMed = danger != null && danger >= 3 && danger < 6;
+    return {
+      hasOrderbook: true, noOrderbook: false, obBids, obAsks,
+      obSpread: fmtP(bestAsk - bestBid) + ' (' + spreadPct.toFixed(3) + '%)',
+      obDangerLabel: danger != null ? 'DANGER ' + danger.toFixed(1) + '/10' : '',
+      obDangerBg: dangerHigh ? 'rgba(240,69,90,0.15)' : dangerMed ? 'rgba(240,180,41,0.15)' : 'rgba(0,214,143,0.1)',
+      obDangerColor: dangerHigh ? '#f0455a' : dangerMed ? '#f0b429' : '#00d68f',
     };
   }
 }

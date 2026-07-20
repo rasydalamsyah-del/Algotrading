@@ -26,7 +26,7 @@
   </style>
 </helmet>
 
-<div style="min-height:100vh;background:#0b0e11;color:#e6eaf2;font-family:'Inter',system-ui,sans-serif;font-size:13px;line-height:1.5">
+<div style="min-height:100vh;background:#0b0e11;color:#e6eaf2;font-family:'Inter',system-ui,sans-serif;font-size:13px;line-height:1.5;overflow-x:hidden">
 
   <!-- TOASTS -->
   <div style="position:fixed;bottom:16px;right:16px;z-index:300;display:flex;flex-direction:column;gap:7px;max-width:calc(100vw - 32px)">
@@ -123,6 +123,9 @@
       </a>
       <a href="Gate Scanner.dc.html" style="display:flex;align-items:center;gap:9px;padding:8px 10px;border-radius:6px;color:#f0b429;font-size:12px;font-weight:700;cursor:pointer;text-decoration:none;background:linear-gradient(135deg,rgba(168,85,247,.12),rgba(245,158,11,.12));border:1px solid rgba(245,158,11,.25);margin-top:4px">
         <span style="font-size:13px">🎯</span> Gate Scanner
+      </a>
+      <a href="Futures Dashboard.dc.html" style="display:flex;align-items:center;gap:9px;padding:8px 10px;border-radius:6px;color:#f0983f;font-size:12px;font-weight:700;cursor:pointer;text-decoration:none;background:rgba(240,152,63,0.08);border:1px solid rgba(240,152,63,0.25);margin-top:4px">
+        <span style="font-size:13px">⚡</span> Futures Dashboard
       </a>
       <a href="Settings.dc.html" style="display:flex;align-items:center;gap:9px;padding:8px 10px;border-radius:6px;color:#8a9bba;font-size:12px;font-weight:500;cursor:pointer;text-decoration:none" style-hover="color:#e6eaf2;background:#1a2235">
         <span style="font-size:13px">⚙️</span> Settings
@@ -428,11 +431,77 @@ class Component extends DCLogic {
     this._onResize = () => this.setState({ isMobile: window.innerWidth <= 768 });
     window.addEventListener('resize', this._onResize);
     this.fetchData();
-    this._timer = setInterval(() => this.fetchData(), 20000);
+    this._timer = setInterval(() => this.fetchData(), 60000);
+    this.connectStream();
   }
   componentWillUnmount() {
     if (this._timer) clearInterval(this._timer);
     if (this._onResize) window.removeEventListener('resize', this._onResize);
+    if (this._streamCtrl) this._streamCtrl.abort();
+  }
+
+  // [SSE] /api/stream sekarang genuinely event-driven di backend (bukan polling
+  // internal lagi) — pakai fetch+ReadableStream (bukan EventSource bawaan)
+  // karena perlu kirim header X-API-Key, yang tidak didukung EventSource native.
+  async connectStream() {
+    if (!this.state.apiKey) return;
+    this._streamCtrl = new AbortController();
+    try {
+      const r = await fetch(this.state.apiBase + '/stream', {
+        headers: { 'X-API-Key': this.state.apiKey, 'Accept': 'text/event-stream' },
+        signal: this._streamCtrl.signal,
+      });
+      if (!r.ok || !r.body) throw new Error('http ' + r.status);
+      this.setState({ streamLive: true });
+      const reader = r.body.getReader();
+      const decoder = new TextDecoder();
+      let buf = '';
+      while (true) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        buf += decoder.decode(value, { stream: true });
+        const chunks = buf.split('\n\n');
+        buf = chunks.pop();
+        for (const chunk of chunks) {
+          const line = chunk.split('\n').find(l => l.startsWith('data:'));
+          if (!line) continue;
+          try { this.onStreamEvent(JSON.parse(line.slice(5).trim())); } catch (e) {}
+        }
+      }
+    } catch (e) {
+      this.setState({ streamLive: false });
+    }
+    if (!this._streamCtrl.signal.aborted) setTimeout(() => this.connectStream(), 4000);
+  }
+
+  // Skema event asli: engine/event_bus.py serialize_event() -> {type, market_type, ts, data}
+  // Tipe nyata: ticker, trade, position_upserted, position_closed, position_closing,
+  // positions_snapshot (data = ARRAY pos_dict), halt_changed, snapshot (equity), parameter_changed.
+  onStreamEvent(evt) {
+    const type = evt && evt.type;
+    const data = evt && evt.data;
+    if (!type || data == null) return;
+    this.setState(s => {
+      const snap = { ...(s.snap || demoSnapshot()) };
+      if (type === 'ticker' && data.symbol) {
+        snap.tickers = { tickers: { ...(snap.tickers && snap.tickers.tickers), [data.symbol]: { ...((snap.tickers && snap.tickers.tickers && snap.tickers.tickers[data.symbol]) || {}), ...data } } };
+      } else if (type === 'positions_snapshot' && Array.isArray(data)) {
+        snap.positions = { positions: data, count: data.length };
+      } else if ((type === 'position_upserted' || type === 'position_closed') && data.symbol) {
+        const cur = (snap.positions && snap.positions.positions) || [];
+        const list = type === 'position_closed' ? cur.filter(p => p.id !== data.id) : [...cur.filter(p => p.id !== data.id), data];
+        snap.positions = { positions: list, count: list.length };
+      } else if (type === 'halt_changed') {
+        snap.system_health = { ...(snap.system_health || {}), ...data };
+      } else if (type === 'trade') {
+        const logs = [{ timestamp: Date.now() / 1000, level: 'info', module: 'trade', message: (data.symbol || '') + ' ' + (data.side || '') + ' ' + (data.status || '') }, ...((snap.logs && snap.logs.logs) || [])].slice(0, 30);
+        snap.logs = { logs };
+      } else if (type === 'snapshot') {
+        const curve = [...((snap.equity_curve && snap.equity_curve.curve) || []), data].slice(-300);
+        snap.equity_curve = { curve };
+      } else return s;
+      return { snap, usingDemo: false, apiOnline: true };
+    });
   }
 
   toggleSidebar = () => this.setState(s => ({ sidebarOpen: !s.sidebarOpen }));
@@ -585,9 +654,9 @@ class Component extends DCLogic {
       showApiError: !this.state.apiOnline && !this.state.usingDemo,
       apiErrorMsg: 'API offline · ' + this.state.apiBase,
       retryFetch: this.retryFetch,
-      wsColor: this.state.apiOnline ? '#00d68f' : '#f0455a',
-      wsAnim: this.state.apiOnline ? 'pulse 2s infinite' : 'none',
-      wsLabel: this.state.apiOnline ? 'LIVE' : 'OFFLINE',
+      wsColor: this.state.streamLive ? '#00d68f' : this.state.apiOnline ? '#f0b429' : '#f0455a',
+      wsAnim: this.state.streamLive ? 'pulse 2s infinite' : 'none',
+      wsLabel: this.state.streamLive ? 'LIVE (push)' : this.state.apiOnline ? 'LIVE (poll)' : 'OFFLINE',
       modeBadgeStyle: h.testnet
         ? 'background:rgba(240,180,41,0.08);color:#f0b429;border:1px solid rgba(240,180,41,0.3)'
         : 'background:rgba(240,69,90,0.08);color:#f0455a;border:1px solid rgba(240,69,90,0.3)',

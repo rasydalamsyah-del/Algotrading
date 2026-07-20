@@ -40,6 +40,9 @@
       <div style="width:7px;height:7px;border-radius:50%;background:#a855f7;animation:pulseDot 1.6s infinite;flex-shrink:0"></div>
       Refresh dalam {{ countdown }}s
     </div>
+    <sc-if value="{{ hasCompareSelection }}" hint-placeholder-val="{{ false }}">
+      <button onclick="{{ openCompare }}" style="background:rgba(168,85,247,0.12);border:1px solid rgba(168,85,247,0.35);border-radius:8px;padding:7px 13px;font-size:11px;color:#c084fc;cursor:pointer;font-family:inherit;white-space:nowrap;flex-shrink:0;font-weight:700">⚖ Compare ({{ compareCount }})</button>
+    </sc-if>
     <button onclick="{{ toggleSettings }}" style="background:rgba(255,255,255,0.04);border:1px solid rgba(255,255,255,0.08);border-radius:8px;padding:7px 13px;font-size:11px;color:#8b93a7;cursor:pointer;font-family:inherit;white-space:nowrap;flex-shrink:0">⚙ Settings</button>
     <a href="Dashboard.dc.html" style="background:rgba(255,255,255,0.04);border:1px solid rgba(255,255,255,0.08);border-radius:8px;padding:7px 13px;font-size:11px;color:#8b93a7;cursor:pointer;font-family:inherit;text-decoration:none;white-space:nowrap;flex-shrink:0">← Dashboard</a>
   </nav>
@@ -72,6 +75,36 @@
           <button onclick="{{ saveSettings }}" style="flex:1;background:linear-gradient(135deg,#7c3aed,#a855f7);border:none;border-radius:8px;padding:11px;color:#fff;font-weight:700;font-size:13px;cursor:pointer;font-family:inherit">Simpan &amp; Refresh</button>
           <button onclick="{{ toggleSettings }}" style="background:#111426;border:1px solid rgba(255,255,255,0.09);border-radius:8px;padding:11px 18px;color:#8b93a7;font-size:13px;cursor:pointer;font-family:inherit">Batal</button>
         </div>
+      </div>
+    </div>
+  </sc-if>
+
+  <!-- COMPARE MODAL -->
+  <sc-if value="{{ compareOpen }}" hint-placeholder-val="{{ false }}">
+    <div onclick="{{ closeCompare }}" style="position:fixed;inset:0;z-index:150;display:flex;align-items:center;justify-content:center;padding:24px;background:rgba(0,0,0,0.75);backdrop-filter:blur(4px)">
+      <div onclick="{{ stopProp }}" style="background:#0d0f1a;border:1px solid rgba(255,255,255,0.12);border-radius:16px;padding:22px;width:100%;max-width:640px;max-height:80vh;overflow-y:auto;box-shadow:0 24px 64px rgba(0,0,0,0.7)">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px">
+          <div style="font-family:'Space Grotesk',sans-serif;font-weight:700;font-size:16px">⚖ Compare Coins</div>
+          <span onclick="{{ closeCompare }}" style="cursor:pointer;color:#8b93a7">✕</span>
+        </div>
+        <table style="width:100%;border-collapse:collapse;font-size:12px">
+          <thead><tr>
+            <th style="padding:6px 8px;text-align:left;color:#6b7280;font-size:9.5px;text-transform:uppercase;border-bottom:1px solid rgba(255,255,255,0.08)">Metric</th>
+            <sc-for list="{{ compareCoins }}" as="cc" hint-placeholder-count="2">
+              <th style="padding:6px 8px;text-align:right;color:{{ cc.accent }};font-weight:700;border-bottom:1px solid rgba(255,255,255,0.08)">{{ cc.symbol }}</th>
+            </sc-for>
+          </tr></thead>
+          <tbody>
+            <sc-for list="{{ compareRows }}" as="row" hint-placeholder-count="6">
+              <tr>
+                <td style="padding:6px 8px;color:#8b93a7;border-bottom:1px solid rgba(255,255,255,0.05)">{{ row.label }}</td>
+                <sc-for list="{{ row.vals }}" as="v" hint-placeholder-count="2">
+                  <td style="padding:6px 8px;text-align:right;font-family:'JetBrains Mono',monospace;font-weight:600;border-bottom:1px solid rgba(255,255,255,0.05)">{{ v }}</td>
+                </sc-for>
+              </tr>
+            </sc-for>
+          </tbody>
+        </table>
       </div>
     </div>
   </sc-if>
@@ -221,6 +254,11 @@
                   </div>
                   <div style="font-size:12px;font-weight:700;font-family:'JetBrains Mono',monospace;padding:4px 10px;border-radius:20px;background:{{ card.probBg }};color:{{ card.probColor }}">▲ {{ card.probLabel }}</div>
                 </div>
+                <div style="display:flex;gap:6px;padding:9px 16px;border-top:1px solid rgba(255,255,255,0.06)">
+                  <button onclick="{{ card.onBookmark }}" style="flex:1;background:{{ card.bookmarkBg }};border:1px solid {{ card.bookmarkBorder }};border-radius:6px;padding:6px;font-size:10.5px;color:{{ card.bookmarkColor }};cursor:pointer;font-family:inherit;font-weight:600">{{ card.bookmarkLabel }}</button>
+                  <button onclick="{{ card.onCompareToggle }}" style="flex:1;background:{{ card.compareBg }};border:1px solid {{ card.compareBorder }};border-radius:6px;padding:6px;font-size:10.5px;color:{{ card.compareColor }};cursor:pointer;font-family:inherit;font-weight:600">{{ card.compareLabel }}</button>
+                  <a href="{{ card.detailHref }}" style="flex:1;text-align:center;background:none;border:1px solid rgba(255,255,255,0.08);border-radius:6px;padding:6px;font-size:10.5px;color:#8b93a7;cursor:pointer;font-family:inherit;font-weight:600;text-decoration:none">Detail →</a>
+                </div>
               </div>
             </sc-for>
           </div>
@@ -286,6 +324,7 @@ class Component extends DCLogic {
     filterProfile: 'all',
     sortBy: 'score',
     lastUpdate: null,
+    bookmarks: [], compareSet: [], compareOpen: false,
   };
 
   componentDidMount() {
@@ -293,6 +332,7 @@ class Component extends DCLogic {
       const b = localStorage.getItem('gs_api_base'); if (b) this.state.apiBase = this.state.apiBaseInput = b;
       const k = localStorage.getItem('gs_api_key'); if (k) this.state.apiKey = this.state.apiKeyInput = k;
       const r = localStorage.getItem('gs_refresh'); if (r) { this.state.refreshSec = parseInt(r); this.state.refreshSecInput = r; }
+      const bm = localStorage.getItem('gs_bookmarks'); if (bm) this.state.bookmarks = JSON.parse(bm);
     } catch (e) {}
     this.fetchData();
     this._timer = setInterval(() => {
@@ -367,6 +407,25 @@ class Component extends DCLogic {
 
   setFilter(p) { this.setState({ filterProfile: p }); }
 
+  toggleBookmark(sym) {
+    this.setState(s => {
+      const has = s.bookmarks.includes(sym);
+      const bookmarks = has ? s.bookmarks.filter(x => x !== sym) : [...s.bookmarks, sym];
+      try { localStorage.setItem('gs_bookmarks', JSON.stringify(bookmarks)); } catch (e) {}
+      return { bookmarks };
+    });
+  }
+  toggleCompare(sym) {
+    this.setState(s => {
+      const has = s.compareSet.includes(sym);
+      let compareSet = has ? s.compareSet.filter(x => x !== sym) : [...s.compareSet, sym];
+      if (compareSet.length > 3) compareSet = compareSet.slice(-3);
+      return { compareSet };
+    });
+  }
+  openCompare = () => this.setState({ compareOpen: true });
+  closeCompare = () => this.setState({ compareOpen: false });
+
   getGate(fc) {
     const s = fc.total_score || 0;
     if (s >= 85) return 5;
@@ -381,6 +440,8 @@ class Component extends DCLogic {
   }
 
   buildCard(fc, gate) {
+    const isBookmarked = this.state.bookmarks.includes(fc.symbol || '');
+    const isComparing = this.state.compareSet.includes(fc.symbol || '');
     const accent = gate === 5 ? '#f59e0b' : gate === 4 ? '#a855f7' : '#3b82f6';
     const sym = fc.symbol || '—';
     const base = sym.split('/')[0];
@@ -439,6 +500,15 @@ class Component extends DCLogic {
       probBg: prob >= 65 ? 'rgba(16,185,129,.1)' : prob >= 50 ? 'rgba(245,158,11,.1)' : 'rgba(239,68,68,.1)',
       probColor: prob >= 65 ? '#10b981' : prob >= 50 ? '#f59e0b' : '#ef4444',
       holdDisplay: fc.hold_display || '—', tpEta: fc.tp_eta_date || '—',
+      detailHref: 'Coin Detail.dc.html?symbol=' + encodeURIComponent(sym),
+      bookmarkLabel: isBookmarked ? '★ Tersimpan' : '☆ Bookmark',
+      bookmarkBg: isBookmarked ? 'rgba(245,158,11,0.12)' : 'none', bookmarkBorder: isBookmarked ? 'rgba(245,158,11,0.4)' : 'rgba(255,255,255,0.08)',
+      bookmarkColor: isBookmarked ? '#f59e0b' : '#8b93a7',
+      onBookmark: () => this.toggleBookmark(sym),
+      compareLabel: isComparing ? '✓ Compare' : '⚖ Compare',
+      compareBg: isComparing ? 'rgba(168,85,247,0.12)' : 'none', compareBorder: isComparing ? 'rgba(168,85,247,0.4)' : 'rgba(255,255,255,0.08)',
+      compareColor: isComparing ? '#c084fc' : '#8b93a7',
+      onCompareToggle: () => this.toggleCompare(sym),
     };
   }
 
@@ -487,6 +557,20 @@ class Component extends DCLogic {
       };
     });
 
+    const compareCoins = this.state.compareSet.map(sym => {
+      const fc = this.state.forecasts.find(f => f.symbol === sym);
+      return fc ? { symbol: sym, accent: this.getGate(fc) === 5 ? '#f59e0b' : this.getGate(fc) === 4 ? '#a855f7' : '#3b82f6', fc } : null;
+    }).filter(Boolean);
+    const compareRowDefs = [
+      ['Score', fc => Math.round(fc.total_score || 0)],
+      ['Profil', fc => (fc.strategy_profile || '—').replace(/_/g, ' ')],
+      ['Regime', fc => (fc.regime || '—').replace(/_/g, ' ')],
+      ['Prob. Naik', fc => (fc.probability_up_pct || 0).toFixed(1) + '%'],
+      ['R:R', fc => fc.rr_ratio != null ? fc.rr_ratio.toFixed(2) + '×' : '—'],
+      ['Harga', fc => this.fmtP(fc.current_price)],
+    ];
+    const compareRows = compareRowDefs.map(([label, get]) => ({ label, vals: compareCoins.map(c => get(c.fc)) }));
+
     return {
       modeBadgeLabel: this.state.usingDemo ? '◆ DEMO DATA' : '● LIVE',
       modeBadgeStyle: this.state.usingDemo
@@ -508,6 +592,10 @@ class Component extends DCLogic {
       lastUpdateLabel: this.state.lastUpdate ? this.state.lastUpdate.toLocaleTimeString('id-ID') : '—',
       gateSections,
       footerTimestamp: this.state.lastUpdate ? this.state.lastUpdate.toLocaleString('id-ID') : '—',
+      hasCompareSelection: this.state.compareSet.length >= 2,
+      compareCount: this.state.compareSet.length,
+      compareOpen: this.state.compareOpen, openCompare: this.openCompare, closeCompare: this.closeCompare,
+      compareCoins, compareRows,
     };
   }
 }

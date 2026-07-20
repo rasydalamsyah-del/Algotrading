@@ -1,0 +1,129 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+
+<helmet>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <style>
+    body{margin:0;background:#0b0e11;-webkit-font-smoothing:antialiased}
+    a{color:#f0983f}
+    a:hover{color:#f5b46b}
+  </style>
+</helmet>
+<div style="min-height:100vh;background:#0b0e11;color:#e6eaf2;font-family:'Inter',system-ui,sans-serif;font-size:13px;line-height:1.5;overflow-x:hidden">
+  <nav style="position:sticky;top:0;z-index:80;height:56px;background:rgba(11,14,17,0.95);backdrop-filter:blur(20px);border-bottom:1px solid #1e2d45;display:flex;align-items:center;padding:0 20px;gap:14px">
+    <a href="Futures Dashboard.dc.html" style="display:flex;align-items:center;gap:9px;font-weight:700;font-size:14px;text-decoration:none;color:#e6eaf2">
+      <div style="width:30px;height:30px;border-radius:8px;background:linear-gradient(135deg,#f0983f,#f0455a);display:flex;align-items:center;justify-content:center;font-size:15px">⚡</div>
+      AlgoTrader <span style="color:#f0983f;margin-left:2px">Futures</span>
+    </a>
+  </nav>
+  <main style="max-width:1400px;margin:0 auto;padding:20px">
+    <sc-if value="{{ usingDemo }}" hint-placeholder-val="{{ false }}">
+      <div style="display:flex;align-items:center;gap:10px;background:rgba(240,180,41,0.08);border:1px solid rgba(240,180,41,0.3);border-radius:10px;padding:10px 16px;margin-bottom:16px;font-size:11.5px;color:#f0b429">
+        <span>⚠</span><span>{{ demoMessage }}</span>
+      </div>
+    </sc-if>
+    <div style="margin-bottom:16px">
+      <div style="font-size:17px;font-weight:700">Watchlist — Futures</div>
+      <div style="font-size:11px;color:#4a5878;margin-top:2px">{{ subtitle }}</div>
+    </div>
+    <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:10px">
+      <sc-for list="{{ coins }}" as="c" hint-placeholder-count="10">
+        <div style="background:#111722;border:1px solid #1e2d45;border-radius:10px;padding:12px">
+          <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">
+            <div style="font-weight:700;font-size:12px">{{ c.symbol }}</div>
+            <span style="font-size:9px;font-weight:800;padding:2px 6px;border-radius:4px;background:rgba(240,152,63,0.1);color:#f0983f">{{ c.leverage }}</span>
+          </div>
+          <div style="font-size:16px;font-weight:700;font-family:'JetBrains Mono',monospace;margin-bottom:3px">{{ c.price }}</div>
+          <div style="font-size:11px;font-weight:600;font-family:'JetBrains Mono',monospace;color:{{ c.chgColor }}">{{ c.chg }}</div>
+          <div style="display:flex;gap:5px;margin-top:8px">
+            <a href="{{ c.longHref }}" style="flex:1;text-align:center;padding:4px;border-radius:4px;font-size:9.5px;font-weight:700;text-decoration:none;background:rgba(0,214,143,0.08);color:#00d68f">▲ Long</a>
+            <a href="{{ c.shortHref }}" style="flex:1;text-align:center;padding:4px;border-radius:4px;font-size:9.5px;font-weight:700;text-decoration:none;background:rgba(240,69,90,0.08);color:#f0455a">▼ Short</a>
+          </div>
+        </div>
+      </sc-for>
+    </div>
+  </main>
+</div>
+
+</x-dc>
+<script type="text/x-dc" data-dc-script>
+
+function demoUniverse() {
+  const syms = ['BTC/USDT', 'ETH/USDT', 'SOL/USDT', 'ALT/USDT'];
+  return syms.map((s, i) => ({ symbol: s, last: s.includes('BTC') ? 68210 : s.includes('ETH') ? 3541 : s.includes('SOL') ? 172.4 : 0.41, change_pct: Math.sin(i * 1.7) * 4, leverage: 10 - i }));
+}
+class Component extends DCLogic {
+  state = { apiBase: 'http://localhost:8001/api', apiKey: '', universe: [], tickers: {}, usingDemo: false, demoMessage: '' };
+  componentDidMount() {
+    try {
+      const b = localStorage.getItem('gsf_api_base'); if (b) this.state.apiBase = b;
+      const k = localStorage.getItem('gs_api_key'); if (k) this.state.apiKey = k;
+    } catch (e) {}
+    this.fetchData();
+    this.connectStream();
+  }
+  componentWillUnmount() { if (this._streamCtrl) this._streamCtrl.abort(); }
+
+  async connectStream() {
+    if (!this.state.apiKey) return;
+    this._streamCtrl = new AbortController();
+    try {
+      const r = await fetch(this.state.apiBase + '/stream', { headers: { 'X-API-Key': this.state.apiKey, 'Accept': 'text/event-stream' }, signal: this._streamCtrl.signal });
+      if (!r.ok || !r.body) throw new Error('http ' + r.status);
+      const reader = r.body.getReader(); const decoder = new TextDecoder(); let buf = '';
+      while (true) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        buf += decoder.decode(value, { stream: true });
+        const chunks = buf.split('\n\n'); buf = chunks.pop();
+        for (const chunk of chunks) {
+          const line = chunk.split('\n').find(l => l.startsWith('data:'));
+          if (!line) continue;
+          try {
+            const evt = JSON.parse(line.slice(5).trim());
+            if (evt.type === 'ticker' && evt.data && evt.data.symbol) this.setState(s => ({ tickers: { ...s.tickers, [evt.data.symbol]: { ...(s.tickers[evt.data.symbol] || {}), ...evt.data } } }));
+          } catch (e) {}
+        }
+      }
+    } catch (e) {}
+  }
+  async fetchData() {
+    try {
+      const hdrs = {}; if (this.state.apiKey) hdrs['X-API-Key'] = this.state.apiKey;
+      const uData = await fetch(this.state.apiBase + '/universe/detail', { headers: hdrs }).then(r => r.ok ? r.json() : null);
+      const tkData = await fetch(this.state.apiBase + '/tickers', { headers: hdrs }).then(r => r.ok ? r.json() : null);
+      if (uData && Array.isArray(uData.universe)) this.setState({ universe: uData.universe, tickers: (tkData && tkData.tickers) || {}, usingDemo: false });
+      else throw new Error('no data');
+    } catch (e) {
+      this.setState({ universe: demoUniverse(), tickers: {}, usingDemo: true, demoMessage: this.state.apiKey ? 'Tidak bisa menyambung ke bot futures. Menampilkan data contoh.' : 'API Key belum diset. Menampilkan data contoh.' });
+    }
+  }
+  renderVals() {
+    const coins = this.state.universe.map(u => {
+      const t = this.state.tickers[u.symbol] || u;
+      const price = t.last || u.last || 0;
+      const chg = t.change_pct || u.change_pct || 0;
+      const up = chg >= 0;
+      return {
+        symbol: u.symbol, leverage: (u.leverage || 10) + '×',
+        price: price >= 1 ? '$' + price.toFixed(2) : '$' + price.toFixed(6),
+        chg: (up ? '▲ ' : '▼ ') + Math.abs(chg).toFixed(2) + '%', chgColor: up ? '#00d68f' : '#f0455a',
+        longHref: 'Futures Coin Detail.dc.html?symbol=' + encodeURIComponent(u.symbol) + '&side=long',
+        shortHref: 'Futures Coin Detail.dc.html?symbol=' + encodeURIComponent(u.symbol) + '&side=short',
+      };
+    });
+    return { usingDemo: this.state.usingDemo, demoMessage: this.state.demoMessage, subtitle: coins.length + ' coins futures', coins };
+  }
+}
+
+</script>
+</body>
+</html>

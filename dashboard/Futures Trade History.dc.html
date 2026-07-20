@@ -1,0 +1,181 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+
+<helmet>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <style>
+    body{margin:0;background:#0b0e11;-webkit-font-smoothing:antialiased}
+    a{color:#f0983f}
+    a:hover{color:#f5b46b}
+  </style>
+</helmet>
+<div style="min-height:100vh;background:#0b0e11;color:#e6eaf2;font-family:'Inter',system-ui,sans-serif;font-size:13px;line-height:1.5;overflow-x:hidden">
+  <nav style="position:sticky;top:0;z-index:80;height:56px;background:rgba(11,14,17,0.95);backdrop-filter:blur(20px);border-bottom:1px solid #1e2d45;display:flex;align-items:center;padding:0 20px;gap:14px">
+    <a href="Futures Dashboard.dc.html" style="display:flex;align-items:center;gap:9px;font-weight:700;font-size:14px;text-decoration:none;color:#e6eaf2">
+      <div style="width:30px;height:30px;border-radius:8px;background:linear-gradient(135deg,#f0983f,#f0455a);display:flex;align-items:center;justify-content:center;font-size:15px">⚡</div>
+      AlgoTrader <span style="color:#f0983f;margin-left:2px">Futures</span>
+    </a>
+  </nav>
+  <main style="max-width:1400px;margin:0 auto;padding:20px">
+    <sc-if value="{{ usingDemo }}" hint-placeholder-val="{{ false }}">
+      <div style="display:flex;align-items:center;gap:10px;background:rgba(240,180,41,0.08);border:1px solid rgba(240,180,41,0.3);border-radius:10px;padding:10px 16px;margin-bottom:16px;font-size:11.5px;color:#f0b429">
+        <span>⚠</span><span>{{ demoMessage }}</span>
+      </div>
+    </sc-if>
+    <div style="margin-bottom:16px">
+      <div style="font-size:17px;font-weight:700">Trade History — Futures</div>
+      <div style="font-size:11px;color:#4a5878;margin-top:2px">{{ subtitle }}</div>
+    </div>
+    <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-bottom:16px">
+      <div style="background:#111722;border:1px solid #1e2d45;border-radius:10px;padding:14px 16px">
+        <div style="font-size:10px;font-weight:600;color:#4a5878;text-transform:uppercase;margin-bottom:7px">Trades Long</div>
+        <div style="font-size:20px;font-weight:700;font-family:'JetBrains Mono',monospace;color:#00d68f">{{ longTrades }}</div>
+      </div>
+      <div style="background:#111722;border:1px solid #1e2d45;border-radius:10px;padding:14px 16px">
+        <div style="font-size:10px;font-weight:600;color:#4a5878;text-transform:uppercase;margin-bottom:7px">Trades Short</div>
+        <div style="font-size:20px;font-weight:700;font-family:'JetBrains Mono',monospace;color:#f0455a">{{ shortTrades }}</div>
+      </div>
+      <div style="background:#111722;border:1px solid #1e2d45;border-radius:10px;padding:14px 16px">
+        <div style="font-size:10px;font-weight:600;color:#4a5878;text-transform:uppercase;margin-bottom:7px">Net P&amp;L</div>
+        <div style="font-size:20px;font-weight:700;font-family:'JetBrains Mono',monospace;color:{{ netPnlColor }}">{{ netPnl }}</div>
+      </div>
+      <div style="background:#111722;border:1px solid #1e2d45;border-radius:10px;padding:14px 16px">
+        <div style="font-size:10px;font-weight:600;color:#4a5878;text-transform:uppercase;margin-bottom:7px">Total Fees</div>
+        <div style="font-size:20px;font-weight:700;font-family:'JetBrains Mono',monospace;color:#f0b429">{{ fees }}</div>
+      </div>
+    </div>
+    <div style="background:#111722;border:1px solid #1e2d45;border-radius:10px;overflow:hidden">
+      <div style="overflow-x:auto">
+        <table style="width:100%;border-collapse:collapse;font-size:11px;min-width:1000px">
+          <thead><tr>
+            <th style="padding:9px 10px;text-align:left;font-size:9.5px;font-weight:600;color:#4a5878;text-transform:uppercase;border-bottom:1px solid #1e2d45;background:#0b0e11;white-space:nowrap">Time</th>
+            <th style="padding:9px 10px;text-align:left;font-size:9.5px;font-weight:600;color:#4a5878;text-transform:uppercase;border-bottom:1px solid #1e2d45;background:#0b0e11;white-space:nowrap">Symbol</th>
+            <th style="padding:9px 10px;text-align:left;font-size:9.5px;font-weight:600;color:#4a5878;text-transform:uppercase;border-bottom:1px solid #1e2d45;background:#0b0e11;white-space:nowrap">Side</th>
+            <th style="padding:9px 10px;text-align:right;font-size:9.5px;font-weight:600;color:#4a5878;text-transform:uppercase;border-bottom:1px solid #1e2d45;background:#0b0e11;white-space:nowrap">Leverage</th>
+            <th style="padding:9px 10px;text-align:right;font-size:9.5px;font-weight:600;color:#4a5878;text-transform:uppercase;border-bottom:1px solid #1e2d45;background:#0b0e11;white-space:nowrap">Price</th>
+            <th style="padding:9px 10px;text-align:right;font-size:9.5px;font-weight:600;color:#4a5878;text-transform:uppercase;border-bottom:1px solid #1e2d45;background:#0b0e11;white-space:nowrap">Fee</th>
+            <th style="padding:9px 10px;text-align:right;font-size:9.5px;font-weight:600;color:#4a5878;text-transform:uppercase;border-bottom:1px solid #1e2d45;background:#0b0e11;white-space:nowrap">PnL</th>
+          </tr></thead>
+          <tbody>
+            <sc-if value="{{ hasTrades }}" hint-placeholder-val="{{ true }}">
+              <sc-for list="{{ rows }}" as="t" hint-placeholder-count="6">
+                <tr>
+                  <td style="padding:10px;border-bottom:1px solid rgba(30,45,69,0.5);color:#8a9bba;font-family:'JetBrains Mono',monospace;white-space:nowrap">{{ t.time }}</td>
+                  <td style="padding:10px;border-bottom:1px solid rgba(30,45,69,0.5);font-weight:700;white-space:nowrap">{{ t.symbol }}</td>
+                  <td style="padding:10px;border-bottom:1px solid rgba(30,45,69,0.5);white-space:nowrap"><span style="display:inline-block;padding:2px 7px;border-radius:4px;font-size:9.5px;font-weight:700;background:{{ t.sideBg }};color:{{ t.sideColor }}">{{ t.side }}</span></td>
+                  <td style="padding:10px;text-align:right;border-bottom:1px solid rgba(30,45,69,0.5);font-family:'JetBrains Mono',monospace;color:#f0983f;white-space:nowrap">{{ t.leverage }}</td>
+                  <td style="padding:10px;text-align:right;border-bottom:1px solid rgba(30,45,69,0.5);font-family:'JetBrains Mono',monospace;color:#8a9bba;white-space:nowrap">{{ t.price }}</td>
+                  <td style="padding:10px;text-align:right;border-bottom:1px solid rgba(30,45,69,0.5);font-family:'JetBrains Mono',monospace;color:#f0b429;white-space:nowrap">{{ t.fee }}</td>
+                  <td style="padding:10px;text-align:right;border-bottom:1px solid rgba(30,45,69,0.5);font-family:'JetBrains Mono',monospace;font-weight:600;color:{{ t.pnlColor }};white-space:nowrap">{{ t.pnl }}</td>
+                </tr>
+              </sc-for>
+            </sc-if>
+            <sc-if value="{{ hasNoTrades }}" hint-placeholder-val="{{ false }}">
+              <tr><td colspan="7" style="text-align:center;padding:32px;color:#4a5878">📋 Belum ada trade futures</td></tr>
+            </sc-if>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </main>
+</div>
+
+</x-dc>
+<script type="text/x-dc" data-dc-script>
+
+function fmtUSD(v, d = 2) { if (v == null) return '—'; return '$' + Number(v).toLocaleString('en-US', { minimumFractionDigits: d, maximumFractionDigits: d }); }
+function signUSD(v) { if (v == null) return '—'; return (v >= 0 ? '+' : '') + fmtUSD(v); }
+function demoTrades() {
+  const now = Date.now();
+  return Array.from({ length: 16 }, (_, i) => ({
+    timestamp: new Date(now - i * 3600e3 * 2).toISOString(), symbol: i % 2 ? 'ETH/USDT' : 'BTC/USDT',
+    side: i % 2 ? 'short' : 'long', leverage: i % 2 ? 5 : 10, executed_price: 100 + i * 20,
+    fee_cost: 0.3 + i * 0.05, realized_pnl: (i % 3 === 0 ? -1 : 1) * (5 + i),
+  }));
+}
+class Component extends DCLogic {
+  state = { apiBase: 'http://localhost:8001/api', apiKey: '', trades: [], usingDemo: false, demoMessage: '' };
+  componentDidMount() {
+    try {
+      const b = localStorage.getItem('gsf_api_base'); if (b) this.state.apiBase = b;
+      const k = localStorage.getItem('gs_api_key'); if (k) this.state.apiKey = k;
+    } catch (e) {}
+    this.fetchData();
+    this.connectStream();
+  }
+  componentWillUnmount() { if (this._streamCtrl) this._streamCtrl.abort(); }
+
+  async connectStream() {
+    if (!this.state.apiKey) return;
+    this._streamCtrl = new AbortController();
+    try {
+      const r = await fetch(this.state.apiBase + '/stream', { headers: { 'X-API-Key': this.state.apiKey, 'Accept': 'text/event-stream' }, signal: this._streamCtrl.signal });
+      if (!r.ok || !r.body) throw new Error('http ' + r.status);
+      this.setState({ streamLive: true });
+      const reader = r.body.getReader(); const decoder = new TextDecoder(); let buf = '';
+      while (true) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        buf += decoder.decode(value, { stream: true });
+        const chunks = buf.split('\n\n'); buf = chunks.pop();
+        for (const chunk of chunks) {
+          const line = chunk.split('\n').find(l => l.startsWith('data:'));
+          if (!line) continue;
+          try {
+            const evt = JSON.parse(line.slice(5).trim());
+            if (evt.type === 'trade' && evt.data && evt.data.symbol) this.setState(s => ({ trades: [evt.data, ...s.trades] }));
+          } catch (e) {}
+        }
+      }
+    } catch (e) { this.setState({ streamLive: false }); }
+    if (!this._streamCtrl.signal.aborted) setTimeout(() => this.connectStream(), 4000);
+  }
+  async fetchData() {
+    try {
+      const hdrs = {}; if (this.state.apiKey) hdrs['X-API-Key'] = this.state.apiKey;
+      const r = await fetch(this.state.apiBase + '/trades?limit=200', { headers: hdrs });
+      if (!r.ok) throw new Error('http ' + r.status);
+      const data = await r.json();
+      this.setState({ trades: data.trades || [], usingDemo: false });
+    } catch (e) {
+      this.setState({ trades: demoTrades(), usingDemo: true, demoMessage: this.state.apiKey ? 'Tidak bisa menyambung ke bot futures. Menampilkan data contoh.' : 'API Key belum diset. Menampilkan data contoh.' });
+    }
+  }
+  renderVals() {
+    const trades = [...this.state.trades].sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
+    const closed = this.state.trades.filter(t => t.realized_pnl != null);
+    const netPnl = closed.reduce((a, t) => a + t.realized_pnl, 0);
+    const fees = this.state.trades.reduce((a, t) => a + (t.fee_cost || 0), 0);
+    const longTrades = this.state.trades.filter(t => t.side === 'long').length;
+    const shortTrades = this.state.trades.filter(t => t.side === 'short').length;
+    const rows = trades.map(t => {
+      const pnl = t.realized_pnl; const hasPnl = pnl != null;
+      const isLong = t.side === 'long';
+      return {
+        time: new Date(t.timestamp).toLocaleString('id-ID', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' }),
+        symbol: t.symbol, side: (t.side || '—').toUpperCase(),
+        sideBg: isLong ? 'rgba(0,214,143,0.08)' : 'rgba(240,69,90,0.08)', sideColor: isLong ? '#00d68f' : '#f0455a',
+        leverage: (t.leverage || '—') + '×', price: fmtUSD(t.executed_price), fee: fmtUSD(t.fee_cost, 4),
+        pnl: hasPnl ? signUSD(pnl) : 'open', pnlColor: hasPnl ? (pnl >= 0 ? '#00d68f' : '#f0455a') : '#4a5878',
+      };
+    });
+    return {
+      usingDemo: this.state.usingDemo, demoMessage: this.state.demoMessage,
+      subtitle: closed.length + ' closed trades', longTrades, shortTrades,
+      netPnl: signUSD(netPnl), netPnlColor: netPnl >= 0 ? '#00d68f' : '#f0455a', fees: fmtUSD(fees, 4),
+      hasTrades: rows.length > 0, hasNoTrades: rows.length === 0, rows,
+    };
+  }
+}
+
+</script>
+</body>
+</html>

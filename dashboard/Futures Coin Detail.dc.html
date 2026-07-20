@@ -1,0 +1,164 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+
+<helmet>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <style>
+    body{margin:0;background:#0b0e11;-webkit-font-smoothing:antialiased}
+    a{color:#f0983f}
+    a:hover{color:#f5b46b}
+  </style>
+</helmet>
+<div style="min-height:100vh;background:#0b0e11;color:#e6eaf2;font-family:'Inter',system-ui,sans-serif;font-size:13px;line-height:1.5;overflow-x:hidden">
+  <div style="padding:0 24px;height:58px;display:flex;align-items:center;gap:14px;background:rgba(11,14,17,0.97);backdrop-filter:blur(20px);border-bottom:1px solid #1e2d45;position:sticky;top:0;z-index:10;flex-wrap:wrap">
+    <a href="Futures Gate Scanner.dc.html" style="display:flex;align-items:center;gap:5px;cursor:pointer;color:#8a9bba;font-size:11px;font-weight:700;padding:5px 10px;border-radius:6px;border:1px solid #1e2d45;text-decoration:none">← Kembali</a>
+    <div style="font-weight:800;font-size:15px">{{ symbol }}</div>
+    <span style="font-size:9px;font-weight:800;padding:3px 8px;border-radius:4px;background:{{ sideBg }};color:{{ sideColor }}">{{ sideIcon }} {{ side }}</span>
+    <div style="margin-left:auto;font-family:'JetBrains Mono',monospace;font-weight:800;font-size:16px">{{ price }}</div>
+  </div>
+
+  <div style="padding:20px 24px;max-width:1000px;margin:0 auto">
+    <sc-if value="{{ usingDemo }}" hint-placeholder-val="{{ false }}">
+      <div style="display:flex;align-items:center;gap:10px;background:rgba(240,180,41,0.08);border:1px solid rgba(240,180,41,0.3);border-radius:10px;padding:10px 16px;margin-bottom:16px;font-size:11.5px;color:#f0b429">
+        <span>⚠</span><span>{{ demoMessage }}</span>
+      </div>
+    </sc-if>
+
+    <div style="display:flex;gap:6px;margin-bottom:16px">
+      <a href="{{ longHref }}" style="padding:6px 16px;border-radius:20px;font-size:11px;font-weight:700;text-decoration:none;background:{{ longBg }};color:{{ longColor }};border:1px solid {{ longBorder }}">▲ LONG</a>
+      <a href="{{ shortHref }}" style="padding:6px 16px;border-radius:20px;font-size:11px;font-weight:700;text-decoration:none;background:{{ shortBg }};color:{{ shortColor }};border:1px solid {{ shortBorder }}">▼ SHORT</a>
+    </div>
+
+    <div style="display:grid;grid-template-columns:1fr 300px;gap:16px">
+      <div style="background:#111722;border:1px solid #1e2d45;border-radius:10px;padding:14px">
+        <div style="font-size:11px;font-weight:700;margin-bottom:12px">🧠 Intelligence Score ({{ side }})</div>
+        <div style="text-align:center;margin-bottom:12px">
+          <div style="font-size:38px;font-weight:800;font-family:'JetBrains Mono',monospace;color:{{ scoreColor }}">{{ totalScore }}</div>
+          <div style="font-size:9px;color:#4a5878;text-transform:uppercase;margin-top:2px">Total Score</div>
+        </div>
+        <div style="display:flex;justify-content:space-between;padding:7px 0;border-bottom:1px solid rgba(30,45,69,0.6);font-size:11px"><span style="color:#4a5878">Trigger Met</span><span style="font-family:'JetBrains Mono',monospace;font-weight:600;color:{{ triggerColor }}">{{ triggerLabel }}</span></div>
+        <div style="display:flex;justify-content:space-between;padding:7px 0;font-size:11px"><span style="color:#4a5878">Trend Summary</span><span style="font-family:'JetBrains Mono',monospace;font-weight:600">{{ trendSummary }}</span></div>
+      </div>
+      <div style="background:#111722;border:1px solid #1e2d45;border-radius:10px;padding:14px">
+        <div style="font-size:11px;font-weight:700;margin-bottom:12px">🎯 Forecast</div>
+        <div style="font-size:10px;color:#4a5878;margin-bottom:3px">Prob. Favorable</div>
+        <div style="font-size:22px;font-weight:800;font-family:'JetBrains Mono',monospace;color:{{ probColor }};margin-bottom:10px">{{ probLabel }}</div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
+          <div style="background:#0b0e11;border:1px solid #1e2d45;border-radius:6px;padding:8px">
+            <div style="font-size:9.5px;color:#4a5878;margin-bottom:4px">Suggested SL</div>
+            <div style="font-size:13px;font-weight:800;font-family:'JetBrains Mono',monospace;color:#f0455a">{{ slPrice }}</div>
+          </div>
+          <div style="background:#0b0e11;border:1px solid #1e2d45;border-radius:6px;padding:8px">
+            <div style="font-size:9.5px;color:#4a5878;margin-bottom:4px">Suggested TP</div>
+            <div style="font-size:13px;font-weight:800;font-family:'JetBrains Mono',monospace;color:#00d68f">{{ tpPrice }}</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+</x-dc>
+<script type="text/x-dc" data-dc-script>
+
+function fmtP(v) { if (v == null || v === 0) return '—'; return '$' + (v >= 1 ? v.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : v.toFixed(6)); }
+
+function demoForecast(symbol, side) {
+  const price = symbol.includes('BTC') ? 68210 : symbol.includes('ETH') ? 3541 : 172.4;
+  const isLong = side === 'long';
+  return {
+    symbol, side, current_price: price, total_score: isLong ? 78.4 : 71.2, trigger_met: true,
+    trend_summary: isLong ? 'Bullish EMA stack aligned' : 'Bearish momentum confirmed',
+    probability_favorable_pct: isLong ? 68 : 61,
+    suggested_sl: isLong ? price * 0.96 : price * 1.04, suggested_tp: isLong ? price * 1.06 : price * 0.94,
+  };
+}
+
+class Component extends DCLogic {
+  state = { apiBase: 'http://localhost:8001/api', apiKey: '', symbol: 'BTC/USDT', side: 'long', forecast: null, usingDemo: false, demoMessage: '' };
+  componentDidMount() {
+    try {
+      const b = localStorage.getItem('gsf_api_base'); if (b) this.state.apiBase = b;
+      const k = localStorage.getItem('gs_api_key'); if (k) this.state.apiKey = k;
+      const params = new URLSearchParams(window.location.search);
+      const sym = params.get('symbol'); if (sym) this.state.symbol = decodeURIComponent(sym);
+      const side = params.get('side'); if (side) this.state.side = side;
+    } catch (e) {}
+    this.fetchData();
+  }
+  async fetchData() {
+    try {
+      const hdrs = {}; if (this.state.apiKey) hdrs['X-API-Key'] = this.state.apiKey;
+      const r = await fetch(this.state.apiBase + '/forecast', { headers: hdrs });
+      if (!r.ok) throw new Error('http ' + r.status);
+      const data = await r.json();
+      const fc = (data.forecasts || []).find(f => f.symbol === this.state.symbol && f.side === this.state.side);
+      if (!fc) throw new Error('not found');
+      this.setState({ forecast: fc, usingDemo: false });
+    } catch (e) {
+      this.setState({ forecast: demoForecast(this.state.symbol, this.state.side), usingDemo: true, demoMessage: this.state.apiKey ? 'Tidak bisa menyambung ke bot futures. Menampilkan data contoh.' : 'API Key belum diset. Menampilkan data contoh.' });
+    }
+    this.connectStream();
+  }
+
+  async connectStream() {
+    if (!this.state.apiKey || this._streamCtrl) return;
+    this._streamCtrl = new AbortController();
+    try {
+      const r = await fetch(this.state.apiBase + '/stream', { headers: { 'X-API-Key': this.state.apiKey, 'Accept': 'text/event-stream' }, signal: this._streamCtrl.signal });
+      if (!r.ok || !r.body) throw new Error('http ' + r.status);
+      const reader = r.body.getReader(); const decoder = new TextDecoder(); let buf = '';
+      while (true) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        buf += decoder.decode(value, { stream: true });
+        const chunks = buf.split('\n\n'); buf = chunks.pop();
+        for (const chunk of chunks) {
+          const line = chunk.split('\n').find(l => l.startsWith('data:'));
+          if (!line) continue;
+          try {
+            const evt = JSON.parse(line.slice(5).trim());
+            if (evt.type === 'ticker' && evt.data && evt.data.symbol === this.state.symbol) {
+              this.setState(s => ({ forecast: s.forecast ? { ...s.forecast, current_price: evt.data.last ?? s.forecast.current_price } : s.forecast }));
+            }
+          } catch (e) {}
+        }
+      }
+    } catch (e) {}
+  }
+  componentWillUnmount() { if (this._streamCtrl) this._streamCtrl.abort(); }
+  renderVals() {
+    const sym = this.state.symbol; const side = this.state.side;
+    const isLong = side === 'long';
+    const fc = this.state.forecast || demoForecast(sym, side);
+    const score = fc.total_score || 0;
+    const prob = fc.probability_favorable_pct || 0;
+    return {
+      symbol: sym, side: side.toUpperCase(), sideIcon: isLong ? '▲' : '▼',
+      sideBg: isLong ? 'rgba(0,214,143,0.1)' : 'rgba(240,69,90,0.1)', sideColor: isLong ? '#00d68f' : '#f0455a',
+      price: fmtP(fc.current_price),
+      usingDemo: this.state.usingDemo, demoMessage: this.state.demoMessage,
+      longHref: 'Futures Coin Detail.dc.html?symbol=' + encodeURIComponent(sym) + '&side=long',
+      shortHref: 'Futures Coin Detail.dc.html?symbol=' + encodeURIComponent(sym) + '&side=short',
+      longBg: isLong ? 'rgba(0,214,143,0.15)' : 'transparent', longColor: isLong ? '#00d68f' : '#8a9bba', longBorder: isLong ? '#00d68f' : '#1e2d45',
+      shortBg: !isLong ? 'rgba(240,69,90,0.15)' : 'transparent', shortColor: !isLong ? '#f0455a' : '#8a9bba', shortBorder: !isLong ? '#f0455a' : '#1e2d45',
+      totalScore: Math.round(score), scoreColor: score >= 70 ? '#00d68f' : score >= 50 ? '#f0b429' : '#f0455a',
+      triggerLabel: fc.trigger_met ? 'YA ✓' : 'TIDAK', triggerColor: fc.trigger_met ? '#00d68f' : '#8a9bba',
+      trendSummary: fc.trend_summary || '—',
+      probLabel: prob.toFixed(0) + '%', probColor: prob >= 65 ? '#00d68f' : prob >= 50 ? '#f0b429' : '#f0455a',
+      slPrice: fmtP(fc.suggested_sl), tpPrice: fmtP(fc.suggested_tp),
+    };
+  }
+}
+
+</script>
+</body>
+</html>

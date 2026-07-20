@@ -21,7 +21,7 @@
   </style>
 </helmet>
 
-<div style="min-height:100vh;background:#0b0e11;color:#e6eaf2;font-family:'Inter',system-ui,sans-serif;font-size:13px;line-height:1.5">
+<div style="min-height:100vh;background:#0b0e11;color:#e6eaf2;font-family:'Inter',system-ui,sans-serif;font-size:13px;line-height:1.5;overflow-x:hidden">
 
   <!-- TOASTS -->
   <div style="position:fixed;bottom:16px;right:16px;z-index:300;display:flex;flex-direction:column;gap:7px;max-width:calc(100vw - 32px)">
@@ -156,6 +156,31 @@
         </div>
       </div>
 
+      <!-- COIN PROFILES REFERENCE -->
+      <div style="margin-bottom:22px">
+        <div style="font-size:12px;font-weight:700;margin-bottom:12px;padding-bottom:7px;border-bottom:1px solid #1e2d45">🏷️ Coin Profiles (strategy_profile)</div>
+        <div style="overflow-x:auto">
+          <table style="width:100%;border-collapse:collapse;font-size:11px;min-width:600px">
+            <thead><tr>
+              <th style="padding:8px 10px;text-align:left;font-size:9.5px;font-weight:600;color:#4a5878;text-transform:uppercase;border-bottom:1px solid #1e2d45;background:#0b0e11">Profile</th>
+              <th style="padding:8px 10px;text-align:left;font-size:9.5px;font-weight:600;color:#4a5878;text-transform:uppercase;border-bottom:1px solid #1e2d45;background:#0b0e11">Timeframe</th>
+              <th style="padding:8px 10px;text-align:left;font-size:9.5px;font-weight:600;color:#4a5878;text-transform:uppercase;border-bottom:1px solid #1e2d45;background:#0b0e11">Karakteristik</th>
+              <th style="padding:8px 10px;text-align:right;font-size:9.5px;font-weight:600;color:#4a5878;text-transform:uppercase;border-bottom:1px solid #1e2d45;background:#0b0e11">Coin di Watchlist</th>
+            </tr></thead>
+            <tbody>
+              <sc-for list="{{ profileRows }}" as="cp" hint-placeholder-count="6">
+                <tr>
+                  <td style="padding:9px 10px;border-bottom:1px solid rgba(30,45,69,0.5);font-weight:700"><span style="color:{{ cp.color }}">{{ cp.emoji }} {{ cp.name }}</span></td>
+                  <td style="padding:9px 10px;border-bottom:1px solid rgba(30,45,69,0.5);font-family:'JetBrains Mono',monospace;color:#8a9bba">{{ cp.timeframe }}</td>
+                  <td style="padding:9px 10px;border-bottom:1px solid rgba(30,45,69,0.5);color:#8a9bba">{{ cp.desc }}</td>
+                  <td style="padding:9px 10px;text-align:right;border-bottom:1px solid rgba(30,45,69,0.5);font-family:'JetBrains Mono',monospace;font-weight:600">{{ cp.coinCount }}</td>
+                </tr>
+              </sc-for>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
       <!-- RISK CONFIG -->
       <div>
         <div style="font-size:12px;font-weight:700;margin-bottom:12px;padding-bottom:7px;border-bottom:1px solid #1e2d45">🛡 Risk Configuration <span style="font-size:10px;color:#4a5878;font-weight:400">— aktif dalam ~30 detik tanpa restart</span></div>
@@ -253,11 +278,14 @@ class Component extends DCLogic {
   async fetchData() {
     const s = await this.apiGet('/status');
     const c = await this.apiGet('/config/current');
+    const u = await this.apiGet('/universe/detail');
+    const counts = {};
+    if (u && Array.isArray(u.universe)) u.universe.forEach(x => { counts[x.profile] = (counts[x.profile] || 0) + 1; });
     if (s) {
       const risk = (c && c.config) || demoRisk();
-      this.setState({ status: s, risk, riskInputs: { ...risk }, apiStatus: 'ok' });
+      this.setState({ status: s, risk, riskInputs: { ...risk }, profileCounts: counts, apiStatus: 'ok' });
     } else {
-      this.setState({ status: demoStatus(), risk: demoRisk(), riskInputs: { ...demoRisk() }, apiStatus: 'fail' });
+      this.setState({ status: demoStatus(), risk: demoRisk(), riskInputs: { ...demoRisk() }, profileCounts: {}, apiStatus: 'fail' });
     }
   }
 
@@ -336,6 +364,22 @@ class Component extends DCLogic {
       label, help, value: ri[key] ?? '', onInput: (e) => this.onRiskInput(key, e),
     }));
 
+    // Referensi profil strategi -- engine/profiles/registry.py (6 profil tetap).
+    const PROFILE_DEFS = [
+      ['scalp_volatile', '🎯 Scalp Volatile', '15m', 'Momentum cepat, volatilitas tinggi, hold singkat'],
+      ['breakout_swift', '⚡ Breakout Swift', '1h', 'Breakout arah baru, entry cepat saat konfirmasi'],
+      ['trend_follow', '📈 Trend Follow', '4h', 'Ikut tren mapan, hold lebih lama'],
+      ['mean_revert', '↩️ Mean Revert', '4h', 'Kembali ke rata-rata saat ranging'],
+      ['extreme_momentum', '🚀 Extreme Momentum', '15m', 'Lonjakan ekstrem, risk tinggi reward tinggi'],
+      ['hodl_accumulate', '🏦 Hodl Accumulate', '1d', 'Akumulasi jangka panjang, minim trading aktif'],
+    ];
+    const profColorMap = { scalp_volatile: '#a78bfa', breakout_swift: '#22d3ee', trend_follow: '#4589ff', mean_revert: '#fb923c', extreme_momentum: '#f0455a', hodl_accumulate: '#fbbf24' };
+    const pc = this.state.profileCounts || {};
+    const profileRows = PROFILE_DEFS.map(([key, name, tf, desc]) => ({
+      name: name.replace(/^\S+\s/, ''), emoji: name.split(' ')[0], color: profColorMap[key],
+      timeframe: tf, desc, coinCount: pc[key] || 0,
+    }));
+
     const toasts = this.state.toasts.map(t => ({ ...t, onClose: () => this.closeToast(t.id) }));
     const c = this.state.confirm;
 
@@ -362,6 +406,7 @@ class Component extends DCLogic {
       statusFields,
       resumeBot: this.resumeBot, haltBot: this.haltBot, pauseStrategy: this.pauseStrategy, resumeStrategy: this.resumeStrategy,
       riskFields, saveRiskConfig: this.saveRiskConfig,
+      profileRows,
     };
   }
 }

@@ -22,7 +22,7 @@
   </style>
 </helmet>
 
-<div style="min-height:100vh;background:#0b0e11;color:#e6eaf2;font-family:'Inter',system-ui,sans-serif;font-size:13px;line-height:1.5">
+<div style="min-height:100vh;background:#0b0e11;color:#e6eaf2;font-family:'Inter',system-ui,sans-serif;font-size:13px;line-height:1.5;overflow-x:hidden">
 
   <nav style="position:sticky;top:0;z-index:80;height:56px;background:rgba(11,14,17,0.95);backdrop-filter:blur(20px);border-bottom:1px solid #1e2d45;display:flex;align-items:center;padding:0 20px;gap:14px">
     <sc-if value="{{ isMobile }}" hint-placeholder-val="{{ false }}">
@@ -86,8 +86,21 @@
           <div style="font-size:17px;font-weight:700">Diagnosa Sinyal</div>
           <div style="font-size:11px;color:#4a5878;margin-top:2px">Analisis real-time semua coin di watchlist · VolumetricBreakout v7.0</div>
         </div>
-        <button onclick="{{ runDiagnosa }}" disabled="{{ isLoading }}" style="background:#4589ff;border:none;border-radius:6px;padding:7px 16px;font-size:11px;color:#fff;font-weight:700;cursor:pointer;font-family:inherit;white-space:nowrap">{{ btnLabel }}</button>
+        <div style="display:flex;gap:8px;flex-wrap:wrap">
+          <input value="{{ forceSymbol }}" oninput="{{ onForceSymbolChange }}" placeholder="Symbol, ex: BTC/USDT" style="background:#111722;border:1px solid #1e2d45;border-radius:6px;padding:7px 10px;font-size:11px;color:#e6eaf2;font-family:'JetBrains Mono',monospace;width:150px"/>
+          <button onclick="{{ forceAnalyze }}" disabled="{{ isForcing }}" style="background:none;border:1px solid #4589ff;border-radius:6px;padding:7px 14px;font-size:11px;color:#4589ff;font-weight:700;cursor:pointer;font-family:inherit;white-space:nowrap">{{ forceBtnLabel }}</button>
+          <button onclick="{{ runDiagnosa }}" disabled="{{ isLoading }}" style="background:#4589ff;border:none;border-radius:6px;padding:7px 16px;font-size:11px;color:#fff;font-weight:700;cursor:pointer;font-family:inherit;white-space:nowrap">{{ btnLabel }}</button>
+        </div>
       </div>
+
+      <sc-if value="{{ showForceResult }}" hint-placeholder-val="{{ false }}">
+        <a href="{{ forceResultHref }}" style="display:block;text-decoration:none;color:inherit;background:#111722;border:1px solid {{ forceResultBorder }};border-radius:10px;padding:12px;margin-bottom:16px">
+          <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+            <span style="font-size:11px;font-weight:700;color:#4a5878;text-transform:uppercase;letter-spacing:.5px">Force Analyze</span>
+            <span style="font-size:13px;font-weight:700">{{ forceResultText }}</span>
+          </div>
+        </a>
+      </sc-if>
 
       <sc-if value="{{ showSummary }}" hint-placeholder-val="{{ false }}">
         <div style="display:grid;grid-template-columns:{{ summaryCols }};gap:10px;margin-bottom:16px">
@@ -168,6 +181,27 @@ class Component extends DCLogic {
   state = {
     apiBase: 'http://localhost:8000/api', apiKey: '',
     isLoading: false, hasRun: false, results: null, apiOnline: false, usingDemo: false, demoMessage: '',
+    forceSymbol: '', isForcing: false, forceResult: null,
+  };
+
+  onForceSymbolChange = (e) => this.setState({ forceSymbol: e.target.value.toUpperCase() });
+
+  forceAnalyze = async () => {
+    const sym = (this.state.forceSymbol || '').trim();
+    if (!sym) return;
+    this.setState({ isForcing: true, forceResult: null });
+    try {
+      const hdrs = { 'Content-Type': 'application/json' }; if (this.state.apiKey) hdrs['X-API-Key'] = this.state.apiKey;
+      const ctrl = new AbortController();
+      const tid = setTimeout(() => ctrl.abort(), 30000);
+      const r = await fetch(this.state.apiBase + '/bot/force_analyze/' + encodeURIComponent(sym), { method: 'POST', signal: ctrl.signal, headers: hdrs });
+      clearTimeout(tid);
+      if (!r.ok) throw new Error('http ' + r.status);
+      const data = await r.json();
+      this.setState({ isForcing: false, forceResult: { ok: true, symbol: sym, data } });
+    } catch (e) {
+      this.setState({ isForcing: false, forceResult: { ok: false, symbol: sym, error: e.message || String(e) } });
+    }
   };
 
   componentDidMount() {
@@ -206,6 +240,7 @@ class Component extends DCLogic {
   };
 
   renderVals() {
+    const fr = this.state.forceResult;
     const isMobile = !!this.state.isMobile;
     const navItems = [
       { icon: '⬛', label: 'Dashboard', href: 'Dashboard.dc.html' },
@@ -268,6 +303,13 @@ class Component extends DCLogic {
       showResults: this.state.hasRun && !this.state.isLoading && results.length > 0,
       showEmpty: !this.state.hasRun && !this.state.isLoading,
       results,
+      forceSymbol: this.state.forceSymbol, onForceSymbolChange: this.onForceSymbolChange,
+      forceAnalyze: this.forceAnalyze, isForcing: this.state.isForcing,
+      forceBtnLabel: this.state.isForcing ? '⏳ Menganalisis...' : '⚡ Force 1 Coin',
+      showForceResult: !!this.state.forceResult,
+      forceResultHref: fr && fr.ok ? 'Coin Detail.dc.html?symbol=' + encodeURIComponent(fr.symbol) : '#',
+      forceResultBorder: fr && fr.ok ? 'rgba(0,214,143,0.4)' : 'rgba(240,69,90,0.4)',
+      forceResultText: fr ? (fr.ok ? '✅ ' + fr.symbol + ' dianalisis ulang — klik untuk lihat detail' : '❌ ' + fr.symbol + ': ' + fr.error) : '',
     };
   }
 }

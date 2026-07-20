@@ -1,0 +1,187 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+
+<helmet>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <style>
+    @keyframes spin{to{transform:rotate(360deg)}}
+    body{margin:0;background:#0b0e11;-webkit-font-smoothing:antialiased}
+    a{color:#f0983f}
+    a:hover{color:#f5b46b}
+  </style>
+</helmet>
+
+<div style="min-height:100vh;background:#0b0e11;color:#e6eaf2;font-family:'Inter',system-ui,sans-serif;font-size:13px;line-height:1.5;overflow-x:hidden">
+
+  <nav style="position:sticky;top:0;z-index:80;height:56px;background:rgba(11,14,17,0.95);backdrop-filter:blur(20px);border-bottom:1px solid #1e2d45;display:flex;align-items:center;padding:0 20px;gap:14px">
+    <a href="Futures Dashboard.dc.html" style="display:flex;align-items:center;gap:9px;font-weight:700;font-size:14px;flex-shrink:0;text-decoration:none;color:#e6eaf2">
+      <div style="width:30px;height:30px;border-radius:8px;background:linear-gradient(135deg,#f0983f,#f0455a);display:flex;align-items:center;justify-content:center;font-size:15px">⚡</div>
+      AlgoTrader <span style="color:#f0983f;margin-left:2px">Futures</span>
+    </a>
+  </nav>
+
+  <main style="max-width:1100px;margin:0 auto;padding:20px">
+    <div style="display:flex;align-items:flex-start;justify-content:space-between;margin-bottom:16px;gap:10px;flex-wrap:wrap">
+      <div>
+        <div style="font-size:17px;font-weight:700">Diagnosa Sinyal — Futures</div>
+        <div style="font-size:11px;color:#4a5878;margin-top:2px">Bidirectional: setiap coin di-scoring LONG dan SHORT terpisah</div>
+      </div>
+      <button onclick="{{ runDiagnosa }}" disabled="{{ isLoading }}" style="background:#f0983f;border:none;border-radius:6px;padding:7px 16px;font-size:11px;color:#fff;font-weight:700;cursor:pointer;font-family:inherit">{{ btnLabel }}</button>
+    </div>
+
+    <sc-if value="{{ usingDemo }}" hint-placeholder-val="{{ false }}">
+      <div style="display:flex;align-items:center;gap:10px;background:rgba(240,180,41,0.08);border:1px solid rgba(240,180,41,0.3);border-radius:10px;padding:10px 16px;margin-bottom:16px;font-size:11.5px;color:#f0b429">
+        <span>⚠</span><span>{{ demoMessage }}</span>
+      </div>
+    </sc-if>
+
+    <sc-if value="{{ showFilters }}" hint-placeholder-val="{{ false }}">
+      <div style="display:flex;gap:6px;margin-bottom:16px">
+        <sc-for list="{{ sideFilters }}" as="sf" hint-placeholder-count="3">
+          <button onclick="{{ sf.onClick }}" style="padding:5px 14px;border-radius:20px;font-size:10.5px;font-weight:700;cursor:pointer;border:1px solid {{ sf.border }};background:{{ sf.bg }};color:{{ sf.color }};font-family:inherit">{{ sf.label }}</button>
+        </sc-for>
+      </div>
+    </sc-if>
+
+    <sc-if value="{{ isLoading }}" hint-placeholder-val="{{ false }}">
+      <div style="text-align:center;padding:40px">
+        <div style="width:24px;height:24px;margin:0 auto 12px;border:3px solid #1e2d45;border-top-color:#f0983f;border-radius:50%;animation:spin 0.7s linear infinite"></div>
+        <div style="color:#4a5878;font-size:12px">Menganalisis LONG &amp; SHORT semua coin...</div>
+      </div>
+    </sc-if>
+
+    <sc-if value="{{ showResults }}" hint-placeholder-val="{{ false }}">
+      <div style="display:flex;flex-direction:column;gap:8px">
+        <sc-for list="{{ results }}" as="r" hint-placeholder-count="4">
+          <div style="background:#111722;border:1px solid {{ r.borderColor }};border-radius:10px;padding:12px;{{ r.bgTint }}">
+            <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:6px">
+              <span style="font-size:9px;font-weight:800;padding:3px 8px;border-radius:4px;background:{{ r.sideBg }};color:{{ r.sideColor }}">{{ r.sideIcon }} {{ r.side }}</span>
+              <span style="font-size:14px;font-weight:700">{{ r.symbol }}</span>
+              <sc-if value="{{ r.isTrigger }}" hint-placeholder-val="{{ false }}">
+                <span style="display:inline-block;padding:2px 7px;border-radius:4px;font-size:9.5px;font-weight:600;background:rgba(0,214,143,0.08);color:#00d68f">TRIGGER</span>
+              </sc-if>
+              <div style="margin-left:auto;display:flex;align-items:center;gap:8px;flex-shrink:0">
+                <span style="font-size:11px;font-weight:800;font-family:'JetBrains Mono',monospace;color:{{ r.scoreColor }}">{{ r.score }}</span>
+                <span style="font-size:8px;padding:2px 6px;border-radius:10px;background:rgba(255,255,255,0.05);color:#8a9bba">{{ r.source }}</span>
+              </div>
+            </div>
+            <sc-for list="{{ r.details }}" as="d" hint-placeholder-count="3">
+              <div style="font-size:11px;color:#8a9bba;padding:1px 0">{{ d }}</div>
+            </sc-for>
+          </div>
+        </sc-for>
+      </div>
+    </sc-if>
+
+    <sc-if value="{{ showEmpty }}" hint-placeholder-val="{{ true }}">
+      <div style="text-align:center;padding:60px;color:#4a5878">
+        <div style="font-size:40px;margin-bottom:12px;opacity:0.3">🔍</div>
+        <div style="font-size:14px;font-weight:600;color:#8a9bba">Klik "Analisis Sekarang" untuk melihat sinyal LONG &amp; SHORT</div>
+      </div>
+    </sc-if>
+  </main>
+</div>
+
+</x-dc>
+<script type="text/x-dc" data-dc-script>
+
+function demoResults() {
+  return [
+    { symbol: 'BTC/USDT', side: 'long', total_score: 78.4, trigger_met: true, source: 'database', breakdown: { trend: 80, momentum: 74 }, threshold_used: 65, sl: 65900, tp: 71200, price: 68210 },
+    { symbol: 'BTC/USDT', side: 'short', total_score: 41.2, trigger_met: false, source: 'database', threshold_used: 65, price: 68210 },
+    { symbol: 'ETH/USDT', side: 'short', total_score: 71.5, trigger_met: true, source: 'fallback_v6', threshold_used: 65, sl: 3620, tp: 3400, price: 3541, failed_conditions: [] },
+    { symbol: 'ETH/USDT', side: 'long', total_score: 38.9, trigger_met: false, source: 'fallback_v6', threshold_used: 65, price: 3541, failed_conditions: ['EMAStack', 'RSI band'] },
+  ];
+}
+
+class Component extends DCLogic {
+  state = {
+    apiBase: 'http://localhost:8001/api', apiKey: '',
+    isLoading: false, hasRun: false, results: null, apiOnline: false, usingDemo: false, demoMessage: '',
+    sideFilter: 'all',
+  };
+
+  componentDidMount() {
+    try {
+      const b = localStorage.getItem('gsf_api_base'); if (b) this.state.apiBase = b;
+      const k = localStorage.getItem('gs_api_key'); if (k) this.state.apiKey = k;
+    } catch (e) {}
+  }
+
+  setSideFilter(v) { this.setState({ sideFilter: v }); }
+
+  runDiagnosa = async () => {
+    this.setState({ isLoading: true });
+    try {
+      const hdrs = {}; if (this.state.apiKey) hdrs['X-API-Key'] = this.state.apiKey;
+      const ctrl = new AbortController(); const tid = setTimeout(() => ctrl.abort(), 60000);
+      const r = await fetch(this.state.apiBase + '/diagnosa', { signal: ctrl.signal, headers: hdrs });
+      clearTimeout(tid);
+      if (!r.ok) throw new Error('http ' + r.status);
+      const data = await r.json();
+      if (!data || !Array.isArray(data.results)) throw new Error('bad payload');
+      this.setState({ results: data.results, isLoading: false, hasRun: true, usingDemo: false, apiOnline: true });
+    } catch (e) {
+      this.setState({
+        results: demoResults(), isLoading: false, hasRun: true, usingDemo: true, apiOnline: false,
+        demoMessage: this.state.apiKey ? 'Tidak bisa menyambung ke bot futures. Menampilkan data contoh.' : 'API Key belum diset. Menampilkan data contoh.',
+      });
+    }
+  };
+
+  renderVals() {
+    const rawResults = this.state.results || [];
+    const filtered = this.state.sideFilter === 'all' ? rawResults : rawResults.filter(r => r.side === this.state.sideFilter);
+
+    const results = filtered.map(r => {
+      const isLong = r.side === 'long';
+      const hasError = !!r.error;
+      const scVal = r.total_score != null ? Math.round(r.total_score) : null;
+      const scColor = scVal >= 70 ? '#00d68f' : scVal >= 50 ? '#f0b429' : '#f0455a';
+      const details = [];
+      if (hasError) details.push('❌ ' + r.error);
+      if (r.threshold_used != null && scVal !== null) details.push('Score ' + scVal + ' \u00b7 Threshold ' + Math.round(r.threshold_used));
+      if (r.sl != null) details.push('SL: ' + r.sl + (r.tp != null ? ' \u00b7 TP: ' + r.tp : ''));
+      if (Array.isArray(r.failed_conditions) && r.failed_conditions.length) details.push('Belum terpenuhi: ' + r.failed_conditions.join(', '));
+      if (r.open_position) details.push('\ud83d\udccc Posisi terbuka \u00b7 score delta: ' + r.open_position.score_delta);
+
+      return {
+        symbol: r.symbol || '\u2014', side: (r.side || 'long').toUpperCase(), sideIcon: isLong ? '\u25b2' : '\u25bc',
+        sideBg: isLong ? 'rgba(0,214,143,0.1)' : 'rgba(240,69,90,0.1)', sideColor: isLong ? '#00d68f' : '#f0455a',
+        isTrigger: !!r.trigger_met, source: r.source || '\u2014',
+        borderColor: r.trigger_met && !hasError ? (isLong ? 'rgba(0,214,143,0.4)' : 'rgba(240,69,90,0.4)') : '#1e2d45',
+        bgTint: r.trigger_met && !hasError ? 'background:' + (isLong ? 'rgba(0,214,143,0.03)' : 'rgba(240,69,90,0.03)') : '',
+        score: scVal !== null ? scVal : '\u2014', scoreColor: scColor, details,
+      };
+    });
+
+    const sideFilterOpts = [['all', 'Semua'], ['long', '\u25b2 Long saja'], ['short', '\u25bc Short saja']];
+    const sideFilters = sideFilterOpts.map(([val, label]) => {
+      const active = this.state.sideFilter === val;
+      return { label, onClick: () => this.setSideFilter(val), bg: active ? 'rgba(240,152,63,0.1)' : 'transparent', border: active ? '#f0983f' : '#1e2d45', color: active ? '#f0983f' : '#8a9bba' };
+    });
+
+    return {
+      wsColor: this.state.apiOnline ? '#00d68f' : '#f0455a',
+      usingDemo: this.state.usingDemo, demoMessage: this.state.demoMessage,
+      runDiagnosa: this.runDiagnosa, isLoading: this.state.isLoading,
+      btnLabel: this.state.isLoading ? '\u23f3 Menganalisis...' : '\ud83d\udd0d Analisis Sekarang',
+      showFilters: this.state.hasRun && !this.state.isLoading, sideFilters,
+      showResults: this.state.hasRun && !this.state.isLoading && results.length > 0,
+      showEmpty: !this.state.hasRun && !this.state.isLoading,
+      results,
+    };
+  }
+}
+
+</script>
+</body>
+</html>

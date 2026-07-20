@@ -1,0 +1,428 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+
+<helmet>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <style>
+    @keyframes pulse{0%,100%{opacity:1}50%{opacity:.3}}
+    @keyframes haltPulse{0%,100%{border-color:rgba(240,69,90,0.4)}50%{border-color:rgba(240,69,90,0.85)}}
+    @keyframes liqPulse{0%,100%{opacity:1}50%{opacity:.4}}
+    body{margin:0;background:#0b0e11;-webkit-font-smoothing:antialiased}
+    a{color:#f0983f}
+    a:hover{color:#f5b46b}
+    ::-webkit-scrollbar{width:5px;height:5px}
+    ::-webkit-scrollbar-thumb{background:#253550;border-radius:3px}
+  </style>
+</helmet>
+
+<div style="min-height:100vh;background:#0b0e11;color:#e6eaf2;font-family:'Inter',system-ui,sans-serif;font-size:13px;line-height:1.5;overflow-x:hidden">
+
+  <!-- TOASTS -->
+  <div style="position:fixed;bottom:16px;right:16px;z-index:300;display:flex;flex-direction:column;gap:7px;max-width:calc(100vw - 32px)">
+    <sc-for list="{{ toasts }}" as="t" hint-placeholder-count="0">
+      <div style="background:#161e2e;border:1px solid #1e2d45;border-left:3px solid {{ t.accent }};border-radius:6px;padding:10px 14px;display:flex;align-items:flex-start;gap:9px;box-shadow:0 4px 24px rgba(0,0,0,0.5);min-width:260px">
+        <span style="font-size:15px;flex-shrink:0">{{ t.icon }}</span>
+        <div style="flex:1"><div style="font-size:11.5px;font-weight:700">{{ t.title }}</div><div style="font-size:10px;color:#4a5878;margin-top:1px">{{ t.msg }}</div></div>
+        <span onclick="{{ t.onClose }}" style="cursor:pointer;color:#4a5878;font-size:13px;flex-shrink:0">✕</span>
+      </div>
+    </sc-for>
+  </div>
+
+  <!-- CONFIRM MODAL -->
+  <sc-if value="{{ showConfirm }}" hint-placeholder-val="{{ false }}">
+    <div style="position:fixed;inset:0;z-index:250;background:rgba(0,0,0,0.75);backdrop-filter:blur(4px);display:flex;align-items:center;justify-content:center;padding:16px">
+      <div style="background:#111722;border:1px solid #1e2d45;border-radius:10px;padding:22px;width:100%;max-width:420px;box-shadow:0 20px 60px rgba(0,0,0,0.7)">
+        <div style="font-size:15px;font-weight:700;margin-bottom:10px">{{ confirmTitle }}</div>
+        <div style="color:#8a9bba;font-size:12px;line-height:1.6;margin-bottom:18px;white-space:pre-line">{{ confirmMsg }}</div>
+        <div style="display:flex;gap:8px;justify-content:flex-end;flex-wrap:wrap">
+          <button onclick="{{ confirmCancel }}" style="background:none;border:1px solid #1e2d45;border-radius:6px;padding:8px 16px;font-size:11.5px;color:#8a9bba;cursor:pointer;font-family:inherit">Batal</button>
+          <button onclick="{{ confirmYes }}" style="background:#f0455a;border:none;border-radius:6px;padding:8px 16px;font-size:11.5px;color:#fff;font-weight:700;cursor:pointer;font-family:inherit">{{ confirmActionLabel }}</button>
+        </div>
+      </div>
+    </div>
+  </sc-if>
+
+  <!-- TOPBAR -->
+  <nav style="position:sticky;top:0;z-index:80;height:56px;background:rgba(11,14,17,0.95);backdrop-filter:blur(20px);border-bottom:1px solid #1e2d45;display:flex;align-items:center;padding:0 20px;gap:14px">
+    <sc-if value="{{ isMobile }}" hint-placeholder-val="{{ false }}">
+      <button onclick="{{ toggleSidebar }}" style="background:none;border:none;color:#8a9bba;font-size:20px;cursor:pointer;padding:4px;flex-shrink:0;line-height:1">☰</button>
+    </sc-if>
+    <div style="display:flex;align-items:center;gap:9px;font-weight:700;font-size:14px;flex-shrink:0">
+      <div style="width:30px;height:30px;border-radius:8px;background:linear-gradient(135deg,#f0983f,#f0455a);display:flex;align-items:center;justify-content:center;font-size:15px">⚡</div>
+      AlgoTrader <span style="color:#f0983f;margin-left:2px">Futures</span>
+    </div>
+    <div style="flex:1"></div>
+    <div style="display:flex;align-items:center;gap:5px;font-size:10px;color:#4a5878;font-family:'JetBrains Mono',monospace">
+      <div style="width:7px;height:7px;border-radius:50%;background:{{ wsColor }};animation:{{ wsAnim }}"></div>
+      {{ wsLabel }}
+    </div>
+    <div style="padding:3px 9px;border-radius:20px;font-size:10px;font-weight:700;letter-spacing:.5px;font-family:'JetBrains Mono',monospace;{{ modeBadgeStyle }}">{{ modeLabel }}</div>
+    <button onclick="{{ showPanicConfirm }}" style="padding:6px 12px;background:#f0455a;border:none;border-radius:6px;color:#fff;font-size:11px;font-weight:700;cursor:pointer;letter-spacing:.3px;white-space:nowrap;flex-shrink:0">🆘 PANIC</button>
+  </nav>
+
+  <div style="display:flex;min-height:calc(100vh - 56px)">
+    <sc-if value="{{ showBackdrop }}" hint-placeholder-val="{{ false }}">
+      <div onclick="{{ closeSidebar }}" style="position:fixed;inset:0;top:56px;background:rgba(0,0,0,0.6);z-index:110"></div>
+    </sc-if>
+    <aside style="{{ sidebarStyle }}">
+      <div style="padding:6px 10px 3px;font-size:9px;font-weight:700;color:#4a5878;letter-spacing:1.2px;text-transform:uppercase">Futures</div>
+      <div style="display:flex;align-items:center;gap:9px;padding:8px 10px;border-radius:6px;color:#f0983f;background:rgba(240,152,63,0.08);border:1px solid rgba(240,152,63,0.2);font-size:12px;font-weight:500;cursor:pointer">
+        <span style="font-size:13px">⚡</span> Futures Dashboard
+      </div>
+      <a href="Futures Positions.dc.html" style="display:flex;align-items:center;gap:9px;padding:8px 10px;border-radius:6px;color:#8a9bba;font-size:12px;font-weight:500;cursor:pointer;text-decoration:none" style-hover="color:#e6eaf2;background:#1a2235">
+        <span style="font-size:13px">📌</span> Futures Positions
+      </a>
+      <a href="Futures Diagnosa.dc.html" style="display:flex;align-items:center;gap:9px;padding:8px 10px;border-radius:6px;color:#8a9bba;font-size:12px;font-weight:500;cursor:pointer;text-decoration:none" style-hover="color:#e6eaf2;background:#1a2235">
+        <span style="font-size:13px">🔍</span> Futures Diagnosa
+      </a>
+      <a href="Futures Watchlist.dc.html" style="display:flex;align-items:center;gap:9px;padding:8px 10px;border-radius:6px;color:#8a9bba;font-size:12px;font-weight:500;cursor:pointer;text-decoration:none" style-hover="color:#e6eaf2;background:#1a2235">
+        <span style="font-size:13px">👁</span> Futures Watchlist
+      </a>
+      <a href="Futures Trade History.dc.html" style="display:flex;align-items:center;gap:9px;padding:8px 10px;border-radius:6px;color:#8a9bba;font-size:12px;font-weight:500;cursor:pointer;text-decoration:none" style-hover="color:#e6eaf2;background:#1a2235">
+        <span style="font-size:13px">📋</span> Futures Trade History
+      </a>
+      <a href="Futures Risk Monitor.dc.html" style="display:flex;align-items:center;gap:9px;padding:8px 10px;border-radius:6px;color:#8a9bba;font-size:12px;font-weight:500;cursor:pointer;text-decoration:none" style-hover="color:#e6eaf2;background:#1a2235">
+        <span style="font-size:13px">🛡</span> Futures Risk Monitor
+      </a>
+      <a href="Futures Gate Scanner.dc.html" style="display:flex;align-items:center;gap:9px;padding:8px 10px;border-radius:6px;color:#8a9bba;font-size:12px;font-weight:500;cursor:pointer;text-decoration:none" style-hover="color:#e6eaf2;background:#1a2235">
+        <span style="font-size:13px">🎯</span> Futures Gate Scanner
+      </a>
+      <a href="Futures Analytics.dc.html" style="display:flex;align-items:center;gap:9px;padding:8px 10px;border-radius:6px;color:#8a9bba;font-size:12px;font-weight:500;cursor:pointer;text-decoration:none" style-hover="color:#e6eaf2;background:#1a2235">
+        <span style="font-size:13px">📊</span> Futures Analytics
+      </a>
+      <a href="Futures AI Learner.dc.html" style="display:flex;align-items:center;gap:9px;padding:8px 10px;border-radius:6px;color:#8a9bba;font-size:12px;font-weight:500;cursor:pointer;text-decoration:none" style-hover="color:#e6eaf2;background:#1a2235">
+        <span style="font-size:13px">🧠</span> Futures AI Learner
+      </a>
+      <a href="Futures Settings.dc.html" style="display:flex;align-items:center;gap:9px;padding:8px 10px;border-radius:6px;color:#8a9bba;font-size:12px;font-weight:500;cursor:pointer;text-decoration:none" style-hover="color:#e6eaf2;background:#1a2235">
+        <span style="font-size:13px">⚙️</span> Futures Settings
+      </a>
+      <div style="height:1px;background:#1e2d45;margin:6px 0"></div>
+      <div style="padding:6px 10px 3px;font-size:9px;font-weight:700;color:#4a5878;letter-spacing:1.2px;text-transform:uppercase">Spot</div>
+      <a href="Dashboard.dc.html" style="display:flex;align-items:center;gap:9px;padding:8px 10px;border-radius:6px;color:#8a9bba;font-size:12px;font-weight:500;cursor:pointer;text-decoration:none" style-hover="color:#e6eaf2;background:#1a2235">
+        <span style="font-size:13px">📈</span> Spot Dashboard
+      </a>
+      <div style="background:#0b0e11;border:1px solid #1e2d45;border-radius:6px;padding:10px;margin-top:auto">
+        <div style="font-size:9px;color:#4a5878;margin-bottom:4px;font-weight:600;text-transform:uppercase;letter-spacing:.5px">Uptime</div>
+        <div style="font-size:16px;font-weight:700;font-family:'JetBrains Mono',monospace;color:#f0983f">{{ uptimeLabel }}</div>
+      </div>
+    </aside>
+
+    <main style="flex:1;padding:{{ mainPadding }};min-width:0">
+
+      <sc-if value="{{ usingDemo }}" hint-placeholder-val="{{ false }}">
+        <div style="display:flex;align-items:center;gap:10px;background:rgba(240,180,41,0.08);border:1px solid rgba(240,180,41,0.3);border-radius:10px;padding:10px 16px;margin-bottom:16px;font-size:11.5px;color:#f0b429">
+          <span>⚠</span><span>{{ demoMessage }}</span>
+          <button onclick="{{ retryFetch }}" style="margin-left:auto;background:none;border:1px solid rgba(240,180,41,0.4);border-radius:6px;padding:5px 12px;color:#f0b429;font-size:11px;cursor:pointer;font-family:inherit;white-space:nowrap;flex-shrink:0">Coba sambungkan ulang</button>
+        </div>
+      </sc-if>
+
+      <sc-if value="{{ isHalted }}" hint-placeholder-val="{{ false }}">
+        <div style="background:linear-gradient(135deg,rgba(240,69,90,0.08),rgba(240,69,90,0.02));border:1px solid rgba(240,69,90,0.4);border-radius:10px;padding:12px 16px;margin-bottom:14px;display:flex;align-items:center;gap:12px;animation:haltPulse 2s infinite">
+          <div style="font-size:20px">🛑</div>
+          <div style="flex:1"><div style="font-size:12px;font-weight:700;color:#f0455a">TRADING HALTED</div><div style="font-size:10.5px;color:#8a9bba;font-family:'JetBrains Mono',monospace;margin-top:2px">{{ haltReason }}</div></div>
+        </div>
+      </sc-if>
+
+      <sc-if value="{{ hasLiqWarning }}" hint-placeholder-val="{{ false }}">
+        <div style="background:rgba(240,69,90,0.08);border:1px solid rgba(240,69,90,0.4);border-radius:10px;padding:10px 16px;margin-bottom:14px;display:flex;align-items:center;gap:10px;animation:liqPulse 1.5s infinite">
+          <span style="font-size:16px">⚠️</span>
+          <span style="font-size:11.5px;color:#f0455a;font-weight:600">{{ liqWarningText }}</span>
+        </div>
+      </sc-if>
+
+      <div style="margin-bottom:18px">
+        <div style="font-size:17px;font-weight:700">Futures Dashboard</div>
+        <div style="font-size:11px;color:#4a5878;margin-top:2px">Leverage trading · margin &amp; liquidation monitor real-time</div>
+      </div>
+
+      <!-- KPI GRID -->
+      <div style="display:grid;grid-template-columns:{{ kpiCols }};gap:10px;margin-bottom:14px">
+        <div style="background:#111722;border:1px solid #1e2d45;border-radius:10px;padding:14px 16px;position:relative;overflow:hidden">
+          <div style="position:absolute;top:0;left:0;right:0;height:2px;background:#f0983f;opacity:.8"></div>
+          <div style="font-size:10px;font-weight:600;color:#4a5878;text-transform:uppercase;letter-spacing:.6px;margin-bottom:7px">Equity</div>
+          <div style="font-size:20px;font-weight:700;font-family:'JetBrains Mono',monospace">{{ kpiEquity }}</div>
+        </div>
+        <div style="background:#111722;border:1px solid #1e2d45;border-radius:10px;padding:14px 16px;position:relative;overflow:hidden">
+          <div style="position:absolute;top:0;left:0;right:0;height:2px;background:#a78bfa;opacity:.8"></div>
+          <div style="font-size:10px;font-weight:600;color:#4a5878;text-transform:uppercase;letter-spacing:.6px;margin-bottom:7px">Used Margin</div>
+          <div style="font-size:20px;font-weight:700;font-family:'JetBrains Mono',monospace">{{ kpiUsedMargin }}</div>
+        </div>
+        <div style="background:#111722;border:1px solid #1e2d45;border-radius:10px;padding:14px 16px;position:relative;overflow:hidden">
+          <div style="position:absolute;top:0;left:0;right:0;height:2px;background:{{ dailyPnlColor }};opacity:.8"></div>
+          <div style="font-size:10px;font-weight:600;color:#4a5878;text-transform:uppercase;letter-spacing:.6px;margin-bottom:7px">Daily P&amp;L</div>
+          <div style="font-size:20px;font-weight:700;font-family:'JetBrains Mono',monospace;color:{{ dailyPnlColor }}">{{ kpiDailyPnl }}</div>
+        </div>
+        <div style="background:#111722;border:1px solid #1e2d45;border-radius:10px;padding:14px 16px;position:relative;overflow:hidden">
+          <div style="position:absolute;top:0;left:0;right:0;height:2px;background:{{ ddColor }};opacity:.8"></div>
+          <div style="font-size:10px;font-weight:600;color:#4a5878;text-transform:uppercase;letter-spacing:.6px;margin-bottom:7px">Drawdown</div>
+          <div style="font-size:20px;font-weight:700;font-family:'JetBrains Mono',monospace;color:{{ ddColor }}">{{ kpiCurDD }}</div>
+        </div>
+      </div>
+
+      <!-- POSITIONS TABLE (leverage/margin_mode/liquidation) -->
+      <div style="background:#111722;border:1px solid #1e2d45;border-radius:10px;overflow:hidden">
+        <div style="padding:12px 14px;border-bottom:1px solid #1e2d45;display:flex;align-items:center;justify-content:space-between">
+          <div style="font-size:11px;font-weight:600;color:#8a9bba;text-transform:uppercase;letter-spacing:.5px">Open Positions ({{ openPosCount }})</div>
+          <div style="font-size:10.5px;color:#4a5878">{{ wsLabel }}</div>
+        </div>
+        <div style="overflow-x:auto">
+          <table style="width:100%;border-collapse:collapse;font-size:11px;min-width:960px">
+            <thead>
+              <tr>
+                <th style="padding:9px 10px;text-align:left;font-size:9.5px;font-weight:600;color:#4a5878;text-transform:uppercase;border-bottom:1px solid #1e2d45;background:#0b0e11;white-space:nowrap">Symbol</th>
+                <th style="padding:9px 10px;text-align:left;font-size:9.5px;font-weight:600;color:#4a5878;text-transform:uppercase;border-bottom:1px solid #1e2d45;background:#0b0e11;white-space:nowrap">Side</th>
+                <th style="padding:9px 10px;text-align:right;font-size:9.5px;font-weight:600;color:#4a5878;text-transform:uppercase;border-bottom:1px solid #1e2d45;background:#0b0e11;white-space:nowrap">Leverage</th>
+                <th style="padding:9px 10px;text-align:left;font-size:9.5px;font-weight:600;color:#4a5878;text-transform:uppercase;border-bottom:1px solid #1e2d45;background:#0b0e11;white-space:nowrap">Margin Mode</th>
+                <th style="padding:9px 10px;text-align:right;font-size:9.5px;font-weight:600;color:#4a5878;text-transform:uppercase;border-bottom:1px solid #1e2d45;background:#0b0e11;white-space:nowrap">Entry</th>
+                <th style="padding:9px 10px;text-align:right;font-size:9.5px;font-weight:600;color:#4a5878;text-transform:uppercase;border-bottom:1px solid #1e2d45;background:#0b0e11;white-space:nowrap">Now</th>
+                <th style="padding:9px 10px;text-align:right;font-size:9.5px;font-weight:600;color:#4a5878;text-transform:uppercase;border-bottom:1px solid #1e2d45;background:#0b0e11;white-space:nowrap">PnL</th>
+                <th style="padding:9px 10px;text-align:right;font-size:9.5px;font-weight:600;color:#4a5878;text-transform:uppercase;border-bottom:1px solid #1e2d45;background:#0b0e11;white-space:nowrap">Liq. Price</th>
+                <th style="padding:9px 10px;text-align:center;font-size:9.5px;font-weight:600;color:#4a5878;text-transform:uppercase;border-bottom:1px solid #1e2d45;background:#0b0e11;white-space:nowrap">Action</th>
+              </tr>
+            </thead>
+            <tbody>
+              <sc-if value="{{ hasPositions }}" hint-placeholder-val="{{ true }}">
+                <sc-for list="{{ positionsRows }}" as="p" hint-placeholder-count="2">
+                  <tr>
+                    <td style="padding:10px;border-bottom:1px solid rgba(30,45,69,0.5);font-weight:700;white-space:nowrap">{{ p.symbol }}</td>
+                    <td style="padding:10px;border-bottom:1px solid rgba(30,45,69,0.5);white-space:nowrap"><span style="display:inline-block;padding:2px 7px;border-radius:4px;font-size:9.5px;font-weight:700;background:{{ p.sideBg }};color:{{ p.sideColor }}">{{ p.side }}</span></td>
+                    <td style="padding:10px;text-align:right;border-bottom:1px solid rgba(30,45,69,0.5);font-family:'JetBrains Mono',monospace;color:#f0983f;font-weight:700;white-space:nowrap">{{ p.leverage }}</td>
+                    <td style="padding:10px;border-bottom:1px solid rgba(30,45,69,0.5);color:#8a9bba;white-space:nowrap">{{ p.marginMode }}</td>
+                    <td style="padding:10px;text-align:right;border-bottom:1px solid rgba(30,45,69,0.5);font-family:'JetBrains Mono',monospace;color:#8a9bba;white-space:nowrap">{{ p.entry }}</td>
+                    <td style="padding:10px;text-align:right;border-bottom:1px solid rgba(30,45,69,0.5);font-family:'JetBrains Mono',monospace;color:#8a9bba;white-space:nowrap">{{ p.now }}</td>
+                    <td style="padding:10px;text-align:right;border-bottom:1px solid rgba(30,45,69,0.5);font-family:'JetBrains Mono',monospace;font-weight:600;color:{{ p.pnlColor }};white-space:nowrap">{{ p.pnl }}</td>
+                    <td style="padding:10px;text-align:right;border-bottom:1px solid rgba(30,45,69,0.5);font-family:'JetBrains Mono',monospace;white-space:nowrap;color:{{ p.liqColor }}">{{ p.liqPrice }} <span style="font-size:9px">({{ p.liqDist }})</span></td>
+                    <td style="padding:10px;text-align:center;border-bottom:1px solid rgba(30,45,69,0.5);white-space:nowrap"><button onclick="{{ p.onClose }}" style="padding:3px 9px;border-radius:4px;font-size:10px;font-weight:600;cursor:pointer;border:1px solid #1e2d45;background:none;color:#f0455a;font-family:inherit">Close</button></td>
+                  </tr>
+                </sc-for>
+              </sc-if>
+              <sc-if value="{{ hasNoPositions }}" hint-placeholder-val="{{ false }}">
+                <tr><td colspan="9" style="text-align:center;padding:32px;color:#4a5878">📭 Tidak ada posisi futures terbuka</td></tr>
+              </sc-if>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </main>
+  </div>
+</div>
+
+</x-dc>
+<script type="text/x-dc" data-dc-script>
+
+function fmtUSD(v, d = 2) { if (v == null) return '—'; return '$' + Number(v).toLocaleString('en-US', { minimumFractionDigits: d, maximumFractionDigits: d }); }
+function signUSD(v) { if (v == null) return '—'; return (v >= 0 ? '+' : '') + fmtUSD(v); }
+
+// Data contoh sesuai kontrak future/api_server_future.py::_pos_dict (leverage,
+// margin_mode, liquidation_price di atas field spot yang sudah sama).
+function demoSnapshot() {
+  return {
+    system_health: { current_equity: 12400, used_margin: 3100, is_halted: false, current_drawdown_pct: 4.1, max_drawdown_pct: 15, testnet: true },
+    balance: { total_equity: 12400, used_margin: 3100, daily_pnl: -42.1, daily_pnl_pct: -0.34 },
+    positions: {
+      positions: [
+        { symbol: 'BTC/USDT', side: 'long', leverage: 10, margin_mode: 'isolated', entry_price: 67200, current_price: 68210, unrealized_pnl: 84.2, unrealized_pnl_pct: 1.5, liquidation_price: 60800 },
+        { symbol: 'ETH/USDT', side: 'short', leverage: 5, margin_mode: 'cross', entry_price: 3610, current_price: 3541, unrealized_pnl: 38.5, unrealized_pnl_pct: 1.9, liquidation_price: 3980 },
+      ],
+    },
+    status: { uptime_display: '2j 40m' },
+  };
+}
+
+let toastSeq = 0;
+
+class Component extends DCLogic {
+  state = {
+    apiBase: 'http://localhost:8001/api', apiKey: '',
+    snap: null, usingDemo: false, demoMessage: '', apiOnline: false, streamLive: false,
+    toasts: [], confirm: null,
+  };
+
+  toast(type, title, msg) {
+    const id = ++toastSeq;
+    const meta = { success: { icon: '✅', accent: '#00d68f' }, error: { icon: '❌', accent: '#f0455a' }, warn: { icon: '⚠️', accent: '#f0b429' } }[type] || {};
+    this.setState(s => ({ toasts: [...s.toasts, { id, title, msg, icon: meta.icon, accent: meta.accent }] }));
+    setTimeout(() => this.setState(s => ({ toasts: s.toasts.filter(t => t.id !== id) })), 5000);
+  }
+  closeToast(id) { this.setState(s => ({ toasts: s.toasts.filter(t => t.id !== id) })); }
+  askConfirm(title, msg, actionLabel, onYes) { this.setState({ confirm: { title, msg, actionLabel, onYes } }); }
+  confirmCancel = () => this.setState({ confirm: null });
+  confirmYes = () => { const c = this.state.confirm; this.setState({ confirm: null }); if (c && c.onYes) c.onYes(); };
+
+  componentDidMount() {
+    try {
+      // Base URL terpisah dari spot -- default port 8001 (spot 8000), key sama
+      // (satu DASHBOARD_API_KEY dipakai kedua bot, lihat _get_api_key_from_env()).
+      const b = localStorage.getItem('gsf_api_base'); if (b) this.state.apiBase = b;
+      const k = localStorage.getItem('gs_api_key'); if (k) this.state.apiKey = k;
+    } catch (e) {}
+    this.state.isMobile = window.innerWidth <= 768;
+    this._onResize = () => this.setState({ isMobile: window.innerWidth <= 768 });
+    window.addEventListener('resize', this._onResize);
+    this.fetchData();
+    this._timer = setInterval(() => this.fetchData(), 60000);
+    this.connectStream();
+  }
+  componentWillUnmount() {
+    if (this._timer) clearInterval(this._timer);
+    if (this._onResize) window.removeEventListener('resize', this._onResize);
+    if (this._streamCtrl) this._streamCtrl.abort();
+  }
+
+  toggleSidebar = () => this.setState(s => ({ sidebarOpen: !s.sidebarOpen }));
+  closeSidebar = () => this.setState({ sidebarOpen: false });
+
+  async fetchData() {
+    try {
+      const ctrl = new AbortController(); const tid = setTimeout(() => ctrl.abort(), 6000);
+      const hdrs = {}; if (this.state.apiKey) hdrs['X-API-Key'] = this.state.apiKey;
+      const r = await fetch(this.state.apiBase + '/dashboard_snapshot', { signal: ctrl.signal, headers: hdrs });
+      clearTimeout(tid);
+      if (!r.ok) throw new Error('http ' + r.status);
+      const data = await r.json();
+      this.setState({ snap: data, usingDemo: false, apiOnline: true });
+    } catch (e) {
+      this.setState({
+        snap: demoSnapshot(), usingDemo: true, apiOnline: false,
+        demoMessage: this.state.apiKey
+          ? 'Tidak bisa menyambung ke bot futures di ' + this.state.apiBase + ' (' + (e.message || 'gagal fetch') + '). Menampilkan data contoh.'
+          : 'API Key belum diset. Menampilkan data contoh.',
+      });
+    }
+  }
+  retryFetch = () => this.fetchData();
+
+  async connectStream() {
+    if (!this.state.apiKey) return;
+    this._streamCtrl = new AbortController();
+    try {
+      const r = await fetch(this.state.apiBase + '/stream', { headers: { 'X-API-Key': this.state.apiKey, 'Accept': 'text/event-stream' }, signal: this._streamCtrl.signal });
+      if (!r.ok || !r.body) throw new Error('http ' + r.status);
+      this.setState({ streamLive: true });
+      const reader = r.body.getReader(); const decoder = new TextDecoder(); let buf = '';
+      while (true) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        buf += decoder.decode(value, { stream: true });
+        const chunks = buf.split('\n\n'); buf = chunks.pop();
+        for (const chunk of chunks) {
+          const line = chunk.split('\n').find(l => l.startsWith('data:'));
+          if (!line) continue;
+          try {
+            const evt = JSON.parse(line.slice(5).trim());
+            if (evt.type === 'positions_snapshot' && Array.isArray(evt.data)) {
+              this.setState(s => ({ snap: { ...s.snap, positions: { positions: evt.data } }, apiOnline: true }));
+            }
+          } catch (e) {}
+        }
+      }
+    } catch (e) { this.setState({ streamLive: false }); }
+    if (!this._streamCtrl.signal.aborted) setTimeout(() => this.connectStream(), 4000);
+  }
+
+  showPanicConfirm = () => {
+    if (!this.state.apiKey) { this.toast('warn', 'API Key Diperlukan', 'Set API key di Settings dulu.'); return; }
+    this.askConfirm('🆘 Panic Close (Futures)', 'Tutup SEMUA posisi futures sekarang juga?\nBot akan HALTED setelahnya.', 'Ya, Panic Close', async () => {
+      try {
+        const r = await fetch(this.state.apiBase + '/bot/panic', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-API-Key': this.state.apiKey }, body: '{}' });
+        if (!r.ok) { this.toast('error', 'Panic Gagal', 'HTTP ' + r.status); return; }
+        const data = await r.json();
+        this.toast('success', '🆘 Panic Done', 'Closed ' + (data.closed_count ?? '?') + ' posisi.');
+        this.fetchData();
+      } catch (e) { this.toast('error', 'Gagal menghubungi bot', e.message || String(e)); }
+    });
+  };
+
+  closePosition(sym) {
+    this.askConfirm('Tutup Posisi', 'Tutup posisi futures ' + sym + ' sekarang (market)?', 'Ya, Tutup', async () => {
+      try {
+        const r = await fetch(this.state.apiBase + '/positions/' + encodeURIComponent(sym) + '/close', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-API-Key': this.state.apiKey }, body: '{}' });
+        const data = await r.json();
+        if (r.ok && data.success) { this.toast('success', '✅ Ditutup', sym + ' berhasil ditutup.'); this.fetchData(); }
+        else this.toast('error', '❌ Gagal', data.message || ('HTTP ' + r.status));
+      } catch (e) { this.toast('error', 'Gagal menghubungi bot', e.message || String(e)); }
+    });
+  }
+
+  renderVals() {
+    const snap = this.state.snap || demoSnapshot();
+    const h = snap.system_health || {};
+    const b = snap.balance || {};
+    const positions = (snap.positions && snap.positions.positions) || [];
+    const status = snap.status || {};
+    const isMobile = !!this.state.isMobile;
+
+    const dpnl = b.daily_pnl || 0;
+    const dd = h.current_drawdown_pct || 0;
+    const maxdd = h.max_drawdown_pct || 15;
+    const halted = !!h.is_halted;
+
+    // Distance-to-liquidation warning: <5% dari harga sekarang ke liq price dianggap kritis.
+    let hasLiqWarning = false, worstDist = 100, worstSym = '';
+    const positionsRows = positions.map(p => {
+      const pnl = p.unrealized_pnl || 0;
+      const side = (p.side || 'long');
+      const liq = p.liquidation_price;
+      let liqDist = '—', liqColor = '#8a9bba';
+      if (liq && p.current_price) {
+        const distPct = Math.abs((p.current_price - liq) / p.current_price * 100);
+        liqDist = distPct.toFixed(1) + '%';
+        if (distPct < 5) { liqColor = '#f0455a'; hasLiqWarning = true; if (distPct < worstDist) { worstDist = distPct; worstSym = p.symbol; } }
+        else if (distPct < 15) liqColor = '#f0b429';
+        else liqColor = '#00d68f';
+      }
+      return {
+        symbol: p.symbol, side: side.toUpperCase(),
+        sideBg: side === 'long' ? 'rgba(0,214,143,0.08)' : 'rgba(240,69,90,0.08)',
+        sideColor: side === 'long' ? '#00d68f' : '#f0455a',
+        leverage: (p.leverage || '—') + '×', marginMode: (p.margin_mode || '—'),
+        entry: fmtUSD(p.entry_price), now: fmtUSD(p.current_price),
+        pnl: signUSD(pnl) + ' (' + (p.unrealized_pnl_pct != null ? (p.unrealized_pnl_pct >= 0 ? '+' : '') + p.unrealized_pnl_pct.toFixed(2) + '%' : '—') + ')',
+        pnlColor: pnl >= 0 ? '#00d68f' : '#f0455a',
+        liqPrice: fmtUSD(liq), liqDist, liqColor,
+        onClose: () => this.closePosition(p.symbol),
+      };
+    });
+
+    const sidebarStyle = isMobile
+      ? 'width:220px;flex-shrink:0;background:#111722;padding:12px 6px;display:flex;flex-direction:column;gap:2px;position:fixed;top:56px;bottom:0;left:0;z-index:120;transform:translateX(' + (this.state.sidebarOpen ? '0' : '-100%') + ');transition:transform .25s ease;box-shadow:0 0 40px rgba(0,0,0,0.6);overflow-y:auto'
+      : 'width:220px;flex-shrink:0;background:#111722;border-right:1px solid #1e2d45;padding:12px 6px;display:flex;flex-direction:column;gap:2px';
+
+    const toasts = this.state.toasts.map(t => ({ ...t, onClose: () => this.closeToast(t.id) }));
+    const c = this.state.confirm;
+
+    return {
+      isMobile, showBackdrop: isMobile && !!this.state.sidebarOpen, sidebarStyle,
+      toggleSidebar: this.toggleSidebar, closeSidebar: this.closeSidebar, mainPadding: isMobile ? '12px' : '20px',
+      kpiCols: isMobile ? 'repeat(2,1fr)' : 'repeat(4,1fr)',
+      toasts, showConfirm: !!c, confirmTitle: c ? c.title : '', confirmMsg: c ? c.msg : '',
+      confirmActionLabel: c ? c.actionLabel : 'Ya', confirmCancel: this.confirmCancel, confirmYes: this.confirmYes,
+      wsColor: this.state.streamLive ? '#00d68f' : this.state.apiOnline ? '#f0b429' : '#f0455a',
+      wsAnim: this.state.streamLive ? 'pulse 2s infinite' : 'none',
+      wsLabel: this.state.streamLive ? 'LIVE (push)' : this.state.apiOnline ? 'LIVE (poll)' : 'OFFLINE',
+      modeBadgeStyle: h.testnet ? 'background:rgba(240,180,41,0.08);color:#f0b429;border:1px solid rgba(240,180,41,0.3)' : 'background:rgba(240,69,90,0.08);color:#f0455a;border:1px solid rgba(240,69,90,0.3)',
+      modeLabel: h.testnet ? 'TESTNET' : 'LIVE', showPanicConfirm: this.showPanicConfirm,
+      usingDemo: this.state.usingDemo, demoMessage: this.state.demoMessage, retryFetch: this.retryFetch,
+      isHalted: halted, haltReason: h.halt_reason || '—',
+      hasLiqWarning, liqWarningText: hasLiqWarning ? worstSym + ' hanya ' + worstDist.toFixed(1) + '% dari harga likuidasi!' : '',
+      uptimeLabel: status.uptime_display || '—',
+      kpiEquity: fmtUSD(h.current_equity || b.total_equity), kpiUsedMargin: fmtUSD(h.used_margin || b.used_margin),
+      dailyPnlColor: dpnl >= 0 ? '#00d68f' : '#f0455a', kpiDailyPnl: signUSD(dpnl),
+      ddColor: maxdd > 10 ? '#f0455a' : maxdd > 5 ? '#f0b429' : '#e6eaf2', kpiCurDD: dd.toFixed(2) + '%',
+      openPosCount: positions.length, hasPositions: positions.length > 0, hasNoPositions: positions.length === 0,
+      positionsRows,
+    };
+  }
+}
+
+</script>
+</body>
+</html>

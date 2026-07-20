@@ -21,7 +21,7 @@
   </style>
 </helmet>
 
-<div style="min-height:100vh;background:#0b0e11;color:#e6eaf2;font-family:'Inter',system-ui,sans-serif;font-size:13px;line-height:1.5">
+<div style="min-height:100vh;background:#0b0e11;color:#e6eaf2;font-family:'Inter',system-ui,sans-serif;font-size:13px;line-height:1.5;overflow-x:hidden">
 
   <nav style="position:sticky;top:0;z-index:80;height:56px;background:rgba(11,14,17,0.95);backdrop-filter:blur(20px);border-bottom:1px solid #1e2d45;display:flex;align-items:center;padding:0 20px;gap:14px">
     <sc-if value="{{ isMobile }}" hint-placeholder-val="{{ false }}">
@@ -60,7 +60,7 @@
       </div>
       <div style="height:1px;background:#1e2d45;margin:6px 0"></div>
       <div style="padding:6px 10px 3px;font-size:9px;font-weight:700;color:#4a5878;letter-spacing:1.2px;text-transform:uppercase">Analysis</div>
-      <a href="Analytics.dc.html" style="display:flex;align-items:center;gap:9px;padding:8px 10px;border-radius:6px;color:#8a9bba;font-size:12px;font-weight:500;cursor:pointer;text-decoration:none" style-hover="color:#e6eaf2;background:#1a2235"
+      <a href="Analytics.dc.html" style="display:flex;align-items:center;gap:9px;padding:8px 10px;border-radius:6px;color:#8a9bba;font-size:12px;font-weight:500;cursor:pointer;text-decoration:none" style-hover="color:#e6eaf2;background:#1a2235">
         <span style="font-size:13px">📊</span> Analytics &amp; PnL
       </a>
       <a href="Diagnosa.dc.html" style="display:flex;align-items:center;gap:9px;padding:8px 10px;border-radius:6px;color:#8a9bba;font-size:12px;font-weight:500;cursor:pointer;text-decoration:none" style-hover="color:#e6eaf2;background:#1a2235">
@@ -236,8 +236,39 @@ class Component extends DCLogic {
     this._onResize = () => this.setState({ isMobile: window.innerWidth <= 768 });
     window.addEventListener('resize', this._onResize);
     this.fetchData();
+    this.connectStream();
   }
-  componentWillUnmount() { if (this._onResize) window.removeEventListener('resize', this._onResize); }
+  componentWillUnmount() { if (this._onResize) window.removeEventListener('resize', this._onResize); if (this._streamCtrl) this._streamCtrl.abort(); }
+
+  async connectStream() {
+    if (!this.state.apiKey) return;
+    this._streamCtrl = new AbortController();
+    try {
+      const r = await fetch(this.state.apiBase + '/stream', { headers: { 'X-API-Key': this.state.apiKey, 'Accept': 'text/event-stream' }, signal: this._streamCtrl.signal });
+      if (!r.ok || !r.body) throw new Error('http ' + r.status);
+      this.setState({ streamLive: true });
+      const reader = r.body.getReader(); const decoder = new TextDecoder(); let buf = '';
+      while (true) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        buf += decoder.decode(value, { stream: true });
+        const chunks = buf.split('\n\n'); buf = chunks.pop();
+        for (const chunk of chunks) {
+          const line = chunk.split('\n').find(l => l.startsWith('data:'));
+          if (!line) continue;
+          try { this.onStreamEvent(JSON.parse(line.slice(5).trim())); } catch (e) {}
+        }
+      }
+    } catch (e) { this.setState({ streamLive: false }); }
+    if (!this._streamCtrl.signal.aborted) setTimeout(() => this.connectStream(), 4000);
+  }
+
+  onStreamEvent(evt) {
+    const type = evt && evt.type; const data = evt && evt.data;
+    if (type === 'trade' && data && data.symbol) {
+      this.setState(s => ({ trades: [data, ...s.trades], apiOnline: true }));
+    }
+  }
 
   toggleSidebar = () => this.setState(s => ({ sidebarOpen: !s.sidebarOpen }));
   closeSidebar = () => this.setState({ sidebarOpen: false });
@@ -327,9 +358,9 @@ class Component extends DCLogic {
       isMobile, showSidebar: !isMobile, showBackdrop: isMobile && !!this.state.sidebarOpen, sidebarStyle,
       toggleSidebar: this.toggleSidebar, closeSidebar: this.closeSidebar, mainPadding: isMobile ? '12px' : '20px', navItems,
       kpiCols: isMobile ? 'repeat(2,1fr)' : 'repeat(4,1fr)',
-      wsColor: this.state.apiOnline ? '#00d68f' : '#f0455a',
-      wsAnim: this.state.apiOnline ? 'pulse 2s infinite' : 'none',
-      wsLabel: this.state.apiOnline ? 'LIVE' : 'OFFLINE',
+      wsColor: this.state.streamLive ? '#00d68f' : this.state.apiOnline ? '#f0b429' : '#f0455a',
+      wsAnim: this.state.streamLive ? 'pulse 2s infinite' : 'none',
+      wsLabel: this.state.streamLive ? 'LIVE (push)' : this.state.apiOnline ? 'LIVE (poll)' : 'OFFLINE',
       retryFetch: this.retryFetch,
       usingDemo: this.state.usingDemo, demoMessage: this.state.demoMessage,
       subtitle: closed.length + ' closed · Win Rate: ' + winRate + '%',

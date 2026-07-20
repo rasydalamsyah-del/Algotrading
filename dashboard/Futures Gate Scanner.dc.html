@@ -1,0 +1,171 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+
+<helmet>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=Space+Grotesk:wght@500;600;700&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <style>
+    @keyframes pulseDot{0%,100%{opacity:1;transform:scale(1)}50%{opacity:.45;transform:scale(.75)}}
+    body{margin:0;background:#05060a;-webkit-font-smoothing:antialiased}
+    a{color:#f0983f}
+    a:hover{color:#f5b46b}
+  </style>
+</helmet>
+<div style="min-height:100vh;background:#05060a;color:#e7e9ef;font-family:'Inter',system-ui,sans-serif;position:relative;overflow-x:hidden">
+  <nav style="position:sticky;top:0;z-index:50;display:flex;align-items:center;gap:14px;padding:0 24px;height:60px;background:rgba(5,6,10,0.88);backdrop-filter:blur(20px);border-bottom:1px solid rgba(255,255,255,0.07)">
+    <a href="Futures Dashboard.dc.html" style="display:flex;align-items:center;gap:9px;font-family:'Space Grotesk',sans-serif;font-weight:700;font-size:15px;text-decoration:none;color:#e7e9ef">
+      <div style="width:30px;height:30px;border-radius:9px;background:linear-gradient(135deg,#f0983f,#f0455a);display:grid;place-items:center;font-size:15px">⚡</div>
+      Futures Gate <span style="color:#f0983f">Scanner</span>
+    </a>
+    <div style="flex:1"></div>
+    <div style="display:flex;align-items:center;gap:8px;background:#0d0f1a;border:1px solid rgba(255,255,255,0.08);border-radius:24px;padding:6px 14px;font-size:12px;color:#8b93a7">
+      <div style="width:7px;height:7px;border-radius:50%;background:#f0983f;animation:pulseDot 1.6s infinite"></div>
+      Refresh dalam {{ countdown }}s
+    </div>
+  </nav>
+  <main style="position:relative;z-index:1;max-width:1600px;margin:0 auto;padding:24px 24px 64px">
+    <sc-if value="{{ usingDemo }}" hint-placeholder-val="{{ false }}">
+      <div style="display:flex;align-items:center;gap:10px;background:rgba(245,158,11,0.08);border:1px solid rgba(245,158,11,0.25);border-radius:10px;padding:10px 16px;margin-bottom:20px;font-size:12px;color:#f59e0b">
+        <span>⚠</span><span>{{ demoMessage }}</span>
+      </div>
+    </sc-if>
+
+    <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:22px;padding:12px 16px;background:#0b0d18;border:1px solid rgba(255,255,255,0.07);border-radius:12px">
+      <span style="font-size:10px;color:#6b7280;font-weight:600">SISI</span>
+      <sc-for list="{{ sideFilters }}" as="sf" hint-placeholder-count="3">
+        <button onclick="{{ sf.onClick }}" style="background:{{ sf.bg }};border:1px solid {{ sf.border }};border-radius:6px;padding:6px 12px;font-size:11px;color:{{ sf.color }};cursor:pointer;font-family:inherit;font-weight:700">{{ sf.label }}</button>
+      </sc-for>
+    </div>
+
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:12px;margin-bottom:32px">
+      <div style="background:#0b0d18;border:1px solid rgba(255,255,255,0.07);border-radius:12px;padding:16px 18px">
+        <div style="font-size:10px;color:#8b93a7;font-weight:700;text-transform:uppercase;margin-bottom:6px">▲ Long Setups</div>
+        <div style="font-family:'JetBrains Mono',monospace;font-size:26px;font-weight:700;color:#00d68f">{{ longCount }}</div>
+      </div>
+      <div style="background:#0b0d18;border:1px solid rgba(255,255,255,0.07);border-radius:12px;padding:16px 18px">
+        <div style="font-size:10px;color:#8b93a7;font-weight:700;text-transform:uppercase;margin-bottom:6px">▼ Short Setups</div>
+        <div style="font-family:'JetBrains Mono',monospace;font-size:26px;font-weight:700;color:#f0455a">{{ shortCount }}</div>
+      </div>
+      <div style="background:#0b0d18;border:1px solid rgba(255,255,255,0.07);border-radius:12px;padding:16px 18px">
+        <div style="font-size:10px;color:#8b93a7;font-weight:700;text-transform:uppercase;margin-bottom:6px">Trigger Aktif</div>
+        <div style="font-family:'JetBrains Mono',monospace;font-size:26px;font-weight:700;color:#f0983f">{{ triggerCount }}</div>
+      </div>
+    </div>
+
+    <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(320px,1fr));gap:14px">
+      <sc-for list="{{ cards }}" as="card" hint-placeholder-count="4">
+        <div style="background:#0b0d18;border:1px solid {{ card.borderColor }};border-radius:13px;overflow:hidden">
+          <div style="height:2px;background:linear-gradient(90deg,{{ card.accent }},transparent 70%)"></div>
+          <div style="padding:14px 16px;display:flex;align-items:center;gap:10px">
+            <span style="font-size:9px;font-weight:800;padding:3px 8px;border-radius:4px;background:{{ card.sideBg }};color:{{ card.sideColor }}">{{ card.sideIcon }} {{ card.side }}</span>
+            <span style="font-family:'Space Grotesk',sans-serif;font-weight:700;font-size:14.5px">{{ card.symbol }}</span>
+            <div style="margin-left:auto;font-family:'JetBrains Mono',monospace;font-size:16px;font-weight:800;color:{{ card.accent }}">{{ card.scoreRounded }}</div>
+          </div>
+          <div style="display:grid;grid-template-columns:1fr 1fr;padding:10px 16px;border-top:1px solid rgba(255,255,255,0.06);background:rgba(0,0,0,0.15)">
+            <div><div style="font-size:9px;color:#4b5563;text-transform:uppercase">TP</div><div style="font-family:'JetBrains Mono',monospace;font-size:12px;font-weight:700;color:#10b981">{{ card.tpPrice }}</div></div>
+            <div style="text-align:right"><div style="font-size:9px;color:#4b5563;text-transform:uppercase">SL</div><div style="font-family:'JetBrains Mono',monospace;font-size:12px;font-weight:700;color:#ef4444">{{ card.slPrice }}</div></div>
+          </div>
+          <div style="padding:10px 16px;display:flex;align-items:center;justify-content:space-between;background:rgba(0,0,0,0.1)">
+            <span style="font-size:10px;color:#8b93a7">{{ card.trendSummary }}</span>
+            <span style="font-size:11px;font-weight:700;font-family:'JetBrains Mono',monospace;color:{{ card.probColor }}">{{ card.probLabel }}</span>
+          </div>
+          <a href="{{ card.detailHref }}" style="display:block;text-align:center;padding:8px;font-size:10.5px;color:#8b93a7;text-decoration:none;border-top:1px solid rgba(255,255,255,0.06)">Detail →</a>
+        </div>
+      </sc-for>
+    </div>
+    <sc-if value="{{ noCards }}" hint-placeholder-val="{{ false }}">
+      <div style="text-align:center;padding:40px;color:#4b5563;font-size:13px;border:1px dashed rgba(255,255,255,0.09);border-radius:12px">Tidak ada setup yang cocok dengan filter</div>
+    </sc-if>
+  </main>
+</div>
+
+</x-dc>
+<script type="text/x-dc" data-dc-script>
+
+function fmtP(v) { if (v == null || v === 0) return '—'; return '$' + (v >= 1 ? v.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : v.toFixed(6)); }
+
+// Sesuai future/test_api_server_future_forecast_bidirectional.py -- field
+// probability_favorable_pct (bukan probability_up_pct), side eksplisit per entry.
+function demoForecasts() {
+  return [
+    { symbol: 'BTC/USDT', side: 'long', total_score: 88.2, probability_favorable_pct: 74, trend_summary: 'Bullish EMA stack aligned', current_price: 68210, suggested_tp: 71200, suggested_sl: 65900 },
+    { symbol: 'ETH/USDT', side: 'short', total_score: 79.5, probability_favorable_pct: 68, trend_summary: 'Bearish momentum confirmed', current_price: 3541, suggested_tp: 3400, suggested_sl: 3620 },
+    { symbol: 'SOL/USDT', side: 'long', total_score: 66.1, probability_favorable_pct: 58, trend_summary: 'Sideways, waiting breakout', current_price: 172.4, suggested_tp: 181, suggested_sl: 167 },
+  ];
+}
+
+class Component extends DCLogic {
+  state = {
+    apiBase: 'http://localhost:8001/api', apiKey: '', forecasts: [], usingDemo: false, demoMessage: '',
+    sideFilter: 'all', countdown: 30,
+  };
+  componentDidMount() {
+    try {
+      const b = localStorage.getItem('gsf_api_base'); if (b) this.state.apiBase = b;
+      const k = localStorage.getItem('gs_api_key'); if (k) this.state.apiKey = k;
+    } catch (e) {}
+    this.fetchData();
+    this._timer = setInterval(() => {
+      this.setState(s => { const next = s.countdown - 1; if (next <= 0) { this.fetchData(); return { countdown: 30 }; } return { countdown: next }; });
+    }, 1000);
+  }
+  componentWillUnmount() { if (this._timer) clearInterval(this._timer); }
+  async fetchData() {
+    try {
+      const hdrs = {}; if (this.state.apiKey) hdrs['X-API-Key'] = this.state.apiKey;
+      const r = await fetch(this.state.apiBase + '/forecast', { headers: hdrs });
+      if (!r.ok) throw new Error('http ' + r.status);
+      const data = await r.json();
+      this.setState({ forecasts: data.forecasts || [], usingDemo: false });
+    } catch (e) {
+      this.setState({ forecasts: demoForecasts(), usingDemo: true, demoMessage: this.state.apiKey ? 'Tidak bisa menyambung ke bot futures. Menampilkan data contoh.' : 'API Key belum diset. Menampilkan data contoh.' });
+    }
+  }
+  setSideFilter(v) { this.setState({ sideFilter: v }); }
+  renderVals() {
+    const filtered = this.state.sideFilter === 'all' ? this.state.forecasts : this.state.forecasts.filter(f => f.side === this.state.sideFilter);
+    filtered.sort((a, b) => (b.probability_favorable_pct || 0) - (a.probability_favorable_pct || 0));
+
+    const cards = filtered.map(fc => {
+      const isLong = fc.side === 'long';
+      const prob = fc.probability_favorable_pct || 0;
+      const accent = isLong ? '#00d68f' : '#f0455a';
+      return {
+        symbol: fc.symbol, side: (fc.side || '').toUpperCase(), sideIcon: isLong ? '▲' : '▼',
+        sideBg: isLong ? 'rgba(0,214,143,0.1)' : 'rgba(240,69,90,0.1)', sideColor: accent,
+        accent, borderColor: 'rgba(255,255,255,0.07)',
+        scoreRounded: Math.round(fc.total_score || 0),
+        tpPrice: fmtP(fc.suggested_tp), slPrice: fmtP(fc.suggested_sl),
+        trendSummary: fc.trend_summary || '—',
+        probLabel: prob.toFixed(1) + '%', probColor: prob >= 65 ? '#10b981' : prob >= 50 ? '#f59e0b' : '#ef4444',
+        detailHref: 'Futures Coin Detail.dc.html?symbol=' + encodeURIComponent(fc.symbol) + '&side=' + fc.side,
+      };
+    });
+
+    const sideFilterOpts = [['all', 'Semua'], ['long', '▲ Long saja'], ['short', '▼ Short saja']];
+    const sideFilters = sideFilterOpts.map(([val, label]) => {
+      const active = this.state.sideFilter === val;
+      return { label, onClick: () => this.setSideFilter(val), bg: active ? '#f0983f' : '#111426', border: active ? '#f0983f' : 'rgba(255,255,255,0.08)', color: active ? '#fff' : '#8b93a7' };
+    });
+
+    return {
+      usingDemo: this.state.usingDemo, demoMessage: this.state.demoMessage, countdown: this.state.countdown,
+      sideFilters,
+      longCount: this.state.forecasts.filter(f => f.side === 'long').length,
+      shortCount: this.state.forecasts.filter(f => f.side === 'short').length,
+      triggerCount: this.state.forecasts.filter(f => f.trigger_met).length,
+      cards, noCards: cards.length === 0,
+    };
+  }
+}
+
+</script>
+</body>
+</html>

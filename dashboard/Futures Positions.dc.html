@@ -1,0 +1,268 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+
+<helmet>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <style>
+    @keyframes pulse{0%,100%{opacity:1}50%{opacity:.3}}
+    body{margin:0;background:#0b0e11;-webkit-font-smoothing:antialiased}
+    a{color:#f0983f}
+    a:hover{color:#f5b46b}
+    ::-webkit-scrollbar{width:5px;height:5px}
+    ::-webkit-scrollbar-thumb{background:#253550;border-radius:3px}
+  </style>
+</helmet>
+
+<div style="min-height:100vh;background:#0b0e11;color:#e6eaf2;font-family:'Inter',system-ui,sans-serif;font-size:13px;line-height:1.5;overflow-x:hidden">
+
+  <div style="position:fixed;bottom:16px;right:16px;z-index:300;display:flex;flex-direction:column;gap:7px;max-width:calc(100vw - 32px)">
+    <sc-for list="{{ toasts }}" as="t" hint-placeholder-count="0">
+      <div style="background:#161e2e;border:1px solid #1e2d45;border-left:3px solid {{ t.accent }};border-radius:6px;padding:10px 14px;display:flex;align-items:flex-start;gap:9px;box-shadow:0 4px 24px rgba(0,0,0,0.5);min-width:260px">
+        <span style="font-size:15px;flex-shrink:0">{{ t.icon }}</span>
+        <div style="flex:1"><div style="font-size:11.5px;font-weight:700">{{ t.title }}</div><div style="font-size:10px;color:#4a5878;margin-top:1px">{{ t.msg }}</div></div>
+        <span onclick="{{ t.onClose }}" style="cursor:pointer;color:#4a5878;font-size:13px;flex-shrink:0">✕</span>
+      </div>
+    </sc-for>
+  </div>
+
+  <sc-if value="{{ showConfirm }}" hint-placeholder-val="{{ false }}">
+    <div style="position:fixed;inset:0;z-index:250;background:rgba(0,0,0,0.75);backdrop-filter:blur(4px);display:flex;align-items:center;justify-content:center;padding:16px">
+      <div style="background:#111722;border:1px solid #1e2d45;border-radius:10px;padding:22px;width:100%;max-width:420px;box-shadow:0 20px 60px rgba(0,0,0,0.7)">
+        <div style="font-size:15px;font-weight:700;margin-bottom:10px">{{ confirmTitle }}</div>
+        <div style="color:#8a9bba;font-size:12px;line-height:1.6;margin-bottom:18px;white-space:pre-line">{{ confirmMsg }}</div>
+        <div style="display:flex;gap:8px;justify-content:flex-end;flex-wrap:wrap">
+          <button onclick="{{ confirmCancel }}" style="background:none;border:1px solid #1e2d45;border-radius:6px;padding:8px 16px;font-size:11.5px;color:#8a9bba;cursor:pointer;font-family:inherit">Batal</button>
+          <button onclick="{{ confirmYes }}" style="background:#f0455a;border:none;border-radius:6px;padding:8px 16px;font-size:11.5px;color:#fff;font-weight:700;cursor:pointer;font-family:inherit">{{ confirmActionLabel }}</button>
+        </div>
+      </div>
+    </div>
+  </sc-if>
+
+  <nav style="position:sticky;top:0;z-index:80;height:56px;background:rgba(11,14,17,0.95);backdrop-filter:blur(20px);border-bottom:1px solid #1e2d45;display:flex;align-items:center;padding:0 20px;gap:14px">
+    <a href="Futures Dashboard.dc.html" style="display:flex;align-items:center;gap:9px;font-weight:700;font-size:14px;flex-shrink:0;text-decoration:none;color:#e6eaf2">
+      <div style="width:30px;height:30px;border-radius:8px;background:linear-gradient(135deg,#f0983f,#f0455a);display:flex;align-items:center;justify-content:center;font-size:15px">⚡</div>
+      AlgoTrader <span style="color:#f0983f;margin-left:2px">Futures</span>
+    </a>
+    <div style="flex:1"></div>
+    <div style="display:flex;align-items:center;gap:5px;font-size:10px;color:#4a5878;font-family:'JetBrains Mono',monospace">
+      <div style="width:7px;height:7px;border-radius:50%;background:{{ wsColor }};animation:{{ wsAnim }}"></div>{{ wsLabel }}
+    </div>
+  </nav>
+
+  <main style="max-width:1400px;margin:0 auto;padding:20px">
+    <sc-if value="{{ usingDemo }}" hint-placeholder-val="{{ false }}">
+      <div style="display:flex;align-items:center;gap:10px;background:rgba(240,180,41,0.08);border:1px solid rgba(240,180,41,0.3);border-radius:10px;padding:10px 16px;margin-bottom:16px;font-size:11.5px;color:#f0b429">
+        <span>⚠</span><span>{{ demoMessage }}</span>
+      </div>
+    </sc-if>
+
+    <div style="display:flex;align-items:flex-start;justify-content:space-between;margin-bottom:16px;gap:10px;flex-wrap:wrap">
+      <div>
+        <div style="font-size:17px;font-weight:700">Futures Positions</div>
+        <div style="font-size:11px;color:#4a5878;margin-top:2px">{{ subtitle }}</div>
+      </div>
+      <button onclick="{{ panicAll }}" style="background:#f0455a;border:none;border-radius:6px;padding:6px 12px;font-size:11px;color:#fff;font-weight:700;cursor:pointer;font-family:inherit">🆘 Close All</button>
+    </div>
+
+    <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-bottom:16px">
+      <div style="background:#111722;border:1px solid #1e2d45;border-radius:10px;padding:14px 16px">
+        <div style="font-size:10px;font-weight:600;color:#4a5878;text-transform:uppercase;margin-bottom:7px">LONG</div>
+        <div style="font-size:20px;font-weight:700;font-family:'JetBrains Mono',monospace;color:#00d68f">{{ longCount }}</div>
+      </div>
+      <div style="background:#111722;border:1px solid #1e2d45;border-radius:10px;padding:14px 16px">
+        <div style="font-size:10px;font-weight:600;color:#4a5878;text-transform:uppercase;margin-bottom:7px">SHORT</div>
+        <div style="font-size:20px;font-weight:700;font-family:'JetBrains Mono',monospace;color:#f0455a">{{ shortCount }}</div>
+      </div>
+      <div style="background:#111722;border:1px solid #1e2d45;border-radius:10px;padding:14px 16px">
+        <div style="font-size:10px;font-weight:600;color:#4a5878;text-transform:uppercase;margin-bottom:7px">Total Open PnL</div>
+        <div style="font-size:20px;font-weight:700;font-family:'JetBrains Mono',monospace;color:{{ openPnlColor }}">{{ openPnl }}</div>
+      </div>
+    </div>
+
+    <div style="background:#111722;border:1px solid #1e2d45;border-radius:10px;overflow:hidden">
+      <div style="overflow-x:auto">
+        <table style="width:100%;border-collapse:collapse;font-size:11px;min-width:1000px">
+          <thead><tr>
+            <th style="padding:9px 10px;text-align:left;font-size:9.5px;font-weight:600;color:#4a5878;text-transform:uppercase;border-bottom:1px solid #1e2d45;background:#0b0e11;white-space:nowrap">Symbol</th>
+            <th style="padding:9px 10px;text-align:left;font-size:9.5px;font-weight:600;color:#4a5878;text-transform:uppercase;border-bottom:1px solid #1e2d45;background:#0b0e11;white-space:nowrap">Side</th>
+            <th style="padding:9px 10px;text-align:right;font-size:9.5px;font-weight:600;color:#4a5878;text-transform:uppercase;border-bottom:1px solid #1e2d45;background:#0b0e11;white-space:nowrap">Leverage</th>
+            <th style="padding:9px 10px;text-align:left;font-size:9.5px;font-weight:600;color:#4a5878;text-transform:uppercase;border-bottom:1px solid #1e2d45;background:#0b0e11;white-space:nowrap">Margin</th>
+            <th style="padding:9px 10px;text-align:right;font-size:9.5px;font-weight:600;color:#4a5878;text-transform:uppercase;border-bottom:1px solid #1e2d45;background:#0b0e11;white-space:nowrap">Entry</th>
+            <th style="padding:9px 10px;text-align:right;font-size:9.5px;font-weight:600;color:#4a5878;text-transform:uppercase;border-bottom:1px solid #1e2d45;background:#0b0e11;white-space:nowrap">Now</th>
+            <th style="padding:9px 10px;text-align:right;font-size:9.5px;font-weight:600;color:#4a5878;text-transform:uppercase;border-bottom:1px solid #1e2d45;background:#0b0e11;white-space:nowrap">PnL</th>
+            <th style="padding:9px 10px;text-align:right;font-size:9.5px;font-weight:600;color:#4a5878;text-transform:uppercase;border-bottom:1px solid #1e2d45;background:#0b0e11;white-space:nowrap">Liq. Price</th>
+            <th style="padding:9px 10px;text-align:center;font-size:9.5px;font-weight:600;color:#4a5878;text-transform:uppercase;border-bottom:1px solid #1e2d45;background:#0b0e11;white-space:nowrap">Action</th>
+          </tr></thead>
+          <tbody>
+            <sc-if value="{{ hasPositions }}" hint-placeholder-val="{{ true }}">
+              <sc-for list="{{ rows }}" as="p" hint-placeholder-count="2">
+                <tr>
+                  <td style="padding:10px;border-bottom:1px solid rgba(30,45,69,0.5);font-weight:700;white-space:nowrap">{{ p.symbol }}</td>
+                  <td style="padding:10px;border-bottom:1px solid rgba(30,45,69,0.5);white-space:nowrap"><span style="display:inline-block;padding:2px 7px;border-radius:4px;font-size:9.5px;font-weight:700;background:{{ p.sideBg }};color:{{ p.sideColor }}">{{ p.side }}</span></td>
+                  <td style="padding:10px;text-align:right;border-bottom:1px solid rgba(30,45,69,0.5);font-family:'JetBrains Mono',monospace;color:#f0983f;font-weight:700;white-space:nowrap">{{ p.leverage }}</td>
+                  <td style="padding:10px;border-bottom:1px solid rgba(30,45,69,0.5);color:#8a9bba;white-space:nowrap">{{ p.marginMode }}</td>
+                  <td style="padding:10px;text-align:right;border-bottom:1px solid rgba(30,45,69,0.5);font-family:'JetBrains Mono',monospace;color:#8a9bba;white-space:nowrap">{{ p.entry }}</td>
+                  <td style="padding:10px;text-align:right;border-bottom:1px solid rgba(30,45,69,0.5);font-family:'JetBrains Mono',monospace;color:#8a9bba;white-space:nowrap">{{ p.now }}</td>
+                  <td style="padding:10px;text-align:right;border-bottom:1px solid rgba(30,45,69,0.5);font-family:'JetBrains Mono',monospace;font-weight:600;color:{{ p.pnlColor }};white-space:nowrap">{{ p.pnl }}</td>
+                  <td style="padding:10px;text-align:right;border-bottom:1px solid rgba(30,45,69,0.5);font-family:'JetBrains Mono',monospace;white-space:nowrap;color:{{ p.liqColor }}">{{ p.liqPrice }} ({{ p.liqDist }})</td>
+                  <td style="padding:10px;text-align:center;border-bottom:1px solid rgba(30,45,69,0.5);white-space:nowrap"><button onclick="{{ p.onClose }}" style="padding:3px 9px;border-radius:4px;font-size:10px;font-weight:600;cursor:pointer;border:1px solid #1e2d45;background:none;color:#f0455a;font-family:inherit">Close</button></td>
+                </tr>
+              </sc-for>
+            </sc-if>
+            <sc-if value="{{ hasNoPositions }}" hint-placeholder-val="{{ false }}">
+              <tr><td colspan="9" style="text-align:center;padding:32px;color:#4a5878">📭 Tidak ada posisi futures terbuka</td></tr>
+            </sc-if>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </main>
+</div>
+
+</x-dc>
+<script type="text/x-dc" data-dc-script>
+
+function fmtUSD(v, d = 2) { if (v == null) return '—'; return '$' + Number(v).toLocaleString('en-US', { minimumFractionDigits: d, maximumFractionDigits: d }); }
+function signUSD(v) { if (v == null) return '—'; return (v >= 0 ? '+' : '') + fmtUSD(v); }
+function demoPositions() {
+  return [
+    { symbol: 'BTC/USDT', side: 'long', leverage: 10, margin_mode: 'isolated', entry_price: 67200, current_price: 68210, unrealized_pnl: 84.2, unrealized_pnl_pct: 1.5, liquidation_price: 60800 },
+    { symbol: 'ETH/USDT', side: 'short', leverage: 5, margin_mode: 'cross', entry_price: 3610, current_price: 3541, unrealized_pnl: 38.5, unrealized_pnl_pct: 1.9, liquidation_price: 3980 },
+  ];
+}
+let toastSeq = 0;
+class Component extends DCLogic {
+  state = { apiBase: 'http://localhost:8001/api', apiKey: '', positions: [], usingDemo: false, demoMessage: '', apiOnline: false, streamLive: false, toasts: [], confirm: null };
+
+  toast(type, title, msg) {
+    const id = ++toastSeq;
+    const meta = { success: { icon: '✅', accent: '#00d68f' }, error: { icon: '❌', accent: '#f0455a' }, warn: { icon: '⚠️', accent: '#f0b429' } }[type] || {};
+    this.setState(s => ({ toasts: [...s.toasts, { id, title, msg, icon: meta.icon, accent: meta.accent }] }));
+    setTimeout(() => this.setState(s => ({ toasts: s.toasts.filter(t => t.id !== id) })), 5000);
+  }
+  closeToast(id) { this.setState(s => ({ toasts: s.toasts.filter(t => t.id !== id) })); }
+  askConfirm(title, msg, actionLabel, onYes) { this.setState({ confirm: { title, msg, actionLabel, onYes } }); }
+  confirmCancel = () => this.setState({ confirm: null });
+  confirmYes = () => { const c = this.state.confirm; this.setState({ confirm: null }); if (c && c.onYes) c.onYes(); };
+
+  componentDidMount() {
+    try {
+      const b = localStorage.getItem('gsf_api_base'); if (b) this.state.apiBase = b;
+      const k = localStorage.getItem('gs_api_key'); if (k) this.state.apiKey = k;
+    } catch (e) {}
+    this.fetchData();
+    this._timer = setInterval(() => this.fetchData(), 15000);
+    this.connectStream();
+  }
+  componentWillUnmount() { if (this._timer) clearInterval(this._timer); if (this._streamCtrl) this._streamCtrl.abort(); }
+
+  async fetchData() {
+    try {
+      const hdrs = {}; if (this.state.apiKey) hdrs['X-API-Key'] = this.state.apiKey;
+      const r = await fetch(this.state.apiBase + '/positions', { headers: hdrs });
+      if (!r.ok) throw new Error('http ' + r.status);
+      const data = await r.json();
+      this.setState({ positions: data.positions || [], usingDemo: false, apiOnline: true });
+    } catch (e) {
+      this.setState({ positions: demoPositions(), usingDemo: true, apiOnline: false, demoMessage: this.state.apiKey ? 'Tidak bisa menyambung ke bot futures. Menampilkan data contoh.' : 'API Key belum diset. Menampilkan data contoh.' });
+    }
+  }
+
+  async connectStream() {
+    if (!this.state.apiKey) return;
+    this._streamCtrl = new AbortController();
+    try {
+      const r = await fetch(this.state.apiBase + '/stream', { headers: { 'X-API-Key': this.state.apiKey, 'Accept': 'text/event-stream' }, signal: this._streamCtrl.signal });
+      if (!r.ok || !r.body) throw new Error('http ' + r.status);
+      this.setState({ streamLive: true });
+      const reader = r.body.getReader(); const decoder = new TextDecoder(); let buf = '';
+      while (true) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        buf += decoder.decode(value, { stream: true });
+        const chunks = buf.split('\n\n'); buf = chunks.pop();
+        for (const chunk of chunks) {
+          const line = chunk.split('\n').find(l => l.startsWith('data:'));
+          if (!line) continue;
+          try { const evt = JSON.parse(line.slice(5).trim()); if (evt.type === 'positions_snapshot' && Array.isArray(evt.data)) this.setState({ positions: evt.data, apiOnline: true }); } catch (e) {}
+        }
+      }
+    } catch (e) { this.setState({ streamLive: false }); }
+    if (!this._streamCtrl.signal.aborted) setTimeout(() => this.connectStream(), 4000);
+  }
+
+  panicAll = () => this.askConfirm('🆘 Panic Close', 'Tutup SEMUA posisi futures sekarang?', 'Ya, Panic Close', async () => {
+    try {
+      const r = await fetch(this.state.apiBase + '/bot/panic', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-API-Key': this.state.apiKey }, body: '{}' });
+      const data = await r.json();
+      if (r.ok) { this.toast('success', '🆘 Panic Done', 'Closed ' + (data.closed_count ?? '?') + ' posisi.'); this.fetchData(); }
+      else this.toast('error', 'Gagal', 'HTTP ' + r.status);
+    } catch (e) { this.toast('error', 'Gagal menghubungi bot', e.message || String(e)); }
+  });
+  closePosition(sym) {
+    this.askConfirm('Tutup Posisi', 'Tutup posisi futures ' + sym + ' sekarang?', 'Ya, Tutup', async () => {
+      try {
+        const r = await fetch(this.state.apiBase + '/positions/' + encodeURIComponent(sym) + '/close', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-API-Key': this.state.apiKey }, body: '{}' });
+        const data = await r.json();
+        if (r.ok && data.success) { this.toast('success', '✅ Ditutup', sym + ' berhasil ditutup.'); this.fetchData(); }
+        else this.toast('error', 'Gagal', data.message || ('HTTP ' + r.status));
+      } catch (e) { this.toast('error', 'Gagal menghubungi bot', e.message || String(e)); }
+    });
+  }
+
+  renderVals() {
+    const positions = this.state.positions;
+    const totalPnl = positions.reduce((a, p) => a + (p.unrealized_pnl || 0), 0);
+    const longCount = positions.filter(p => (p.side || '') === 'long').length;
+    const shortCount = positions.filter(p => (p.side || '') === 'short').length;
+
+    const rows = positions.map(p => {
+      const pnl = p.unrealized_pnl || 0;
+      const side = p.side || 'long';
+      const liq = p.liquidation_price;
+      let liqDist = '—', liqColor = '#8a9bba';
+      if (liq && p.current_price) {
+        const distPct = Math.abs((p.current_price - liq) / p.current_price * 100);
+        liqDist = distPct.toFixed(1) + '%';
+        liqColor = distPct < 5 ? '#f0455a' : distPct < 15 ? '#f0b429' : '#00d68f';
+      }
+      return {
+        symbol: p.symbol, side: side.toUpperCase(),
+        sideBg: side === 'long' ? 'rgba(0,214,143,0.08)' : 'rgba(240,69,90,0.08)',
+        sideColor: side === 'long' ? '#00d68f' : '#f0455a',
+        leverage: (p.leverage || '—') + '×', marginMode: p.margin_mode || '—',
+        entry: fmtUSD(p.entry_price), now: fmtUSD(p.current_price),
+        pnl: signUSD(pnl), pnlColor: pnl >= 0 ? '#00d68f' : '#f0455a',
+        liqPrice: fmtUSD(liq), liqDist, liqColor,
+        onClose: () => this.closePosition(p.symbol),
+      };
+    });
+
+    const toasts = this.state.toasts.map(t => ({ ...t, onClose: () => this.closeToast(t.id) }));
+    const c = this.state.confirm;
+
+    return {
+      toasts, showConfirm: !!c, confirmTitle: c ? c.title : '', confirmMsg: c ? c.msg : '',
+      confirmActionLabel: c ? c.actionLabel : 'Ya', confirmCancel: this.confirmCancel, confirmYes: this.confirmYes,
+      wsColor: this.state.streamLive ? '#00d68f' : this.state.apiOnline ? '#f0b429' : '#f0455a',
+      wsAnim: this.state.streamLive ? 'pulse 2s infinite' : 'none',
+      wsLabel: this.state.streamLive ? 'LIVE (push)' : this.state.apiOnline ? 'LIVE (poll)' : 'OFFLINE',
+      usingDemo: this.state.usingDemo, demoMessage: this.state.demoMessage,
+      subtitle: positions.length + ' posisi terbuka \u00b7 ' + longCount + ' long, ' + shortCount + ' short',
+      longCount, shortCount, openPnl: signUSD(totalPnl), openPnlColor: totalPnl >= 0 ? '#00d68f' : '#f0455a',
+      panicAll: this.panicAll, hasPositions: rows.length > 0, hasNoPositions: rows.length === 0, rows,
+    };
+  }
+}
+
+</script>
+</body>
+</html>
