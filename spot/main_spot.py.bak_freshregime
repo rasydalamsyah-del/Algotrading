@@ -2295,36 +2295,15 @@ class TradingBot:
                                 _tracker = self.strategy.get_tracker(pos.symbol)
                                 _cur_regime = None
                                 try:
-                                    # [FIX -- signal_scores basi untuk posisi terbuka]
-                                    # db.get_latest_signal_score() SEBELUMNYA dipakai di
-                                    # sini, tapi tabel signal_scores TIDAK PERNAH ditulis
-                                    # ulang untuk simbol yang sudah punya posisi terbuka
-                                    # (G0_ALREADY_OPEN skip scoring pipeline) -- _cur_regime
-                                    # SELALU sama dengan entry_regime, regime transition
-                                    # tidak pernah terdeteksi (dibuktikan lewat data nyata:
-                                    # ZK/USDT 30+ jam tanpa update regime sama sekali).
-                                    # Fix: hitung regime FRESH langsung dari classify_regime()
-                                    # memakai candle live, bukan bergantung pipeline scoring
-                                    # yang di-skip untuk posisi yang sudah terbuka.
-                                    from engine.intelligence.observer import _build_indicator_set
-                                    from engine.intelligence.classifier import classify_regime
-                                    _freg_profile = get_coin_profile(pos.symbol, override_profile=pos.strategy_profile)
-                                    _freg_tf = _freg_profile.timeframe
-                                    _freg_candles = await self.exchange.fetch_ohlcv(pos.symbol, _freg_tf, limit=100)
-                                    if _freg_candles and len(_freg_candles) >= 60:
-                                        _freg_df = pd.DataFrame(
-                                            _freg_candles,
-                                            columns=["ts","open","high","low","close","volume"]
-                                        ).astype({"open":float,"high":float,"low":float,"close":float,"volume":float})
-                                        _freg_iset = _build_indicator_set(_freg_df, pos.symbol, _freg_tf)
-                                        _freg_regime_obj, _freg_conf = classify_regime(pos.symbol, _freg_iset)
-                                        _cur_regime = _freg_regime_obj.value
-                                        log.debug(
-                                            "Fresh regime [%s]: %s (conf=%.2f)",
-                                            pos.symbol, _cur_regime, _freg_conf,
+                                    _latest_sig = await self.db.get_latest_signal_score(pos.symbol)
+                                    if _latest_sig is not None:
+                                        _cur_regime = (
+                                            _latest_sig.regime.value
+                                            if hasattr(_latest_sig.regime, "value")
+                                            else str(_latest_sig.regime)
                                         )
-                                except Exception as _freg_err:
-                                    log.debug("Fresh regime check gagal [%s]: %s", pos.symbol, _freg_err)
+                                except Exception:
+                                    pass
                                 if _tracker and _cur_regime:
                                     _rth_action = self.strategy._handle_regime_transition(
                                         _tracker, _cur_regime
