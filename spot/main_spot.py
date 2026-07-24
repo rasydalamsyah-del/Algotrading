@@ -2242,98 +2242,128 @@ class TradingBot:
                             log.debug("ATG error [%s]: %s", pos.symbol, _atg_err)
                         # ── End ATG ────────────────────────────────────────────
 
-                        # ── Early Exit Confirmation ──────────────────────────
+                        # ══════════════════════════════════════════════════════
+                        # ── PENGAWALAN TERUS-MENERUS (proyek "Pengawasan") ──────
+                        # [FIX -- root cause] SEBELUMNYA Early Exit Confirmation &
+                        # Regime Transition Handler membaca db.get_latest_signal_score()
+                        # / tabel signal_scores -- TAPI tabel itu TIDAK PERNAH ditulis
+                        # ulang untuk simbol yang sudah punya posisi terbuka
+                        # (G0_ALREADY_OPEN skip pipeline scoring di commander.py).
+                        # Akibatnya kedua mekanisme ini SELALU membaca snapshot dari
+                        # sebelum entry -- regime & score-drop tidak pernah terdeteksi
+                        # (dibuktikan data nyata: ZK/USDT 9.7 jam tanpa satupun update).
+                        # Fix: hitung ulang REGIME dan TOTAL_SCORE fresh SEKALI per
+                        # siklus (1x fetch candle, bukan 2x terpisah spt sebelumnya),
+                        # memakai mesin YANG SAMA PERSIS dgn saat entry (observer.observe
+                        # -> classifier.classify_regime -> scorer.score_signal). Hasilnya
+                        # HANYA dipakai untuk keputusan EXIT/TIGHTEN-SL posisi yang SUDAH
+                        # terbuka -- TIDAK PERNAH memicu entry baru (jalur commander.
+                        # decide()/EXECUTE tetap terpisah total, tidak disentuh sama
+                        # sekali -- db_manager=None di score_signal supaya perhitungan
+                        # ini murni read-only, tidak menulis baris signal_scores baru).
+                        # ══════════════════════════════════════════════════════
+                        _watch_regime = None
+                        _watch_score  = None
+                        try:
+                            if not hit_sl and not hit_tp:
+                                from engine.intelligence.observer import observe
+                                from engine.intelligence.classifier import classify_regime
+                                from engine.intelligence.scorer import score_signal as _score_signal_fn
+
+                                _watch_profile = get_coin_profile(pos.symbol, override_profile=pos.strategy_profile)
+                                _watch_tf = _watch_profile.timeframe
+                                _watch_candles = await self.exchange.fetch_ohlcv(pos.symbol, _watch_tf, limit=100)
+                                if _watch_candles and len(_watch_candles) >= 60:
+                                    _watch_df = pd.DataFrame(
+                                        _watch_candles,
+                                        columns=["ts","open","high","low","close","volume"]
+                                    ).astype({"open":float,"high":float,"low":float,"close":float,"volume":float})
+
+                                    _watch_obs = observe(
+                                        symbol=pos.symbol,
+                                        strategy_profile=_watch_profile.profile.value,
+                                        primary_df=_watch_df,
+                                        primary_timeframe=_watch_tf,
+                                        use_cache=False,
+                                        side=(pos.side or "long"),
+                                    )
+                                    if _watch_obs.primary_tf_valid:
+                                        _watch_regime_obj, _watch_conf = classify_regime(
+                                            pos.symbol, _watch_obs.primary_tf_indicators
+                                        )
+                                        _watch_regime = _watch_regime_obj.value
+                                        _watch_signal = _score_signal_fn(
+                                            _watch_obs, _watch_regime_obj, _watch_conf,
+                                            db_manager=None, side=(pos.side or "long"),
+                                        )
+                                        _watch_score = _watch_signal.total_score
+                                        log.debug(
+                                            "Pengawalan fresh [%s]: regime=%s conf=%.2f score=%.1f",
+                                            pos.symbol, _watch_regime, _watch_conf, _watch_score,
+                                        )
+                        except Exception as _watch_err:
+                            log.debug("Pengawalan fresh check gagal [%s]: %s", pos.symbol, _watch_err)
+
+                        # ── Early Exit Confirmation (skor FRESH) ────────────────
                         try:
                             if (
                                 not hit_sl and not hit_tp
                                 and pos.entry_score
                                 and pos.stop_loss_price
                                 and pos.entry_price
+                                and _watch_score is not None
                             ):
-                                _latest_score = await self.db.get_latest_signal_score(pos.symbol)
-                                if _latest_score is not None:
-                                    _score_drop = pos.entry_score - _latest_score.total_score
-                                    _sl_dist    = abs(price - pos.stop_loss_price)
-                                    _en_dist    = abs(pos.entry_price - pos.stop_loss_price)
-                                    _danger     = _en_dist > 0 and (_sl_dist / _en_dist) < 0.5
-                                    _regime_chg = (
-                                        _latest_score.regime is not None
-                                        and pos.entry_regime is not None
-                                        and _latest_score.regime != pos.entry_regime
+                                _score_drop = pos.entry_score - _watch_score
+                                _sl_dist    = abs(price - pos.stop_loss_price)
+                                _en_dist    = abs(pos.entry_price - pos.stop_loss_price)
+                                _danger     = _en_dist > 0 and (_sl_dist / _en_dist) < 0.5
+                                _regime_chg = (
+                                    _watch_regime is not None
+                                    and pos.entry_regime is not None
+                                    and _watch_regime != pos.entry_regime
+                                )
+                                if _score_drop > 20 and _danger and _regime_chg:
+                                    log.info(
+                                        "EARLY EXIT [%s] @ %.6f | score drop %.1f->%.1f | regime %s->%s | danger %.1f%%",
+                                        pos.symbol, price, pos.entry_score, _watch_score,
+                                        pos.entry_regime, _watch_regime,
+                                        (_sl_dist / _en_dist * 100) if _en_dist > 0 else 0,
                                     )
-                                    if _score_drop > 20 and _danger and _regime_chg:
-                                        log.info(
-                                            "EARLY EXIT [%s] @ %.6f | score drop %.1f->%.1f | regime %s->%s | danger %.1f%%",
-                                            pos.symbol, price, pos.entry_score, _latest_score.total_score,
-                                            pos.entry_regime, _latest_score.regime,
-                                            (_sl_dist / _en_dist * 100) if _en_dist > 0 else 0,
+                                    est_pnl = 0.0
+                                    if pos.entry_price and pos.amount:
+                                        est_pnl = (
+                                            (price - pos.entry_price) * pos.amount
+                                            if pos.side == "long"
+                                            else (pos.entry_price - price) * pos.amount
                                         )
-                                        est_pnl = 0.0
-                                        if pos.entry_price and pos.amount:
-                                            est_pnl = (
-                                                (price - pos.entry_price) * pos.amount
-                                                if pos.side == "long"
-                                                else (pos.entry_price - price) * pos.amount
-                                            )
-                                        await self.notifier.notify_sl_tp_hit(
-                                            symbol=pos.symbol, trigger="stop_loss",
-                                            price=price, entry_price=pos.entry_price, pnl=est_pnl,
-                                        )
-                                        await self._close_position_market(pos, price, "early_exit_score_drop")
-                                        continue
+                                    await self.notifier.notify_sl_tp_hit(
+                                        symbol=pos.symbol, trigger="stop_loss",
+                                        price=price, entry_price=pos.entry_price, pnl=est_pnl,
+                                    )
+                                    await self._close_position_market(pos, price, "early_exit_score_drop")
+                                    continue
                         except Exception as _ee_err:
                             log.debug("Early exit check error [%s]: %s", pos.symbol, _ee_err)
                         # ── End Early Exit ────────────────────────────────────
 
-                        # ── Regime Transition Handler ─────────────────────────────────
+                        # ── Regime Transition Handler (regime FRESH) ────────────
                         try:
                             if (
                                 not hit_sl and not hit_tp
                                 and self.strategy
                                 and hasattr(self.strategy, "_handle_regime_transition")
+                                and _watch_regime is not None
                             ):
                                 _tracker = self.strategy.get_tracker(pos.symbol)
-                                _cur_regime = None
-                                try:
-                                    # [FIX -- signal_scores basi untuk posisi terbuka]
-                                    # db.get_latest_signal_score() SEBELUMNYA dipakai di
-                                    # sini, tapi tabel signal_scores TIDAK PERNAH ditulis
-                                    # ulang untuk simbol yang sudah punya posisi terbuka
-                                    # (G0_ALREADY_OPEN skip scoring pipeline) -- _cur_regime
-                                    # SELALU sama dengan entry_regime, regime transition
-                                    # tidak pernah terdeteksi (dibuktikan lewat data nyata:
-                                    # ZK/USDT 30+ jam tanpa update regime sama sekali).
-                                    # Fix: hitung regime FRESH langsung dari classify_regime()
-                                    # memakai candle live, bukan bergantung pipeline scoring
-                                    # yang di-skip untuk posisi yang sudah terbuka.
-                                    from engine.intelligence.observer import _build_indicator_set
-                                    from engine.intelligence.classifier import classify_regime
-                                    _freg_profile = get_coin_profile(pos.symbol, override_profile=pos.strategy_profile)
-                                    _freg_tf = _freg_profile.timeframe
-                                    _freg_candles = await self.exchange.fetch_ohlcv(pos.symbol, _freg_tf, limit=100)
-                                    if _freg_candles and len(_freg_candles) >= 60:
-                                        _freg_df = pd.DataFrame(
-                                            _freg_candles,
-                                            columns=["ts","open","high","low","close","volume"]
-                                        ).astype({"open":float,"high":float,"low":float,"close":float,"volume":float})
-                                        _freg_iset = _build_indicator_set(_freg_df, pos.symbol, _freg_tf)
-                                        _freg_regime_obj, _freg_conf = classify_regime(pos.symbol, _freg_iset)
-                                        _cur_regime = _freg_regime_obj.value
-                                        log.debug(
-                                            "Fresh regime [%s]: %s (conf=%.2f)",
-                                            pos.symbol, _cur_regime, _freg_conf,
-                                        )
-                                except Exception as _freg_err:
-                                    log.debug("Fresh regime check gagal [%s]: %s", pos.symbol, _freg_err)
-                                if _tracker and _cur_regime:
+                                if _tracker:
                                     _rth_action = self.strategy._handle_regime_transition(
-                                        _tracker, _cur_regime
+                                        _tracker, _watch_regime
                                     )
                                     if _rth_action == "EXIT":
                                         log.info(
                                             "REGIME TRANSITION EXIT [%s] @ %.6f | %s->%s",
                                             pos.symbol, price,
-                                            _tracker.entry_regime, _cur_regime,
+                                            _tracker.entry_regime, _watch_regime,
                                         )
                                         est_pnl = 0.0
                                         if pos.entry_price and pos.amount:
@@ -2343,7 +2373,7 @@ class TradingBot:
                                             price=price, entry_price=pos.entry_price, pnl=est_pnl,
                                         )
                                         await self._close_position_market(
-                                            pos, price, f"regime_transition_exit:{_tracker.entry_regime}->{_cur_regime}"
+                                            pos, price, f"regime_transition_exit:{_tracker.entry_regime}->{_watch_regime}"
                                         )
                                         continue
                                     elif _rth_action == "HOLD_TIGHTEN_SL":

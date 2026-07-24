@@ -2446,6 +2446,132 @@ class TradingBot:
                         except Exception as _atg_err:
                             log.debug("ATG error [%s]: %s", pos.symbol, _atg_err)
 
+                        # ══════════════════════════════════════════════════════
+                        # ── PENGAWALAN TERUS-MENERUS (proyek "Pengawasan") ──────
+                        # [BARU -- futures SEBELUMNYA TIDAK PUNYA mekanisme ini SAMA
+                        # SEKALI, beda dari spot yang setidaknya punya versi basi.
+                        # future/strategy_future.py::generate_signals() sengaja
+                        # raise NotImplementedError -- tidak ada radar apapun selain
+                        # SL/TP harga + ATG + cek proximity likuidasi. Ini akar utama
+                        # kenapa DYDX/SPELL/TNSR/OPG/ZK bisa ditahan 10-24 jam sebelum
+                        # akhirnya SL besar kena. Fix: mesin YANG SAMA PERSIS dgn versi
+                        # spot (observer.observe -> classifier.classify_regime ->
+                        # scorer.score_signal), side-aware (pos.side genuinely bisa
+                        # "long" ATAU "short" di futures). Hasilnya HANYA dipakai utk
+                        # keputusan EXIT/TIGHTEN-SL posisi yang SUDAH terbuka -- TIDAK
+                        # PERNAH memicu entry baru (db_manager=None di score_signal
+                        # supaya murni read-only, tidak menulis baris signal_scores).
+                        # ══════════════════════════════════════════════════════
+                        _watch_regime = None
+                        _watch_score  = None
+                        try:
+                            if not hit_sl and not hit_tp:
+                                from engine.intelligence.observer import observe
+                                from engine.intelligence.classifier import classify_regime
+                                from engine.intelligence.scorer import score_signal as _score_signal_fn
+
+                                _watch_profile = get_coin_profile(pos.symbol, override_profile=pos.strategy_profile)
+                                _watch_tf = _watch_profile.timeframe
+                                _watch_candles = await self.exchange.fetch_ohlcv(pos.symbol, _watch_tf, limit=100)
+                                if _watch_candles and len(_watch_candles) >= 60:
+                                    _watch_df = pd.DataFrame(
+                                        _watch_candles,
+                                        columns=["ts","open","high","low","close","volume"]
+                                    ).astype({"open":float,"high":float,"low":float,"close":float,"volume":float})
+
+                                    _watch_obs = observe(
+                                        symbol=pos.symbol,
+                                        strategy_profile=_watch_profile.profile.value,
+                                        primary_df=_watch_df,
+                                        primary_timeframe=_watch_tf,
+                                        use_cache=False,
+                                        side=(pos.side or "long"),
+                                    )
+                                    if _watch_obs.primary_tf_valid:
+                                        _watch_regime_obj, _watch_conf = classify_regime(
+                                            pos.symbol, _watch_obs.primary_tf_indicators
+                                        )
+                                        _watch_regime = _watch_regime_obj.value
+                                        _watch_signal = _score_signal_fn(
+                                            _watch_obs, _watch_regime_obj, _watch_conf,
+                                            db_manager=None, side=(pos.side or "long"),
+                                        )
+                                        _watch_score = _watch_signal.total_score
+                                        log.debug(
+                                            "Pengawalan fresh (futures) [%s]: regime=%s conf=%.2f score=%.1f",
+                                            pos.symbol, _watch_regime, _watch_conf, _watch_score,
+                                        )
+                        except Exception as _watch_err:
+                            log.debug("Pengawalan fresh check gagal (futures) [%s]: %s", pos.symbol, _watch_err)
+
+                        # ── Early Exit Confirmation (skor FRESH) ────────────────
+                        try:
+                            if (
+                                not hit_sl and not hit_tp
+                                and pos.entry_score
+                                and pos.stop_loss_price
+                                and pos.entry_price
+                                and _watch_score is not None
+                            ):
+                                _score_drop = pos.entry_score - _watch_score
+                                _sl_dist    = abs(price - pos.stop_loss_price)
+                                _en_dist    = abs(pos.entry_price - pos.stop_loss_price)
+                                _danger     = _en_dist > 0 and (_sl_dist / _en_dist) < 0.5
+                                _regime_chg = (
+                                    _watch_regime is not None
+                                    and pos.entry_regime is not None
+                                    and _watch_regime != pos.entry_regime
+                                )
+                                if _score_drop > 20 and _danger and _regime_chg:
+                                    log.info(
+                                        "EARLY EXIT (futures) [%s] @ %.6f | score drop %.1f->%.1f | regime %s->%s | danger %.1f%%",
+                                        pos.symbol, price, pos.entry_score, _watch_score,
+                                        pos.entry_regime, _watch_regime,
+                                        (_sl_dist / _en_dist * 100) if _en_dist > 0 else 0,
+                                    )
+                                    await self._close_position_market(pos, price, "early_exit_score_drop")
+                                    continue
+                        except Exception as _ee_err:
+                            log.debug("Early exit check error (futures) [%s]: %s", pos.symbol, _ee_err)
+                        # ── End Early Exit ────────────────────────────────────
+
+                        # ── Regime Transition Handler (regime FRESH) ────────────
+                        try:
+                            if (
+                                not hit_sl and not hit_tp
+                                and self.strategy
+                                and hasattr(self.strategy, "_handle_regime_transition")
+                                and _watch_regime is not None
+                            ):
+                                _tracker = self.strategy.get_tracker(pos.symbol)
+                                if _tracker:
+                                    _rth_action = self.strategy._handle_regime_transition(
+                                        _tracker, _watch_regime
+                                    )
+                                    if _rth_action == "EXIT":
+                                        log.info(
+                                            "REGIME TRANSITION EXIT (futures) [%s] @ %.6f | %s->%s",
+                                            pos.symbol, price,
+                                            _tracker.entry_regime, _watch_regime,
+                                        )
+                                        await self._close_position_market(
+                                            pos, price, f"regime_transition_exit:{_tracker.entry_regime}->{_watch_regime}"
+                                        )
+                                        continue
+                                    elif _rth_action == "HOLD_TIGHTEN_SL":
+                                        log.info(
+                                            "REGIME TIGHTEN SL (futures) [%s] | new quick_sl_pct=%.2f%%",
+                                            pos.symbol, _tracker.quick_sl_pct,
+                                        )
+                                    elif _rth_action == "HOLD_RELAX_SL":
+                                        log.info(
+                                            "REGIME RELAX SL (futures) [%s] | new quick_sl_pct=%.2f%%",
+                                            pos.symbol, _tracker.quick_sl_pct,
+                                        )
+                        except Exception as _rth_err:
+                            log.debug("Regime transition handler error (futures) [%s]: %s", pos.symbol, _rth_err)
+                        # ── End Regime Transition Handler ────────────────────────
+
                         # [ITEM #3] _close_position_market() untuk hit_sl/hit_tp/
                         # trailing_reason sebelumnya TIDAK dibungkus -- ini titik
                         # PALING kritis dari audit (order close bisa gagal karena
