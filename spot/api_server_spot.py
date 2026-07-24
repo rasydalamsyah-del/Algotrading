@@ -137,6 +137,9 @@ from engine.profiles.thresholds    import get_dynamic_threshold, DYNAMIC_THRESHO
 from engine.profiles.weights       import LEVEL1_WEIGHTS
 from engine.event_bus              import serialize_event
 from engine.indicators.orderbook   import WhaleDetector
+from engine.intelligence.scorer import score_signal
+from engine.intelligence.classifier import classify_from_observation
+
 from spot.risk_spot                   import HaltReason
 
 if TYPE_CHECKING:
@@ -1049,25 +1052,41 @@ def create_app(bot_getter) -> FastAPI:
                         pass
 
                 if observation:
-                    ind = observation.indicator_set
+                    ind = observation.primary_tf_indicators
+                    signal = None
+                    try:
+                        regime, regime_confidence = classify_from_observation(
+                            observation, db_manager=b.db
+                        )
+                        signal = score_signal(
+                            observation=observation,
+                            regime=regime,
+                            regime_confidence=regime_confidence,
+                            db_manager=b.db,
+                        )
+                    except Exception:
+                        pass
+
+                    current_score = signal.total_score if signal else observation.composite_raw_score
+
                     entry.update({
-                        "profile":        observation.profile,
-                        "regime":         observation.regime.value if observation.regime else "undefined",
-                        "regime_confidence": observation.regime_confidence,
-                        "total_score":    observation.total_score,
-                        "trigger_met":    observation.trigger_met,
-                        "threshold":      observation.entry_threshold,
+                        "profile":        observation.strategy_profile,
+                        "regime":         signal.regime.value if signal else "undefined",
+                        "regime_confidence": signal.regime_confidence if signal else 0.0,
+                        "total_score":    current_score,
+                        "trigger_met":    signal.trigger_met if signal else False,
+                        "threshold":      signal.threshold_used if signal else None,
                         "breakdown": {
-                            "trend":      ind.trend.composite_score    if ind.trend    else None,
-                            "momentum":   ind.momentum.composite_score if ind.momentum else None,
-                            "strength":   ind.strength.composite_score if ind.strength else None,
-                            "volatility": ind.volatility.composite_score if ind.volatility else None,
-                            "pattern":    ind.patterns.composite_score  if ind.patterns  else None,
+                            "trend":      ind.trend.composite_score    if ind and ind.trend    else None,
+                            "momentum":   ind.momentum.composite_score if ind and ind.momentum else None,
+                            "strength":   ind.strength.composite_score if ind and ind.strength else None,
+                            "volatility": ind.volatility.composite_score if ind and ind.volatility else None,
+                            "pattern":    ind.patterns.composite_score  if ind and ind.patterns  else None,
                         },
-                        "narrative":      getattr(observation, "narrative", None),
-                        "calculation_errors": getattr(observation, "calculation_errors", []),
+                        "narrative":      signal.scoring_narrative if signal else None,
+                        "calculation_errors": ind.calculation_errors if ind else [],
                         "tf_used":        tf,
-                        "last_updated":   _iso(observation.timestamp),
+                        "last_updated":   _iso(observation.observed_at),
                         "source":         "observer",
                     })
 
@@ -1080,9 +1099,9 @@ def create_app(bot_getter) -> FastAPI:
                             pos = open_pos[0]
                             entry["open_position"] = {
                                 "entry_score":       getattr(pos, "entry_score", None),
-                                "current_score":     observation.total_score,
+                                "current_score":     current_score,
                                 "score_delta":       (
-                                    round(observation.total_score - pos.entry_score, 2)
+                                    round(current_score - pos.entry_score, 2)
                                     if getattr(pos, "entry_score", None) is not None
                                     else None
                                 ),

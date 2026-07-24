@@ -43,6 +43,7 @@ except ImportError:
     APP_VERSION = "7.0"
 
 from engine.profiles.registry import get_profile_summary, set_profile_override, get_coin_profile
+from engine import reentry_cooldown
 from engine.database import DatabaseManager
 from engine.event_bus import EventBus, ThrottledTickerPublisher, KeyedLogThrottle
 from spot.exchange_spot import ExchangeConnector, WebSocketFeed
@@ -785,6 +786,15 @@ class TradingBot:
         ini ke setelah task periodik dibuat tanpa meninjau ulang seluruh
         analisis ini.
         """
+        # [HYDRATION FIX] Mirror futures -- lihat komentar di sana.
+        try:
+            _open_for_hydrate = await self.db.get_open_positions()
+            _n_hydrated = self.exchange.hydrate_from_positions(_open_for_hydrate)
+            if _n_hydrated:
+                log.info("Paper hydration (spot): %d posisi direkonstruksi dari DB.", _n_hydrated)
+        except Exception as _hy_err:
+            log.error("Paper hydration (spot) gagal (reconciliation bisa salah menutup posisi!): %s", _hy_err)
+
         log.info("Reconciliation: cek posisi DB vs exchange...")
 
         try:
@@ -2056,6 +2066,7 @@ class TradingBot:
                                 current_sl=pos.stop_loss_price,
                                 take_profit=pos.take_profit_price,
                                 side=pos.side,
+                                strategy_profile=str(getattr(pos, "strategy_profile", "") or ""),
                             )
                             if new_sl is not None and (
                                 pos.stop_loss_price is None
@@ -2502,6 +2513,17 @@ class TradingBot:
             _reset_position_flag()
             return
 
+        # [RE-ENTRY COOLDOWN -- opsi B, kejadian PARTI/MANTRA 2026-07-20]
+        # Mirror futures/_handle_entry. Exit positif TIDAK memblokir.
+        _cd_rem = reentry_cooldown.registry.blocked(symbol)
+        if _cd_rem > 0:
+            log.info(
+                "Entry %s ditolak: re-entry cooldown %.0fs tersisa (pasca-exit negatif).",
+                symbol, _cd_rem,
+            )
+            _reset_position_flag()
+            return
+
         # Jalur Entry 2: kurangi size kalau entry saat transisi regime
         _trans_mult = getattr(signal, "_transition_size_mult", None)
         _effective_size_pct = self.config["max_position_size_pct"]
@@ -2656,6 +2678,8 @@ class TradingBot:
                         "take_profit_price": assessment.take_profit,
                         "atr_at_entry":      round(float(atr), 8) if atr else None,
                         "strategy_name":     signal.strategy,
+                        "strategy_profile":  signal.metadata.get("coin_profile", "") if signal.metadata else "",
+                        "entry_score":       float(signal.total_score or 0.0),
                         "entry_order_id":    trade.order_id,
                         "entry_regime":      signal.regime.value if hasattr(signal.regime, "value") else str(signal.regime or "undefined"),
                     })
@@ -2791,11 +2815,16 @@ class TradingBot:
                 # Kalau nanti future/ menambah entry short, itu perlu jalur
                 # register_position(side="short") TERPISAH dari sini, bukan
                 # modifikasi baris ini.
+                _reg_regime = getattr(signal, "regime", "undefined")
+                if hasattr(_reg_regime, "value"):
+                    _reg_regime = _reg_regime.value
                 self.strategy.register_position(
                     symbol=symbol,
                     entry_price=float(entry_price),
                     exit_mode=exit_mode,
                     p=p,
+                    entry_score=float(getattr(signal, "total_score", 0.0) or 0.0),
+                    entry_regime=str(_reg_regime or "undefined"),
                     side="long",
                 )
         else:
@@ -2968,150 +2997,176 @@ class TradingBot:
                 take_profit=None,
             )
 
-        trade = await self.executor.execute_signal(close_signal, close_assessment)
-
-        if trade is None:
-            log.error(
-                "CLOSE ORDER GAGAL untuk %s — posisi TETAP terbuka di DB! "
-                "Tutup manual di Binance.",
-                pos.symbol,
-            )
-            await self.db.save_log(
-                "CRITICAL", "main",
-                f"CLOSE GAGAL: {pos.symbol} — posisi masih terbuka! Tutup manual.",
-            )
-
-            retry = self._close_retry_count.get(pos.symbol, 0) + 1
-            self._close_retry_count[pos.symbol] = retry
-            if retry >= 3:
-                await self.notifier.notify_error(
-                    "close_position",
-                    f"CLOSE ORDER GAGAL {retry}x untuk {pos.symbol} — "
-                    "INTERVENSI MANUAL DIPERLUKAN! Tutup di Binance.",
-                )
-            else:
-                await self.notifier.notify_error(
-                    "close_position",
-                    f"CLOSE ORDER GAGAL untuk {pos.symbol} — "
-                    f"attempt {retry}/3. Retry otomatis.",
-                )
-            return
-
-        self._close_retry_count.pop(pos.symbol, None)
-
-        # [UPGRADE] Reset orderbook state tracking untuk simbol ini setelah posisi
-        # ditutup — agar absorption/spoofing history tidak terbawa ke trade berikutnya.
-        # reset_state() ada di orderbook.py tapi belum pernah dipanggil dari manapun.
-        try:
-            from engine.indicators.orderbook import reset_state as _ob_reset
-            _ob_reset(pos.symbol)
-        except Exception:
-            pass  # non-critical, jangan crash close flow
-
-        taker_fee = self.exchange.get_taker_fee(pos.symbol)
-
-        # [BUG-FIX] PnL dihitung pakai pos.amount (catatan DB) & exit_price
-        # (harga sinyal saat keputusan close dibuat) — bukan jumlah & harga
-        # yang BENAR-BENAR tereksekusi di exchange.
-        # Sebelumnya: gross_pnl/entry_fee/exit_fee semua pakai pos.amount dan
-        # exit_price parameter. trade.filled & trade.executed_price (hasil
-        # riil dari _process_fill di execution.py, lebih akurat karena
-        # berasal langsung dari respons order exchange) tidak pernah dipakai.
-        # Akibatnya kalau ada selisih (fee dalam koin, partial fill,
-        # slippage harga), PnL yang tercatat di DB salah secara diam-diam,
-        # terus-menerus, dan terakumulasi.
-        # Sekarang: pakai trade.filled & trade.executed_price sebagai sumber
-        # utama, dengan fallback ke pos.amount/exit_price kalau trade tidak
-        # menyediakannya (misal trade lama / field None) — supaya tidak
-        # crash dan tetap backward-compatible.
-        actual_amount = (
-            float(trade.filled)
-            if trade.filled is not None and float(trade.filled) > 0
-            else pos.amount
-        )
-        actual_exit_price = (
-            float(trade.executed_price)
-            if trade.executed_price is not None and float(trade.executed_price) > 0
-            else exit_price
-        )
-        if actual_amount != pos.amount or actual_exit_price != exit_price:
-            log.info(
-                "PnL pakai nilai riil eksekusi %s | amount: %.8f→%.8f price: %.6f→%.6f",
-                pos.symbol, pos.amount, actual_amount, exit_price, actual_exit_price,
-            )
-
-        if pos.entry_price and actual_amount:
-            gross_pnl = (
-                (actual_exit_price - pos.entry_price) * actual_amount
-                if pos.side == "long"
-                else (pos.entry_price - actual_exit_price) * actual_amount
-            )
-
-            if pos.entry_fee_actual is not None and pos.entry_fee_actual > 0:
-                entry_fee = pos.entry_fee_actual
-            else:
-                entry_fee = pos.entry_price * actual_amount * taker_fee
-                log.warning(
-                    "PnL calc %s: entry_fee_actual tidak ada — fallback estimasi=%.8f",
-                    pos.symbol, entry_fee,
-                )
-
-            exit_fee = float(
-                trade.fee_cost
-                if trade.fee_cost is not None and float(trade.fee_cost) > 0
-                else actual_exit_price * actual_amount * taker_fee
-            )
-
-            realized_pnl = gross_pnl - entry_fee - exit_fee
-        else:
-            realized_pnl = 0.0
-
-        if realized_pnl < 0:
-            self.risk_manager.record_symbol_loss(pos.symbol, realized_pnl)
-
-        # [BUG-FIX] simpan actual_exit_price (harga eksekusi riil) ke DB,
-        # bukan exit_price (harga sinyal/parameter saat keputusan close
-        # dibuat) — konsisten dengan realized_pnl yang sudah dihitung
-        # dari actual_exit_price di atas.
-        #
-        # [ITEM #4 -- mitigasi root-cause phantom position] SEBELUMNYA baris
-        # ini TIDAK dibungkus try/except SAMA SEKALI (beda dari futures yang
-        # minimal sudah log.critical) -- kegagalan di sini propagate diam-
-        # diam, cuma tertangkap generik oleh backstop item #3 di
-        # run_sl_tp_monitor(). Sekarang: close_position_with_retry() (retry-
-        # backoff 3x utk kegagalan transien) + log.critical/save_log/
-        # notify_error eksplisit kalau semua retry tetap gagal (reuse pola
-        # yang sama dgn futures) -- LALU exception TETAP di-raise, supaya
-        # perilaku abort-sisa-fungsi TIDAK berubah (backstop item #3 & jalur
-        # lain yang mengandalkan propagasi ini tetap berfungsi sama).
-        try:
-            await self.db.close_position_with_retry(pos.symbol, actual_exit_price, realized_pnl)
-        except Exception as e:
-            msg = (
-                f"close_position (DB) GAGAL untuk {pos.symbol} setelah order sukses "
-                f"tereksekusi & 3 percobaan retry: {e}. Posisi is_open=True akan "
-                f"nyangkut di DB walau exchange sudah flat -- akan terdeteksi otomatis "
-                f"via run_position_sync_loop() (debounce 2 siklus, ~5-10 menit) kalau "
-                f"tidak diperbaiki manual lebih cepat."
-            )
-            log.critical(msg)
-            try:
-                await self.db.save_log("CRITICAL", "main", msg)
-            except Exception as _sl_err:
-                log.error("save_log (close_position gagal) gagal: %s", _sl_err)
-            if self.notifier:
-                try:
-                    await self.notifier.notify_error("close_position_db_failed", msg)
-                except Exception as _ne_err:
-                    log.error("notify_error (close_position gagal) gagal: %s", _ne_err)
-            raise
-
+        # [DOUBLE-COUNT FIX -- kejadian nyata MANTRA/USDT 2026-07-20 20:38:33:
+        # snapshot equity 1105.9 (phantom +$100) tercatat 7ms SEBELUM is_open=0
+        # commit] _equity_lock diperluas membungkus execute_signal() (fill
+        # mengkredit proceeds ke paper balance seketika) SAMPAI
+        # close_position_with_retry() (is_open=0) + update equity manual --
+        # mirror persis pola _handle_buy() (fix kasus AIGENSYN & PYR, sisi
+        # ENTRY dari bug yang sama). Tanpa ini, _refresh_portfolio() konkuren
+        # bisa membaca cash yang SUDAH berisi proceeds + posisi yang MASIH
+        # is_open=1 -> equity dobel -> peak_equity palsu -> drawdown/halt palsu.
+        # AMAN dari deadlock TOWNS: _on_trade_executed() sudah fire-and-forget
+        # (create_task), tidak pernah await _equity_lock inline.
         async with self._equity_lock:
+            trade = await self.executor.execute_signal(close_signal, close_assessment)
+
+            if trade is None:
+                log.error(
+                    "CLOSE ORDER GAGAL untuk %s — posisi TETAP terbuka di DB! "
+                    "Tutup manual di Binance.",
+                    pos.symbol,
+                )
+                await self.db.save_log(
+                    "CRITICAL", "main",
+                    f"CLOSE GAGAL: {pos.symbol} — posisi masih terbuka! Tutup manual.",
+                )
+
+                retry = self._close_retry_count.get(pos.symbol, 0) + 1
+                self._close_retry_count[pos.symbol] = retry
+                if retry >= 3:
+                    await self.notifier.notify_error(
+                        "close_position",
+                        f"CLOSE ORDER GAGAL {retry}x untuk {pos.symbol} — "
+                        "INTERVENSI MANUAL DIPERLUKAN! Tutup di Binance.",
+                    )
+                else:
+                    await self.notifier.notify_error(
+                        "close_position",
+                        f"CLOSE ORDER GAGAL untuk {pos.symbol} — "
+                        f"attempt {retry}/3. Retry otomatis.",
+                    )
+                return
+
+            self._close_retry_count.pop(pos.symbol, None)
+
+            # [UPGRADE] Reset orderbook state tracking untuk simbol ini setelah posisi
+            # ditutup — agar absorption/spoofing history tidak terbawa ke trade berikutnya.
+            # reset_state() ada di orderbook.py tapi belum pernah dipanggil dari manapun.
+            try:
+                from engine.indicators.orderbook import reset_state as _ob_reset
+                _ob_reset(pos.symbol)
+            except Exception:
+                pass  # non-critical, jangan crash close flow
+
+            taker_fee = self.exchange.get_taker_fee(pos.symbol)
+
+            # [BUG-FIX] PnL dihitung pakai pos.amount (catatan DB) & exit_price
+            # (harga sinyal saat keputusan close dibuat) — bukan jumlah & harga
+            # yang BENAR-BENAR tereksekusi di exchange.
+            # Sebelumnya: gross_pnl/entry_fee/exit_fee semua pakai pos.amount dan
+            # exit_price parameter. trade.filled & trade.executed_price (hasil
+            # riil dari _process_fill di execution.py, lebih akurat karena
+            # berasal langsung dari respons order exchange) tidak pernah dipakai.
+            # Akibatnya kalau ada selisih (fee dalam koin, partial fill,
+            # slippage harga), PnL yang tercatat di DB salah secara diam-diam,
+            # terus-menerus, dan terakumulasi.
+            # Sekarang: pakai trade.filled & trade.executed_price sebagai sumber
+            # utama, dengan fallback ke pos.amount/exit_price kalau trade tidak
+            # menyediakannya (misal trade lama / field None) — supaya tidak
+            # crash dan tetap backward-compatible.
+            actual_amount = (
+                float(trade.filled)
+                if trade.filled is not None and float(trade.filled) > 0
+                else pos.amount
+            )
+            actual_exit_price = (
+                float(trade.executed_price)
+                if trade.executed_price is not None and float(trade.executed_price) > 0
+                else exit_price
+            )
+            if actual_amount != pos.amount or actual_exit_price != exit_price:
+                log.info(
+                    "PnL pakai nilai riil eksekusi %s | amount: %.8f→%.8f price: %.6f→%.6f",
+                    pos.symbol, pos.amount, actual_amount, exit_price, actual_exit_price,
+                )
+
+            if pos.entry_price and actual_amount:
+                gross_pnl = (
+                    (actual_exit_price - pos.entry_price) * actual_amount
+                    if pos.side == "long"
+                    else (pos.entry_price - actual_exit_price) * actual_amount
+                )
+
+                if pos.entry_fee_actual is not None and pos.entry_fee_actual > 0:
+                    entry_fee = pos.entry_fee_actual
+                else:
+                    entry_fee = pos.entry_price * actual_amount * taker_fee
+                    log.warning(
+                        "PnL calc %s: entry_fee_actual tidak ada — fallback estimasi=%.8f",
+                        pos.symbol, entry_fee,
+                    )
+
+                exit_fee = float(
+                    trade.fee_cost
+                    if trade.fee_cost is not None and float(trade.fee_cost) > 0
+                    else actual_exit_price * actual_amount * taker_fee
+                )
+
+                realized_pnl = gross_pnl - entry_fee - exit_fee
+            else:
+                realized_pnl = 0.0
+
+            if realized_pnl < 0:
+                self.risk_manager.record_symbol_loss(pos.symbol, realized_pnl)
+
+            # [BUG-FIX] simpan actual_exit_price (harga eksekusi riil) ke DB,
+            # bukan exit_price (harga sinyal/parameter saat keputusan close
+            # dibuat) — konsisten dengan realized_pnl yang sudah dihitung
+            # dari actual_exit_price di atas.
+            #
+            # [ITEM #4 -- mitigasi root-cause phantom position] SEBELUMNYA baris
+            # ini TIDAK dibungkus try/except SAMA SEKALI (beda dari futures yang
+            # minimal sudah log.critical) -- kegagalan di sini propagate diam-
+            # diam, cuma tertangkap generik oleh backstop item #3 di
+            # run_sl_tp_monitor(). Sekarang: close_position_with_retry() (retry-
+            # backoff 3x utk kegagalan transien) + log.critical/save_log/
+            # notify_error eksplisit kalau semua retry tetap gagal (reuse pola
+            # yang sama dgn futures) -- LALU exception TETAP di-raise, supaya
+            # perilaku abort-sisa-fungsi TIDAK berubah (backstop item #3 & jalur
+            # lain yang mengandalkan propagasi ini tetap berfungsi sama).
+            try:
+                await self.db.close_position_with_retry(pos.symbol, actual_exit_price, realized_pnl)
+            except Exception as e:
+                msg = (
+                    f"close_position (DB) GAGAL untuk {pos.symbol} setelah order sukses "
+                    f"tereksekusi & 3 percobaan retry: {e}. Posisi is_open=True akan "
+                    f"nyangkut di DB walau exchange sudah flat -- akan terdeteksi otomatis "
+                    f"via run_position_sync_loop() (debounce 2 siklus, ~5-10 menit) kalau "
+                    f"tidak diperbaiki manual lebih cepat."
+                )
+                log.critical(msg)
+                try:
+                    await self.db.save_log("CRITICAL", "main", msg)
+                except Exception as _sl_err:
+                    log.error("save_log (close_position gagal) gagal: %s", _sl_err)
+                if self.notifier:
+                    try:
+                        await self.notifier.notify_error("close_position_db_failed", msg)
+                    except Exception as _ne_err:
+                        log.error("notify_error (close_position gagal) gagal: %s", _ne_err)
+                raise
+
+            # [DOUBLE-COUNT FIX] _equity_lock SUDAH dipegang sejak sebelum
+            # execute_signal() di atas -- update equity manual di bawah kini
+            # bagian critical section yang sama (asyncio.Lock TIDAK reentrant,
+            # jangan acquire ulang di sini).
             current_eq = self.portfolio_state.get("total_equity", 0.0)
             self.portfolio_state["total_equity"] = max(0.0, current_eq + realized_pnl)
-            self.portfolio_state["open_pnl"] = max(
-                0.0,
-                self.portfolio_state.get("open_pnl", 0.0) - (pos.unrealized_pnl or 0.0),
+            # [FIX open_pnl floor] SEBELUMNYA di-max(0.0, ...) -- salah: open
+            # PnL agregat posisi lain yang masih floating minus genuinely
+            # negatif; mem-floor ke 0 memalsukan data (transien sampai
+            # _refresh_portfolio berikutnya, tapi salah tetap salah).
+            self.portfolio_state["open_pnl"] = (
+                self.portfolio_state.get("open_pnl", 0.0) - (pos.unrealized_pnl or 0.0)
+            )
+
+        # [RE-ENTRY COOLDOWN -- opsi B] Registrasi HANYA exit negatif.
+        if reentry_cooldown.is_negative_exit(reason, realized_pnl):
+            reentry_cooldown.registry.register(
+                pos.symbol,
+                reentry_cooldown.duration_for_profile(getattr(pos, "strategy_profile", None)),
+                reason,
             )
 
         log.info(
@@ -3611,6 +3666,13 @@ async def main() -> None:
         bot.config["api_port"],
     )
 
+    # [SIGTERM FIX -- 2 insiden: SIGTERM diabaikan total, restart selalu
+    # butuh SIGKILL] server.serve() menginstal signal handler uvicorn yang
+    # MENIMPA add_signal_handler milik bot di atas -- SIGTERM ditelan utk
+    # shutdown HTTP saja, loop trading tidak pernah diberi tahu. Cabut
+    # instalasi handler uvicorn; handler bot (cancel tasks + should_exit)
+    # kembali berkuasa dan mematikan KEDUANYA dengan rapi.
+    server.install_signal_handlers = lambda: None  # type: ignore[method-assign]
     try:
         await asyncio.gather(bot.run(), server.serve())
     except BotStartupError as e:

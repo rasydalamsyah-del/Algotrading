@@ -224,6 +224,40 @@ class FutureExchangeConnector(BaseExchangeConnector):
         self._paper_margin_balance += payment
         return self._paper_margin_balance
 
+    def hydrate_from_positions(self, positions) -> int:
+        """[HYDRATION FIX -- lihat komentar spot/exchange_spot.py] Rekonstruksi
+        _paper_positions + debit margin dari _paper_margin_balance, dari DB
+        open positions. HARUS sebelum reconciliation startup. No-op kalau
+        bukan paper mode."""
+        if not self.paper_trading:
+            return 0
+        count = 0
+        for pos in positions:
+            try:
+                symbol   = getattr(pos, "symbol", None) or pos.get("symbol")
+                amount   = float(getattr(pos, "amount", None) or pos.get("amount") or 0)
+                entry    = float(getattr(pos, "entry_price", None) or pos.get("entry_price") or 0)
+                side     = (getattr(pos, "side", None) or pos.get("side") or "long")
+                leverage = int(getattr(pos, "leverage", None) or pos.get("leverage") or 1)
+            except Exception:
+                continue
+            if not symbol or amount <= 0 or entry <= 0 or leverage <= 0:
+                continue
+            margin_locked = (amount * entry) / leverage
+            self._paper_positions[symbol] = {
+                "symbol": symbol, "side": side, "amount": amount,
+                "entry_price": entry, "leverage": leverage,
+                "margin_locked": margin_locked,
+            }
+            self._paper_margin_balance -= margin_locked
+            count += 1
+            log.warning(
+                "📝 [PAPER HYDRATE FUTURES] %s %s: amount=%.8f entry=%.6f "
+                "lev=%dx margin_locked=%.4f (dari DB)",
+                side.upper(), symbol, amount, entry, leverage, margin_locked,
+            )
+        return count
+
     async def fetch_balance(self) -> Dict:
         """
         [PAPER TRADING FUTURES] BEDA dari spot: ini margin balance, bukan

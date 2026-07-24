@@ -1,0 +1,545 @@
+═══════════════════════════════════════════════════════
+ OBSERVER.PY — seluruh isi file
+═══════════════════════════════════════════════════════
+./engine/intelligence/observer.py
+
+     1	"""
+     2	intelligence/observer.py
+     3	AlgoTrader Pro v7.0 — "The Intelligence Pipeline"
+     4	
+     5	CHANGELOG v2:
+     6	  [PERF] _build_indicator_set(): RSI(14) dihitung sekali, dibagi ke
+     7	         score_momentum & score_strength (lihat indicators/strength.py v3).
+     8	  [BUG-FIX KRITIS] _compute_tf_score(): patterns/oscillators/structure
+     9	         sebelumnya scores.append() TANPA weights.append() pasangan —
+    10	         zip(scores, weights) di akhir diam-diam: (a) BUANG TOTAL
+    11	         composite_score oscillators & structure dari hasil akhir, (b)
+    12	         salah-pasangkan composite_score patterns dgn weight milik
+    13	         orderbook (0.10). Dibuktikan dgn skenario sintetis: structure
+    14	         100->0 tadinya TIDAK mengubah hasil sama sekali (terbuang),
+    15	         sekarang composite ikut bergerak proporsional. Dampak nyata:
+    16	         primary_tf_score/confirmation_tf_score dipakai utk hard MTF gate
+    17	         di strategy.py (bisa blokir sinyal) dan confidence di scorer.py
+    18	         — bukan cuma estimasi kosmetik. Fix: tambah weights.append()
+    19	         utk ketiganya (0.10/0.07/0.07, representatif dari rata-rata
+    20	         LEVEL1_WEIGHTS lintas profile di profiles/weights.py).
+    21	"""
+    22	
+    23	from __future__ import annotations
+    24	
+    25	import logging
+    26	import threading
+    27	import time
+    28	from datetime import datetime, timezone
+    29	from typing import Dict, List, Optional, Tuple
+    30	
+    31	import pandas as pd
+    32	
+    33	from engine.constants import (
+    34	    OBSERVATION_CACHE_TTL_SECONDS,
+    35	    OBSERVATION_STALE_THRESHOLD_SECONDS,
+    36	    SCORE_NEUTRAL,
+    37	    MIN_CANDLES_FOR_INDICATORS,
+    38	)
+    39	from engine.core.models import (
+    40	    IndicatorSet,
+    41	    ObservationReport,
+    42	    TrendIndicators,
+    43	    MomentumIndicators,
+    44	    StrengthIndicators,
+    45	    VolatilityIndicators,
+    46	    PatternIndicators,
+    47	    PatternContext,
+    48	    OscillatorIndicators,
+    49	    StructureIndicators,
+    50	    OrderbookIndicators,
+    51	)
+    52	from engine.indicators.trend import score_trend
+    53	from engine.indicators.momentum import score_momentum, _calc_rsi
+    54	from engine.indicators.strength import score_strength
+    55	from engine.indicators.volatility import score_volatility
+    56	from engine.indicators.patterns import score_pattern
+    57	from engine.indicators.oscillators import score_oscillators
+    58	from engine.indicators.structure import score_structure
+    59	from engine.indicators.orderbook import score_orderbook_data
+    60	from engine.intelligence.scorer import _pick_side_score
+    61	
+    62	log = logging.getLogger("intelligence.observer")
+    63	
+    64	_OBSERVATION_CACHE: Dict[str, Tuple[ObservationReport, float]] = {}
+    65	# [BUG-FIX] _OBSERVATION_CACHE diakses dari jalur berbeda yg bisa jalan
+    66	# BERSAMAAN: (1) Gate3 worker via run_in_executor (worker thread, strategy.py
+    67	# get_scored_signal -> self._observer.observe), (2) position_sync.py
+    68	# analyze_position (main thread langsung, dipanggil observe() top-level
+    69	# secara sync setelah fix mismatch-signature di atas), (3)
+    70	# MarketObserver.get_cached_observation (dipanggil dari api_server.py, async
+    71	# context terpisah lagi) yg iterate _OBSERVATION_CACHE.items(). Pola
+    72	# check-then-delete di _get_cached (cek age > TTL lalu del key) dan
+    73	# check-then-delete di _put_cache (cari oldest_key lalu del) TIDAK atomik --
+    74	# dibuktikan via eksperimen paralel (4/5 thread KeyError akibat 2 thread
+    75	# sama-sama mencoba del key yang sama, sudah dihapus thread lain lebih dulu).
+    76	# Fix: threading.Lock (lintas OS THREAD, bukan asyncio.Lock) membungkus semua
+    77	# akses baca/tulis _OBSERVATION_CACHE sbg critical section atomik.
+    78	_OBSERVATION_CACHE_LOCK = threading.Lock()
+    79	
+    80	_CACHE_TTL = OBSERVATION_CACHE_TTL_SECONDS
+    81	_STALE_THRESHOLD = OBSERVATION_STALE_THRESHOLD_SECONDS
+    82	
+    83	def _cache_key(
+    84	    symbol: str, timeframe: str, bar_timestamp: Optional[datetime], side: str = "long",
+    85	) -> str:
+    86	    # [MTF-BIAS-FIX -- Sub-Batch D] `side` ditambahkan ke cache key SEBAGAI
+    87	    # SUFFIX (bukan disisipkan di tengah) -- primary_tf_score/confirmation_tf_score
+    88	    # yang di-cache sekarang genuinely beda nilai per side (7 kategori lain
+    89	    # sekarang ikut side-aware, lihat _compute_tf_score()). Tanpa ini, cache
+    90	    # hit untuk side="short" bisa diam-diam mengembalikan ObservationReport
+    91	    # yang primary_tf_score-nya dihitung untuk side="long" (atau sebaliknya)
+    92	    # dari request SEBELUMNYA pada bar yang sama -- silent cross-side
+    93	    # contamination. Suffix (bukan prefix) supaya get_cached_observation()/
+    94	    # clear_cache() yang match via `key.startswith(f"{symbol}|{timeframe}|")`
+    95	    # TIDAK perlu diubah -- masih match kedua sisi dengan benar.
+    96	    ts = bar_timestamp.isoformat() if bar_timestamp else "latest"
+    97	    return f"{symbol}|{timeframe}|{ts}|{side}"
+    98	
+    99	def _get_cached(key: str) -> Optional[ObservationReport]:
+   100	    with _OBSERVATION_CACHE_LOCK:
+   101	        entry = _OBSERVATION_CACHE.get(key)
+   102	        if entry is None:
+   103	            return None
+   104	        report, cached_at = entry
+   105	        age = time.monotonic() - cached_at
+   106	        if age > _CACHE_TTL:
+   107	            _OBSERVATION_CACHE.pop(key, None)
+   108	            return None
+   109	        return report
+   110	
+   111	def _put_cache(key: str, report: ObservationReport) -> None:
+   112	    with _OBSERVATION_CACHE_LOCK:
+   113	        _OBSERVATION_CACHE[key] = (report, time.monotonic())
+   114	        if len(_OBSERVATION_CACHE) > 200:
+   115	            oldest_key = min(_OBSERVATION_CACHE, key=lambda k: _OBSERVATION_CACHE[k][1])
+   116	            _OBSERVATION_CACHE.pop(oldest_key, None)
+   117	
+   118	def clear_cache(symbol: Optional[str] = None) -> int:
+   119	    with _OBSERVATION_CACHE_LOCK:
+   120	        if symbol is None:
+   121	            count = len(_OBSERVATION_CACHE)
+   122	            _OBSERVATION_CACHE.clear()
+   123	            return count
+   124	
+   125	        keys_to_delete = [k for k in _OBSERVATION_CACHE if k.startswith(f"{symbol}|")]
+   126	        for k in keys_to_delete:
+   127	            _OBSERVATION_CACHE.pop(k, None)
+   128	        return len(keys_to_delete)
+   129	
+   130	def _build_indicator_set(
+   131	    df: pd.DataFrame,
+   132	    symbol: str,
+   133	    timeframe: str,
+   134	    is_primary: bool = True,
+   135	    bb_context_kwargs: Optional[Dict] = None,
+   136	    higher_tf_aligned: Optional[bool] = None,
+   137	    ob_data: Optional[dict] = None,
+   138	) -> IndicatorSet:
+   139	    n_bars = len(df)
+   140	
+   141	    iset = IndicatorSet(
+   142	        symbol=symbol,
+   143	        timeframe=timeframe,
+   144	        is_primary_tf=is_primary,
+   145	        bars_available=n_bars,
+   146	    )
+   147	
+   148	    if n_bars > 0:
+   149	        last = df.iloc[-1]
+   150	        iset.current_price = float(last.get("close", 0.0))
+   151	        iset.open_price    = float(last.get("open",  0.0))
+   152	        iset.high_price    = float(last.get("high",  0.0))
+   153	        iset.low_price     = float(last.get("low",   0.0))
+   154	        iset.close_price   = float(last.get("close", 0.0))
+   155	        iset.volume        = float(last.get("volume", 0.0))
+   156	        iset.quote_volume  = float(last.get("quote_volume", 0.0))
+   157	
+   158	    if n_bars < MIN_CANDLES_FOR_INDICATORS:
+   159	        iset.add_error("observer", f"Hanya {n_bars} bar, butuh minimal {MIN_CANDLES_FOR_INDICATORS}")
+   160	        log.warning(
+   161	            "%s/%s: Data tidak cukup (%d bar) untuk kalkulasi indikator.",
+   162	            symbol, timeframe, n_bars,
+   163	        )
+   164	        return iset
+   165	
+   166	    errors: List[str] = []
+   167	
+   168	    try:
+   169	        iset.trend = score_trend(df, errors=errors, timeframe=timeframe)
+   170	    except Exception as exc:
+   171	        iset.add_error("trend", str(exc))
+   172	        log.exception("%s/%s: Error kalkulasi trend: %s", symbol, timeframe, exc)
+   173	
+   174	    # [PERF v2.2] RSI(14) dihitung SEKALI di sini lalu dibagikan ke score_momentum
+   175	    # dan score_strength — sebelumnya keduanya menghitung _calc_rsi() independen
+   176	    # dengan period sama (14) dari close yang sama, ~19% waktu score_strength()
+   177	    # terbuang untuk kerja dobel. Period 14 di sini cocok dengan default
+   178	    # calculate_rsi_enhanced() (momentum.py) dan _MFI_PERIOD (strength.py).
+   179	    # Kalau gagal dihitung (data kurang/exception), fallback None — masing-masing
+   180	    # fungsi tetap menghitung sendiri seperti semula (backward-compatible).
+   181	    shared_rsi_series: Optional[pd.Series] = None
+   182	    try:
+   183	        if "close" in df.columns and len(df) >= 16:
+   184	            shared_rsi_series = _calc_rsi(df["close"], 14)
+   185	    except Exception as exc:
+   186	        log.debug("%s/%s: Gagal precompute shared RSI: %s", symbol, timeframe, exc)
+   187	        shared_rsi_series = None
+   188	
+   189	    try:
+   190	        iset.momentum = score_momentum(df, errors=errors, rsi_series=shared_rsi_series)
+   191	    except Exception as exc:
+   192	        iset.add_error("momentum", str(exc))
+   193	        log.exception("%s/%s: Error kalkulasi momentum: %s", symbol, timeframe, exc)
+   194	
+   195	    try:
+   196	        iset.strength = score_strength(df, errors=errors, rsi_series=shared_rsi_series)
+   197	    except Exception as exc:
+   198	        iset.add_error("strength", str(exc))
+   199	        log.exception("%s/%s: Error kalkulasi strength: %s", symbol, timeframe, exc)
+   200	
+   201	    try:
+   202	        iset.volatility = score_volatility(df, errors=errors)
+   203	    except Exception as exc:
+   204	        iset.add_error("volatility", str(exc))
+   205	        log.exception("%s/%s: Error kalkulasi volatility: %s", symbol, timeframe, exc)
+   206	
+   207	    try:
+   208	        bb_lower = iset.volatility.bb_lower if iset.volatility else None
+   209	        bb_upper = iset.volatility.bb_upper if iset.volatility else None
+   210	        ema_vals = {
+   211	            "ema9":  iset.trend.ema9  if iset.trend else None,
+   212	            "ema21": iset.trend.ema21 if iset.trend else None,
+   213	            "ema50": iset.trend.ema50 if iset.trend else None,
+   214	        }
+   215	
+   216	        if bb_context_kwargs:
+   217	            bb_lower = bb_context_kwargs.get("bb_lower", bb_lower)
+   218	            bb_upper = bb_context_kwargs.get("bb_upper", bb_upper)
+   219	            ema_vals.update(bb_context_kwargs.get("ema_values", {}))
+   220	
+   221	        iset.patterns = score_pattern(
+   222	            df,
+   223	            bb_lower=bb_lower,
+   224	            bb_upper=bb_upper,
+   225	            ema_values=ema_vals,
+   226	            higher_tf_aligned=higher_tf_aligned,
+   227	            errors=errors,
+   228	        )
+   229	    except Exception as exc:
+   230	        iset.add_error("patterns", str(exc))
+   231	        log.exception("%s/%s: Error kalkulasi patterns: %s", symbol, timeframe, exc)
+   232	
+   233	    try:
+   234	        iset.oscillators = score_oscillators(df, errors=errors)
+   235	    except Exception as exc:
+   236	        iset.add_error("oscillators", str(exc))
+   237	        log.exception("%s/%s: Error kalkulasi oscillators: %s", symbol, timeframe, exc)
+   238	
+   239	    try:
+   240	        iset.structure = score_structure(df, errors=errors)
+   241	    except Exception as exc:
+   242	        iset.add_error("structure", str(exc))
+   243	        log.exception("%s/%s: Error kalkulasi structure: %s", symbol, timeframe, exc)
+   244	
+   245	    try:
+   246	        if ob_data:
+   247	            iset.orderbook = score_orderbook_data(ob_data, errors=errors, symbol=symbol)
+   248	    except Exception as exc:
+   249	        iset.add_error("orderbook", str(exc))
+   250	        log.exception("%s/%s: Error kalkulasi orderbook: %s", symbol, timeframe, exc)
+   251	
+   252	    for err in errors:
+   253	        iset.add_error("calc", err)
+   254	
+   255	    log.debug(
+   256	        "%s/%s: IndicatorSet built | bars=%d | "
+   257	        "trend=%.1f mom=%.1f str=%.1f vol=%.1f pat=%.1f | errors=%d",
+   258	        symbol, timeframe, n_bars,
+   259	        iset.trend.composite_score,
+   260	        iset.momentum.composite_score,
+   261	        iset.strength.composite_score,
+   262	        iset.volatility.composite_score,
+   263	        iset.patterns.composite_score,
+   264	        len(iset.calculation_errors),
+   265	    )
+   266	
+   267	    return iset
+   268	
+   269	def _compute_tf_score(iset: IndicatorSet, side: str = "long") -> float:
+   270	    if iset.bars_available < MIN_CANDLES_FOR_INDICATORS:
+   271	        return SCORE_NEUTRAL
+   272	
+   273	    scores = []
+   274	    weights = []
+   275	
+   276	    # [MTF-BIAS-FIX -- Sub-Batch D] 7 kategori di bawah (trend/momentum/
+   277	    # strength/volatility/patterns/oscillators/structure) semuanya sekarang
+   278	    # baca lewat _pick_side_score(iset.<kategori>, "composite_score", side) --
+   279	    # pola SAMA PERSIS dgn orderbook di Sub-Batch C. Semua 7 field
+   280	    # `composite_score_short`-nya SUDAH wired sejak Sub-Batch A/B (proyek
+   281	    # ini), jadi murni perubahan CONSUMER, tidak menyentuh indicators/*.py
+   282	    # atau models.py sama sekali. side="long" (default, SEMUA caller yang
+   283	    # belum eksplisit kirim side) hasilnya IDENTIK PERSIS dgn sebelumnya,
+   284	    # krn _pick_side_score(..., "long") SELALU baca composite_score biasa,
+   285	    # tidak pernah menyentuh field _short.
+   286	    if iset.trend.is_valid():
+   287	        scores.append(_pick_side_score(iset.trend, "composite_score", side))
+   288	        weights.append(0.30)
+   289	
+   290	    if iset.momentum.is_valid():
+   291	        scores.append(_pick_side_score(iset.momentum, "composite_score", side))
+   292	        weights.append(0.25)
+   293	
+   294	    if iset.strength.is_valid():
+   295	        scores.append(_pick_side_score(iset.strength, "composite_score", side))
+   296	        weights.append(0.25)
+   297	
+   298	    if iset.volatility.is_valid():
+   299	        scores.append(_pick_side_score(iset.volatility, "composite_score", side))
+   300	        weights.append(0.10)
+   301	
+   302	    # [BUG-FIX v2] Sebelumnya 3 baris di bawah ini TIDAK punya weights.append()
+   303	    # pasangan, sementara di akhir fungsi scores & weights di-zip(). zip()
+   304	    # berhenti diam-diam di larik TERPENDEK tanpa error — akibatnya:
+   305	    #  - composite_score oscillators & structure 100% DIBUANG dari hasil akhir
+   306	    #    (terbukti dgn skenario nyata: composite jadi 55.0 padahal seharusnya
+   307	    #    jauh berbeda kalau structure=100/oscillators=0 betul2 ikut terhitung)
+   308	    #  - composite_score patterns malah ke-pasang dgn weight milik orderbook
+   309	    #    (0.10), bukan weight pattern sendiri.
+   310	    # Dampak nyata: report.primary_tf_score & confirmation_tf_score dipakai
+   311	    # utk hard MTF gate di strategy.py (bisa blokir sinyal kalau conf_score
+   312	    # < threshold) dan komponen confidence di scorer.py — jadi bukan cuma
+   313	    # estimasi kosmetik. Bobot di bawah ini representatif dari rata-rata
+   314	    # LEVEL1_WEIGHTS lintas profile di profiles/weights.py (pattern~0.07-0.10,
+   315	    # oscillator~0.07, structure~0.06-0.08); fungsi ini tetap normalisasi via
+   316	    # total_weight di akhir jadi tidak perlu pas sama dgn LEVEL1_WEIGHTS persis.
+   317	    if iset.patterns.is_valid():
+   318	        scores.append(_pick_side_score(iset.patterns, "composite_score", side))
+   319	        weights.append(0.10)
+   320	
+   321	    if iset.oscillators.is_valid():
+   322	        scores.append(_pick_side_score(iset.oscillators, "composite_score", side))
+   323	        weights.append(0.07)
+   324	
+   325	    if iset.structure.is_valid():
+   326	        scores.append(_pick_side_score(iset.structure, "composite_score", side))
+   327	        weights.append(0.07)
+   328	
+   329	    # [MTF-BIAS-FIX -- Sub-Batch C] `iset.orderbook.composite_score` SENGAJA
+   330	    # tetap alias long-only (lihat komentar di models.py::OrderbookIndicators)
+   331	    # -- baca lewat _pick_side_score() supaya sinyal short kebagian
+   332	    # `orderbook_score_short` (Batch 7, sudah wired) alih-alih diam-diam
+   333	    # selalu dapat versi long. side="long" (default, SEMUA caller existing
+   334	    # saat ini) hasilnya IDENTIK dgn sebelumnya, krn composite_score cuma
+   335	    # alias dari orderbook_score.
+   336	    if iset.orderbook.is_valid():
+   337	        scores.append(_pick_side_score(iset.orderbook, "orderbook_score", side))
+   338	        weights.append(0.10)
+   339	
+   340	    if not scores:
+   341	        return SCORE_NEUTRAL
+   342	
+   343	    total_weight = sum(weights)
+   344	    if total_weight < 1e-6:
+   345	        return SCORE_NEUTRAL
+   346	
+   347	    composite = sum(s * w for s, w in zip(scores, weights)) / total_weight
+   348	    return round(max(0.0, min(100.0, composite)), 2)
+   349	
+   350	def observe(
+   351	    symbol: str,
+   352	    strategy_profile: str,
+   353	    primary_df: pd.DataFrame,
+   354	    primary_timeframe: str,
+   355	    confirmation_df: Optional[pd.DataFrame] = None,
+   356	    confirmation_timeframe: Optional[str] = None,
+   357	    confirmation_weight: float = 0.25,
+   358	    use_cache: bool = True,
+   359	    ob_data: Optional[dict] = None,
+   360	    side: str = "long",
+   361	    # [MTF-BIAS-FIX -- Sub-Batch D] side="long" default -- SEMUA caller
+   362	    # existing yang tidak eksplisit mengirim side (position_sync_*.py, dan
+   363	    # MarketObserver.observe() sebelum Sub-Batch D) tetap dapat perilaku
+   364	    # IDENTIK PERSIS dengan sebelum parameter ini ada. Diteruskan ke
+   365	    # _compute_tf_score() supaya primary_tf_score/confirmation_tf_score
+   366	    # genuinely dihitung untuk sisi yang benar, bukan selalu long.
+   367	) -> ObservationReport:
+   368	    bar_ts: Optional[datetime] = None
+   369	    if isinstance(primary_df.index, pd.DatetimeIndex) and len(primary_df) > 0:
+   370	        bar_ts = primary_df.index[-1].to_pydatetime()
+   371	
+   372	    cache_key = _cache_key(symbol, primary_timeframe, bar_ts, side)
+   373	
+   374	    if use_cache:
+   375	        cached = _get_cached(cache_key)
+   376	        if cached is not None:
+   377	            log.debug("%s/%s: ObservationReport dari cache.", symbol, primary_timeframe)
+   378	            return cached
+   379	
+   380	    report = ObservationReport(
+   381	        symbol=symbol,
+   382	        strategy_profile=strategy_profile,
+   383	    )
+   384	
+   385	    primary_iset = _build_indicator_set(
+   386	        df=primary_df,
+   387	        symbol=symbol,
+   388	        timeframe=primary_timeframe,
+   389	        is_primary=True,
+   390	        ob_data=ob_data,
+   391	    )
+   392	    report.primary_tf_indicators = primary_iset
+   393	    report.primary_tf_score = _compute_tf_score(primary_iset, side=side)
+   394	    report.primary_tf_valid = (
+   395	        primary_iset.is_fully_valid()
+   396	        and not primary_iset.has_critical_errors()
+   397	    )
+   398	
+   399	    conf_score = SCORE_NEUTRAL
+   400	    report.confirmation_tf_valid = False
+   401	
+   402	    if confirmation_df is not None and confirmation_timeframe is not None:
+   403	        try:
+   404	            primary_is_bullish = report.primary_tf_score > SCORE_NEUTRAL
+   405	
+   406	            conf_iset = _build_indicator_set(
+   407	                df=confirmation_df,
+   408	                symbol=symbol,
+   409	                timeframe=confirmation_timeframe,
+   410	                is_primary=False,
+   411	                higher_tf_aligned=primary_is_bullish,
+   412	            )
+   413	            report.confirmation_tf_indicators = conf_iset
+   414	            conf_score = _compute_tf_score(conf_iset, side=side)
+   415	            report.confirmation_tf_score = conf_score
+   416	            report.confirmation_tf_valid = (
+   417	                conf_iset.is_fully_valid()
+   418	                and not conf_iset.has_critical_errors()
+   419	            )
+   420	
+   421	        except Exception as exc:
+   422	            log.exception(
+   423	                "%s: Error saat build confirmation TF (%s): %s",
+   424	                symbol, confirmation_timeframe, exc,
+   425	            )
+   426	            report.confirmation_tf_score = SCORE_NEUTRAL
+   427	
+   428	    else:
+   429	        report.confirmation_tf_score = SCORE_NEUTRAL
+   430	
+   431	    if report.confirmation_tf_indicators is not None and confirmation_weight > 0:
+   432	        primary_weight = 1.0 - confirmation_weight
+   433	        report.composite_raw_score = round(
+   434	            report.primary_tf_score * primary_weight
+   435	            + report.confirmation_tf_score * confirmation_weight,
+   436	            2,
+   437	        )
+   438	    else:
+   439	        report.composite_raw_score = report.primary_tf_score
+   440	
+   441	    report.used_cached = False
+   442	
+   443	    log.info(
+   444	        "%s | primary_score=%.1f (valid=%s) conf_score=%.1f (valid=%s) "
+   445	        "composite=%.1f | profile=%s",
+   446	        symbol,
+   447	        report.primary_tf_score,
+   448	        report.primary_tf_valid,
+   449	        report.confirmation_tf_score,
+   450	        report.confirmation_tf_valid,
+   451	        report.composite_raw_score,
+   452	        strategy_profile,
+   453	    )
+   454	
+   455	    if use_cache:
+   456	        _put_cache(cache_key, report)
+   457	
+   458	    return report
+   459	
+   460	def is_report_stale(report: ObservationReport) -> bool:
+   461	    age = (datetime.utcnow() - report.observed_at).total_seconds()
+   462	    return age > _STALE_THRESHOLD
+   463	
+   464	def get_higher_tf_alignment(
+   465	    confirmation_report: ObservationReport,
+   466	    threshold: float = 55.0,
+   467	) -> Optional[bool]:
+   468	    if not confirmation_report.confirmation_tf_valid:
+   469	        return None
+   470	
+   471	    conf_score = confirmation_report.confirmation_tf_score
+   472	    if conf_score >= threshold:
+   473	        return True
+   474	    if conf_score <= (100.0 - threshold):
+   475	        return False
+   476	    return None
+   477	
+   478	def summarize_observation(report: ObservationReport) -> str:
+   479	    lines = [
+   480	        f"📊 Observation: {report.symbol} | Profile: {report.strategy_profile}",
+   481	        f"  Primary TF  : score={report.primary_tf_score:.1f} valid={report.primary_tf_valid}",
+   482	        f"  Confirm TF  : score={report.confirmation_tf_score:.1f} valid={report.confirmation_tf_valid}",
+   483	        f"  Composite   : {report.composite_raw_score:.1f}",
+   484	    ]
+   485	
+   486	    pi = report.primary_tf_indicators
+   487	    if pi:
+   488	        lines.append(
+   489	            f"  Indikator   : trend={pi.trend.composite_score:.1f} "
+   490	            f"mom={pi.momentum.composite_score:.1f} "
+   491	            f"str={pi.strength.composite_score:.1f} "
+   492	            f"vol={pi.volatility.composite_score:.1f} "
+   493	            f"pat={pi.patterns.composite_score:.1f}"
+   494	        )
+   495	        if pi.calculation_errors:
+   496	            lines.append(f"  ⚠️ Errors ({len(pi.calculation_errors)}): {pi.calculation_errors[:3]}")
+   497	
+   498	    return "\n".join(lines)
+   499	
+   500	
+   501	class MarketObserver:
+   502	    async def get_cached_observation(
+   503	        self,
+   504	        symbol: str,
+   505	        timeframe: str,
+   506	    ) -> Optional[ObservationReport]:
+   507	        prefix = f"{symbol}|{timeframe}|"
+   508	        best_report = None
+   509	        best_time   = -1.0
+   510	        with _OBSERVATION_CACHE_LOCK:
+   511	            for key, (report, cached_at) in list(_OBSERVATION_CACHE.items()):
+   512	                if key.startswith(prefix) and cached_at > best_time:
+   513	                    best_report = report
+   514	                    best_time   = cached_at
+   515	        return best_report
+   516	
+   517	    def observe(
+   518	        self,
+   519	        symbol: str,
+   520	        primary_df: pd.DataFrame,
+   521	        profile,
+   522	        confirmation_df: Optional[pd.DataFrame] = None,
+   523	        confirmation_timeframe: Optional[str] = None,
+   524	        ob_data: Optional[dict] = None,
+   525	        side: str = "long",
+   526	        # [MTF-BIAS-FIX -- Sub-Batch D] side="long" default -- caller lama
+   527	        # (run_in_executor di strategy_base.py, sebelum Sub-Batch D) yang
+   528	        # cuma kirim 6 argumen positional pertama tetap berperilaku IDENTIK.
+   529	    ) -> ObservationReport:
+   530	        return observe(
+   531	            symbol=symbol,
+   532	            strategy_profile=profile.profile.value,
+   533	            primary_df=primary_df,
+   534	            primary_timeframe=profile.timeframe,
+   535	            confirmation_df=confirmation_df,
+   536	            confirmation_timeframe=confirmation_timeframe,
+   537	            confirmation_weight=float(getattr(profile, "confirmation_weight", 0.25)),
+   538	            ob_data=ob_data,
+   539	            side=side,
+   540	        )

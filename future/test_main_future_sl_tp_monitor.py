@@ -89,6 +89,9 @@ def _build_fake_self(positions, price_map, close_side_effect=None):
     di-set di sini. is_running otomatis diset False setelah get_open_positions()
     dipanggil sekali, supaya loop `while self.is_running` jalan TEPAT 1 siklus."""
     fake_self = SimpleNamespace()
+    # [DOUBLE-COUNT FIX] _do_close_position() kini memegang _equity_lock
+    # (mirror _handle_entry) -- stub wajib menyediakannya.
+    fake_self._equity_lock = asyncio.Lock()
     fake_self.is_running = True
     fake_self.SL_TP_CHECK_INTERVAL = 0
     fake_self.LIQUIDATION_EMERGENCY_PROXIMITY_PCT = 1.0

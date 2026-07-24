@@ -488,8 +488,32 @@ def get_level2_weights(profile_name: str, category: str) -> Level2Weights:
         )
     return cat_weights[category]
 
-def get_regime_modifier(profile_name: str, regime_value: str) -> float:
-    profile_mods = REGIME_MODIFIERS_PER_PROFILE.get(profile_name, {})
+# [SHORT-FIX F2 -- mirror yang LUPA dibuat] DYNAMIC_THRESHOLD_MATRIX punya
+# versi _SHORT (thresholds.py) tapi REGIME_MODIFIERS tidak -- kandidat short
+# di trending_bear (sweet spot-nya!) dikalikan modifier long trending_bear
+# = 0.00 -> skor mati total. Mirror di sini: bull<->bear ditukar, regime
+# netral-arah (ranging/volatile/undefined) disalin apa adanya.
+REGIME_MODIFIERS_PER_PROFILE_SHORT: Dict[str, Dict[str, float]] = {
+    prof: {
+        "trending_bull":      mods["trending_bear"],
+        "trending_bear":      mods["trending_bull"],
+        "ranging":            mods["ranging"],
+        "volatile_expansion": mods["volatile_expansion"],
+        "undefined":          mods["undefined"],
+    }
+    for prof, mods in REGIME_MODIFIERS_PER_PROFILE.items()
+}
+
+def get_regime_modifier(profile_name: str, regime_value: str, side: str = "long") -> float:
+    # [SHORT-FIX F2] side="long" default -- semua caller lama berperilaku
+    # IDENTIK persis. Hanya caller yang eksplisit side="short" memakai
+    # tabel mirror.
+    table = (
+        REGIME_MODIFIERS_PER_PROFILE_SHORT
+        if side == "short"
+        else REGIME_MODIFIERS_PER_PROFILE
+    )
+    profile_mods = table.get(profile_name, {})
     return profile_mods.get(regime_value, 0.75)
 
 def compute_weighted_score(

@@ -62,6 +62,9 @@ class _FakeDB:
 
 def _build_fake_self(positions, price_map, event_bus=None, fresh_positions=None):
     fake_self = SimpleNamespace()
+    # [DOUBLE-COUNT FIX] _do_close_position() kini memegang _equity_lock
+    # (mirror _handle_entry) -- stub wajib menyediakannya.
+    fake_self._equity_lock = asyncio.Lock()
     fake_self.is_running = True
     fake_self.SL_TP_CHECK_INTERVAL = 0
     fake_self.db = _FakeDB(positions, fresh_positions=fresh_positions)

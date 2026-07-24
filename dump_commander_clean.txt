@@ -1,0 +1,1217 @@
+═══════════════════════════════════════════════════════
+ COMMANDER.PY — hanya file asli (bukan backup/pyc)
+═══════════════════════════════════════════════════════
+     1	"""
+     2	intelligence/commander.py
+     3	AlgoTrader Pro v7.0 — "The Intelligence Pipeline"
+     4	
+     5	"""
+     6	
+     7	from __future__ import annotations
+     8	
+     9	import logging
+    10	from dataclasses import dataclass, field
+    11	from datetime import datetime
+    12	from typing import Any, Dict, List, Optional, Tuple
+    13	
+    14	from engine.constants import (
+    15	    KELLY_FRACTION,
+    16	    KELLY_MIN_SAMPLE,
+    17	    KELLY_MAX_SIZE_PCT,
+    18	    KELLY_MIN_SIZE_PCT,
+    19	    CORRELATED_POSITION_PENALTY,
+    20	    CORRELATION_HIGH_THRESHOLD,
+    21	    SPREAD_LIMIT_DEFAULT,
+    22	    REGIME_MIN_CONFIDENCE_TO_TRADE,
+    23	    get_correlation_group,
+    24	)
+    25	from engine.core.models import (
+    26	    DecisionAction,
+    27	    MarketRegime,
+    28	    ScoredSignal,
+    29	    TradeDecision,
+    30	    clamp_score,
+    31	)
+    32	from engine.intelligence.classifier import is_tradeable_regime
+    33	from engine.risk_base import RiskDecision
+    34	
+    35	log = logging.getLogger("intelligence.commander")
+    36	
+    37	def _calc_kelly_size(
+    38	    win_rate: float,
+    39	    avg_win_pct: float,
+    40	    avg_loss_pct: float,
+    41	    kelly_fraction: float = KELLY_FRACTION,
+    42	    max_size_pct: float = KELLY_MAX_SIZE_PCT,
+    43	    min_size_pct: float = KELLY_MIN_SIZE_PCT,
+    44	) -> Tuple[float, str]:
+    45	    if avg_loss_pct <= 0:
+    46	        return min_size_pct, "fallback_zero_loss"
+    47	
+    48	    r = avg_win_pct / avg_loss_pct
+    49	
+    50	    if r <= 0 or win_rate <= 0:
+    51	        return min_size_pct, "fallback_negative_edge"
+    52	
+    53	    k_full = win_rate - (1.0 - win_rate) / r
+    54	
+    55	    if k_full <= 0:
+    56	        return 0.0, "kelly_negative_edge"
+    57	
+    58	    k_fractional = k_full * kelly_fraction * 100
+    59	
+    60	    k_clamped = max(min_size_pct, min(max_size_pct, k_fractional))
+    61	
+    62	    return round(k_clamped, 2), "kelly_half"
+    63	
+    64	async def _get_kelly_inputs(
+    65	    symbol: str,
+    66	    profile_name: str,
+    67	    lookback: int,
+    68	    db_manager,
+    69	) -> Optional[Tuple[float, float, float]]:
+    70	    if db_manager is None:
+    71	        return None
+    72	
+    73	    try:
+    74	        stats = await db_manager.get_trade_stats(  
+    75	            symbol=symbol,
+    76	            profile=profile_name,
+    77	            limit=lookback,
+    78	        )
+    79	        if not stats:
+    80	            return None
+    81	
+    82	        total   = stats.get("total_trades", 0)
+    83	        wins    = stats.get("win_count", 0)
+    84	        avg_w   = stats.get("avg_win_pct", 0.0)
+    85	        avg_l   = stats.get("avg_loss_pct", 0.0)
+    86	
+    87	        if total < KELLY_MIN_SAMPLE:
+    88	            return None
+    89	
+    90	        win_rate = wins / total if total > 0 else 0.0
+    91	        return win_rate, avg_w, abs(avg_l)
+    92	
+    93	    except Exception as exc:
+    94	        log.debug("Gagal ambil Kelly inputs dari DB: %s", exc)
+    95	        return None
+    96	
+    97	def _get_correlated_open_symbols(
+    98	    symbol: str,
+    99	    open_positions: List[str],
+   100	) -> List[str]:
+   101	    base = symbol.split("/")[0].upper()
+   102	    my_group = get_correlation_group(base)
+   103	
+   104	    if not my_group:
+   105	        return []
+   106	
+   107	    correlated = []
+   108	    for pos_sym in open_positions:
+   109	        pos_base  = pos_sym.split("/")[0].upper()
+   110	        pos_group = get_correlation_group(pos_base)
+   111	        if pos_group and pos_group == my_group and pos_base != base:
+   112	            correlated.append(pos_sym)
+   113	
+   114	    return correlated
+   115	
+   116	def _calc_correlation_penalty(
+   117	    n_correlated: int,
+   118	    penalty_per: float = CORRELATED_POSITION_PENALTY,
+   119	) -> float:
+   120	    if n_correlated == 0:
+   121	        return 0.0
+   122	    penalty = 1.0 - (1.0 - penalty_per) ** n_correlated
+   123	    return round(min(0.90, penalty), 3)
+   124	
+   125	def _refine_sl_tp(
+   126	    entry_price: float,
+   127	    suggested_sl: Optional[float],
+   128	    suggested_tp: Optional[float],
+   129	    iset,
+   130	    profile_cfg,
+   131	    atr: Optional[float],
+   132	) -> Tuple[Optional[float], Optional[float]]:
+   133	    if entry_price <= 0:
+   134	        return suggested_sl, suggested_tp
+   135	
+   136	    min_sl_dist = (atr or 0) * 1.0
+   137	    min_tp_dist = (atr or 0) * 1.5
+   138	
+   139	    final_sl = suggested_sl
+   140	    if final_sl is not None and atr is not None:
+   141	        atr_sl = entry_price - min_sl_dist
+   142	        final_sl = min(final_sl, atr_sl)
+   143	
+   144	    final_tp = suggested_tp
+   145	    if final_tp is not None and iset is not None:
+   146	        bb_upper = getattr(iset.volatility, "bb_upper", None)
+   147	        if bb_upper and bb_upper > entry_price:
+   148	            final_tp = min(final_tp, bb_upper * 0.998)
+   149	
+   150	    if final_sl is not None and final_sl >= entry_price:
+   151	        final_sl = entry_price * (1 - profile_cfg.quick_sl_pct / 100)
+   152	    if final_tp is not None and final_tp <= entry_price:
+   153	        final_tp = entry_price * (1 + profile_cfg.quick_tp_pct / 100)
+   154	
+   155	    if final_sl is not None and final_tp is not None:
+   156	        risk   = entry_price - final_sl
+   157	        reward = final_tp - entry_price
+   158	        if risk > 0 and reward / risk < 1.3:
+   159	            final_tp = entry_price + risk * 1.3
+   160	
+   161	    if final_sl:
+   162	        final_sl = round(final_sl, 8)
+   163	    if final_tp:
+   164	        final_tp = round(final_tp, 8)
+   165	
+   166	    return final_sl, final_tp
+   167	
+   168	def _gate_score_and_trigger(
+   169	    signal: ScoredSignal,
+   170	    decision: TradeDecision,
+   171	    side: str = "long",
+   172	    # [BIAS-FIX] Default "long" -- caller lama tetap dapat perilaku identik.
+   173	    # Checkpoint threshold KEDUA (independen dari checkpoint di run_gate3_worker
+   174	    # main_future.py) -- kalau tidak ikut di-side-aware-kan, short yang lolos
+   175	    # checkpoint pertama akan tertahan lagi di sini pakai matrix long.
+   176	) -> bool:
+   177	    from engine.profiles.thresholds import get_dynamic_threshold
+   178	    try:
+   179	        min_score = get_dynamic_threshold(
+   180	            signal.strategy_profile,
+   181	            signal.regime.value if signal.regime else "undefined",
+   182	            side=side,
+   183	        )
+   184	    except Exception:
+   185	        min_score = signal.threshold_used
+   186	
+   187	    if not signal.trigger_met:
+   188	        decision.add_gate_failed("G1_TRIGGER", f"Primary trigger tidak terpenuhi")
+   189	        return False
+   190	
+   191	    if signal.total_score < min_score:
+   192	        decision.add_gate_failed(
+   193	            "G1_SCORE",
+   194	            f"Score {signal.total_score:.1f} < threshold {min_score:.1f}",
+   195	        )
+   196	        return False
+   197	
+   198	    decision.add_gate_passed("G1_SCORE_TRIGGER")
+   199	    return True
+   200	
+   201	def _gate_regime(
+   202	    signal: ScoredSignal,
+   203	    decision: TradeDecision,
+   204	    allowed_regimes: List[str],
+   205	    min_confidence: float = REGIME_MIN_CONFIDENCE_TO_TRADE,
+   206	    side: str = "long",
+   207	    # [BIAS-FIX] Default "long" -- caller lama tetap dapat perilaku identik.
+   208	) -> bool:
+   209	    tradeable, reason = is_tradeable_regime(
+   210	        regime=signal.regime,
+   211	        confidence=signal.regime_confidence,
+   212	        allowed_regimes=allowed_regimes,
+   213	        min_confidence=min_confidence,
+   214	        side=side,
+   215	    )
+   216	    if not tradeable:
+   217	        decision.add_gate_failed("G2_REGIME", reason)
+   218	        return False
+   219	
+   220	    decision.add_gate_passed("G2_REGIME")
+   221	    return True
+   222	
+   223	def _gate_spread(
+   224	    symbol: str,
+   225	    max_spread_pct: float,
+   226	    exchange_connector,
+   227	    decision: TradeDecision,
+   228	) -> bool:
+   229	    if exchange_connector is None:
+   230	        decision.add_gate_passed("G3_SPREAD_SKIPPED")
+   231	        return True
+   232	
+   233	    try:
+   234	        # Feed health check (if available).
+   235	        is_healthy = getattr(exchange_connector, "is_feed_healthy", None)
+   236	        if callable(is_healthy) and not bool(is_healthy(symbol)):
+   237	            decision.add_gate_failed("G3_FEED", "WS feed unhealthy")
+   238	            return False
+   239	
+   240	        spread_pct = None
+   241	        # [BUG-FIX] Sebelumnya kode mengecek `fn_name not in explicit_attrs`
+   242	        # dengan explicit_attrs = exchange_connector.__dict__ (dict INSTANCE).
+   243	        # Method seperti get_current_spread_pct/get_spread_pct/get_spread
+   244	        # didefinisikan sebagai method biasa di body class ExchangeConnector
+   245	        # (exchange.py) — method class TIDAK PERNAH muncul di __dict__
+   246	        # instance (hanya atribut yang di-assign via self.x = ... yang
+   247	        # muncul di situ). Akibatnya `fn_name not in explicit_attrs` SELALU
+   248	        # True untuk ketiga nama method ini -> loop selalu `continue` tanpa
+   249	        # pernah memanggil getattr yang sebenarnya -> spread_pct SELALU None
+   250	        # -> gate G3_SPREAD tidak pernah benar-benar mengecek spread nyata,
+   251	        # selalu lolos sebagai "G3_SPREAD_UNKNOWN" walau data spread ada.
+   252	        # Sekarang: getattr() sendiri sudah aman kalau atribut tidak ada
+   253	        # (return None default), jadi pre-check __dict__ yang salah itu
+   254	        # dihapus — cukup coba getattr+callable langsung.
+   255	        for fn_name in ("get_current_spread_pct", "get_spread_pct", "get_spread"):
+   256	            fn = getattr(exchange_connector, fn_name, None)
+   257	            if callable(fn):
+   258	                spread_pct = fn(symbol)
+   259	                break
+   260	
+   261	        if spread_pct is not None and not isinstance(spread_pct, (int, float)):
+   262	            try:
+   263	                spread_pct = float(spread_pct)
+   264	            except Exception:
+   265	                spread_pct = None
+   266	
+   267	        if spread_pct is None:
+   268	            decision.add_gate_passed("G3_SPREAD_UNKNOWN")
+   269	            return True
+   270	
+   271	        if spread_pct > max_spread_pct:
+   272	            decision.add_gate_failed(
+   273	                "G3_SPREAD",
+   274	                f"Spread {spread_pct:.3f}% > max {max_spread_pct:.3f}%",
+   275	            )
+   276	            return False
+   277	
+   278	        decision.add_gate_passed(f"G3_SPREAD({spread_pct:.3f}%)")
+   279	        return True
+   280	
+   281	    except Exception as exc:
+   282	        log.warning("G3 spread check error (non-blocking): %s", exc)
+   283	        decision.add_gate_passed("G3_SPREAD_ERROR_BYPASS")
+   284	        return True
+   285	
+   286	async def _gate_risk_manager(
+   287	    signal: ScoredSignal,
+   288	    decision: TradeDecision,
+   289	    risk_manager,
+   290	    portfolio_value: float,
+   291	    base_position_size_pct: float,
+   292	    entry_price: float = 0.0,
+   293	    side: str = "long",
+   294	) -> Tuple[bool, float]:
+   295	    if risk_manager is None:
+   296	        decision.add_gate_passed("G4_RISK_SKIPPED")
+   297	        return True, base_position_size_pct
+   298	
+   299	    try:
+   300	        if bool(getattr(risk_manager, "is_halted", False)):
+   301	            reason = getattr(risk_manager, "halt_reason", None) or "Risk manager halted"
+   302	            decision.add_gate_failed("G4_RISK_HALTED", str(reason))
+   303	            return False, 0.0
+   304	
+   305	        # [SLOT-LEAK FIX] G4 adalah PROBE (bertanya "boleh?"), BUKAN
+   306	        # eksekusi -- reserve_slot=False supaya assessment ini TIDAK
+   307	        # mengkonsumsi slot _open_positions_count. Reservasi otoritatif
+   308	        # terjadi di evaluate_order() KEDUA di _handle_entry/_handle_buy
+   309	        # (default reserve_slot=True), yang punya jalur release saat gagal.
+   310	        # [SHORT-FIX F3] SEBELUMNYA hardcode side="buy" -- kandidat SHORT
+   311	        # diprobe risk seolah LONG (halt/margin/arah salah). Kini mengikuti
+   312	        # side kandidat; default "long" menjaga perilaku lama utk spot.
+   313	        assessment = await risk_manager.evaluate_order(
+   314	            symbol=signal.symbol,
+   315	            side="buy" if side != "short" else "sell",
+   316	            price=entry_price,
+   317	            quantity=(portfolio_value * base_position_size_pct / 100) / entry_price if entry_price > 0 else 0.0,
+   318	            reserve_slot=False,
+   319	        )
+   320	
+   321	        if not assessment.is_approved:
+   322	            # [FUTURES-READY -- capital_allocator prasyarat] Bedakan reject
+   323	            # krn kehabisan kapasitas (slot/margin) dari reject biasa --
+   324	            # decision.capital_constrained dibaca run_gate3_worker (futures)
+   325	            # utk tahu kandidat ini layak diregistrasi sbg "pending", bukan
+   326	            # dibuang permanen. Tidak mengubah return tuple (False, 0.0)
+   327	            # -- caller lama (decide()) yang belum tahu field ini tetap
+   328	            # dapat perilaku identik (REJECT keras).
+   329	            if assessment.decision == RiskDecision.REJECTED_INSUFFICIENT_CAPITAL:
+   330	                decision.capital_constrained = True
+   331	            decision.add_gate_failed(
+   332	                "G4_RISK",
+   333	                assessment.reason or "Risk manager rejected",
+   334	            )
+   335	            return False, 0.0
+   336	
+   337	        # [UNIT FIX -- G4] assessment.approved_size dari RiskManager bersatuan
+   338	        # UNIT KOIN (mis. 8101 unit WIF), BUKAN persen -- sebelumnya ditimpa
+   339	        # mentah ke approved_size lalu diperlakukan sbg persen di G5/G6
+   340	        # (log "G4_RISK(size=2892.22%)" = 2892 UNIT MANTRA; insiden 720.72%
+   341	        # di komentar fallback G5 adalah bug yang sama, saat itu ditambal
+   342	        # clamp tanpa koreksi satuan). Laten-berbahaya: jalur
+   343	        # kelly_enabled=False mengembalikan base_size_pct MENTAH tanpa clamp
+   344	        # -- unit koin jadi persen sizing. Konversi yang benar:
+   345	        # persen = unit * harga / portfolio_value * 100.
+   346	        approved_size = base_position_size_pct
+   347	        cand = getattr(assessment, "approved_size", None)
+   348	        if (
+   349	            isinstance(cand, (int, float)) and cand > 0
+   350	            and entry_price > 0 and portfolio_value > 0
+   351	        ):
+   352	            approved_size = float(cand) * entry_price / portfolio_value * 100.0
+   353	
+   354	        decision.add_gate_passed(f"G4_RISK(size={approved_size:.2f}%)")
+   355	        return True, approved_size
+   356	
+   357	    except Exception as exc:
+   358	        log.warning("G4 risk manager error: %s", exc)
+   359	        decision.add_gate_passed("G4_RISK_ERROR_BYPASS")
+   360	        return True, base_position_size_pct
+   361	
+   362	async def _gate_kelly_sizing(
+   363	    signal: ScoredSignal,
+   364	    decision: TradeDecision,
+   365	    base_size_pct: float,
+   366	    profile_cfg,
+   367	    db_manager,
+   368	) -> float:
+   369	    if not getattr(profile_cfg, "kelly_enabled", True):
+   370	        decision.add_gate_passed("G5_KELLY_DISABLED")
+   371	        return base_size_pct
+   372	
+   373	    lookback = getattr(profile_cfg, "kelly_lookback_trades", 50)
+   374	    kelly_inputs = await _get_kelly_inputs(
+   375	        symbol=signal.symbol,
+   376	        profile_name=signal.strategy_profile,
+   377	        lookback=lookback,
+   378	        db_manager=db_manager,
+   379	    )
+   380	
+   381	    if kelly_inputs is None:
+   382	        decision.kelly_method_used = "fallback_insufficient_data"
+   383	        # [BUG-FIX] base_size_pct sebelumnya dikembalikan mentah tanpa cap,
+   384	        # bisa jauh melebihi KELLY_MAX_SIZE_PCT (pernah tercatat 720.72%
+   385	        # saat trade pertama tanpa histori). Clamp sama seperti jalur
+   386	        # normal supaya konsisten dan aman.
+   387	        capped_size = min(base_size_pct, KELLY_MAX_SIZE_PCT)
+   388	        decision.add_gate_passed(f"G5_KELLY_FALLBACK(size={capped_size:.2f}%)")
+   389	        decision.kelly_fraction = None
+   390	        return capped_size
+   391	
+   392	    win_rate, avg_win, avg_loss = kelly_inputs
+   393	    kelly_size, method = _calc_kelly_size(
+   394	        win_rate=win_rate,
+   395	        avg_win_pct=avg_win,
+   396	        avg_loss_pct=avg_loss,
+   397	        kelly_fraction=KELLY_FRACTION,
+   398	        max_size_pct=KELLY_MAX_SIZE_PCT,
+   399	        min_size_pct=KELLY_MIN_SIZE_PCT,
+   400	    )
+   401	
+   402	    if kelly_size <= 0:
+   403	        decision.add_gate_failed(
+   404	            "G5_KELLY",
+   405	            f"Kelly negative edge (win_rate={win_rate:.1%}, R={avg_win/avg_loss:.2f})",
+   406	        )
+   407	        decision.kelly_method_used = "kelly_negative_edge"
+   408	        return 0.0
+   409	
+   410	    decision.kelly_fraction    = kelly_size
+   411	    decision.kelly_method_used = method
+   412	
+   413	    # ── Adaptive Sizing: aktifkan signal_quality + consecutive_loss_size_mult ──
+   414	    from engine.core.models import SignalQuality
+   415	    quality_mult = {
+   416	        SignalQuality.EXCELLENT: 1.3,
+   417	        SignalQuality.GOOD:      1.1,
+   418	        SignalQuality.FAIR:      1.0,
+   419	        SignalQuality.POOR:      0.8,
+   420	    }.get(signal.signal_quality, 1.0)
+   421	
+   422	    consec_mult = getattr(profile_cfg, "consecutive_loss_size_mult", 1.0) or 1.0
+   423	    # consecutive_loss_size_mult hanya aktif kalau ada consecutive losses
+   424	    # (validator sudah set confidence_adjustment negatif kalau ada)
+   425	    conf_adj = getattr(signal, "confidence_adjustment", 0.0) or 0.0
+   426	    if conf_adj >= 0:
+   427	        consec_mult = 1.0  # tidak ada consecutive losses, tidak perlu kurangi size
+   428	
+   429	    adjusted_size = round(kelly_size * quality_mult * consec_mult, 2)
+   430	    adjusted_size = max(KELLY_MIN_SIZE_PCT, min(KELLY_MAX_SIZE_PCT, adjusted_size))
+   431	
+   432	    decision.add_gate_passed(
+   433	        f"G5_KELLY({method}: {kelly_size:.2f}%->adj={adjusted_size:.2f}% "
+   434	        f"quality={signal.signal_quality.value} qmult={quality_mult:.1f} cmult={consec_mult:.1f} "
+   435	        f"wr={win_rate:.1%})"
+   436	    )
+   437	    return adjusted_size
+   438	
+   439	def _gate_correlation(
+   440	    signal: ScoredSignal,
+   441	    decision: TradeDecision,
+   442	    open_positions: List[str],
+   443	    base_size_pct: float,
+   444	) -> float:
+   445	    correlated = _get_correlated_open_symbols(signal.symbol, open_positions)
+   446	
+   447	    if not correlated:
+   448	        decision.add_gate_passed("G6_CORRELATION_CLEAN")
+   449	        return base_size_pct
+   450	
+   451	    penalty = _calc_correlation_penalty(len(correlated))
+   452	    adjusted_size = base_size_pct * (1.0 - penalty)
+   453	    adjusted_size = round(max(KELLY_MIN_SIZE_PCT, adjusted_size), 2)
+   454	
+   455	    decision.correlated_symbols  = correlated
+   456	    decision.correlation_penalty = penalty
+   457	
+   458	    decision.add_gate_passed(
+   459	        f"G6_CORRELATION(correlated={correlated}, penalty={penalty:.0%}, "
+   460	        f"size {base_size_pct:.2f}%→{adjusted_size:.2f}%)"
+   461	    )
+   462	    return adjusted_size
+   463	
+   464	def _gate_supertrend(
+   465	    signal: ScoredSignal,
+   466	    decision: TradeDecision,
+   467	    side: str = "long",
+   468	) -> bool:
+   469	    """
+   470	    Supertrend Confidence Filter — otomatis menyesuaikan kondisi pasar.
+   471	    Bukan hard filter kaku, tapi dinamis berdasarkan regime + ADX.
+   472	
+   473	    [FUTURES-READY] side="long" (default) menghasilkan perilaku IDENTIK
+   474	    PERSIS dengan versi sebelum perubahan ini -- belum ada sinyal short yang
+   475	    pernah dihasilkan di manapun dalam codebase sampai saat ini, jadi cabang
+   476	    short di bawah belum pernah tereksekusi nyata. Untuk long: Supertrend
+   477	    bullish = konfirmasi, bearish+tren kuat = tolak. Untuk short: MIRROR
+   478	    -- Supertrend bearish = konfirmasi (arah sesuai), bullish+tren kuat = tolak
+   479	    (arah berlawanan dengan short).
+   480	    """
+   481	    iset = signal.observation.primary_tf_indicators
+   482	    if iset is None:
+   483	        decision.add_gate_passed("G1_ST_NO_DATA")
+   484	        return True
+   485	
+   486	    st_dir = iset.trend.supertrend_direction
+   487	    adx    = iset.strength.adx
+   488	    regime = signal.regime.value if signal.regime else "undefined"
+   489	    is_long = side != "short"
+   490	
+   491	    # dir "searah" = bullish(1) utk long, bearish(-1) utk short
+   492	    aligned_dir   = 1 if is_long else -1
+   493	    opposite_dir  = -1 if is_long else 1
+   494	
+   495	    if st_dir == aligned_dir:
+   496	        decision.add_gate_passed(f"G1_ST_{'BULL' if is_long else 'BEAR'}(dir={st_dir})")
+   497	        return True
+   498	
+   499	    if st_dir is None or st_dir == 0:
+   500	        decision.add_gate_passed("G1_ST_NEUTRAL")
+   501	        return True
+   502	
+   503	    if regime == "volatile_expansion":
+   504	        decision.add_gate_passed(f"G1_ST_VOLATILE_BYPASS(regime={regime})")
+   505	        return True
+   506	
+   507	    if st_dir == opposite_dir and adx is not None and adx >= 25.0:
+   508	        arah_label = "bearish" if is_long else "bullish"
+   509	        decision.add_gate_failed(
+   510	            f"G1_ST_{'BEAR' if is_long else 'BULL'}",
+   511	            f"Supertrend {arah_label} (dir={opposite_dir}) + tren kuat (ADX={adx:.1f}) — arah berlawanan"
+   512	        )
+   513	        return False
+   514	
+   515	    decision.add_gate_passed(f"G1_ST_WEAK_TREND(adx={adx})")
+   516	    return True
+   517	
+   518	
+   519	async def decide(
+   520	    signal: ScoredSignal,
+   521	    open_positions: Optional[List[str]] = None,
+   522	    portfolio_value: float = 0.0,
+   523	    base_risk_pct: float = 1.0,
+   524	    min_regime_confidence: Optional[float] = None,
+   525	    max_spread_pct_override: Optional[float] = None,
+   526	    exchange_connector=None,
+   527	    risk_manager=None,
+   528	    db_manager=None,
+   529	    side: str = "long",
+   530	    # [FUTURES-READY] side="long" default -- SEMUA pemanggil existing yang
+   531	    # tidak eksplisit mengirim side akan tetap dapat "long", behavior
+   532	    # IDENTIK PERSIS dengan sebelum parameter ini ditambahkan.
+   533	) -> TradeDecision:
+   534	    decision = TradeDecision(scored_signal=signal)
+   535	    open_positions = open_positions or []
+   536	
+   537	    if signal.symbol in open_positions:
+   538	        decision.action = DecisionAction.WAIT
+   539	        decision.rejection_reason = f"Posisi sudah terbuka untuk {signal.symbol}"
+   540	        decision.add_gate_failed("G0_ALREADY_OPEN", decision.rejection_reason)
+   541	        decision.decision_narrative = _build_narrative(decision, "WAIT — posisi sudah terbuka")
+   542	        return decision
+   543	
+   544	    try:
+   545	        from engine.profiles.thresholds import get_profile_thresholds
+   546	        profile_cfg = get_profile_thresholds(signal.strategy_profile)
+   547	        # [BIAS-FIX] Pilih whitelist regime sesuai side -- sebelumnya SELALU
+   548	        # profile_cfg.allowed_regimes (long-only) apapun side-nya, jadi short
+   549	        # di trending_bear selalu tertolak G2_REGIME walau allows_short sudah
+   550	        # benar (whitelist ini dicek TERPISAH & LEBIH DULU dari allows_long/short
+   551	        # di is_tradeable_regime()).
+   552	        allowed_regimes     = (
+   553	            profile_cfg.allowed_regimes if side != "short"
+   554	            else profile_cfg.allowed_regimes_short
+   555	        )
+   556	        max_spread_pct      = float(
+   557	            max_spread_pct_override
+   558	            if max_spread_pct_override is not None
+   559	            else getattr(profile_cfg, "max_spread_pct", SPREAD_LIMIT_DEFAULT)
+   560	        )
+   561	    except KeyError:
+   562	        decision.action           = DecisionAction.REJECT
+   563	        decision.rejection_reason = f"Profile '{signal.strategy_profile}' tidak ditemukan"
+   564	        decision.add_gate_failed("G0_PROFILE", decision.rejection_reason)
+   565	        decision.decision_narrative = decision.rejection_reason
+   566	        return decision
+   567	
+   568	    if not _gate_supertrend(signal, decision, side=side):
+   569	        decision.action           = DecisionAction.REJECT
+   570	        decision.rejection_reason = decision.gates_failed[-1] if decision.gates_failed else "Supertrend bearish"
+   571	        decision.decision_narrative = _build_narrative(decision, "REJECT — supertrend bearish + tren kuat")
+   572	        return decision
+   573	
+   574	    if not _gate_score_and_trigger(signal, decision, side=side):
+   575	        # Trigger not met is a hard reject (not "wait for better score").
+   576	        decision.action           = DecisionAction.REJECT if not signal.trigger_met else DecisionAction.WAIT
+   577	        decision.rejection_reason = decision.gates_failed[-1] if decision.gates_failed else "Score/trigger tidak terpenuhi"
+   578	        decision.decision_narrative = _build_narrative(
+   579	            decision,
+   580	            "REJECT — trigger tidak terpenuhi" if decision.action == DecisionAction.REJECT
+   581	            else "WAIT — menunggu kondisi lebih baik",
+   582	        )
+   583	        return decision
+   584	
+   585	    min_conf = (
+   586	        float(min_regime_confidence)
+   587	        if min_regime_confidence is not None
+   588	        else float(getattr(profile_cfg, "min_regime_confidence", REGIME_MIN_CONFIDENCE_TO_TRADE))
+   589	    )
+   590	    if not _gate_regime(signal, decision, allowed_regimes, min_confidence=min_conf, side=side):
+   591	        decision.action           = DecisionAction.WAIT
+   592	        decision.rejection_reason = decision.gates_failed[-1] if decision.gates_failed else "Regime tidak diizinkan"
+   593	        decision.decision_narrative = _build_narrative(decision, "WAIT — regime tidak favorable")
+   594	        return decision
+   595	
+   596	    if not _gate_spread(signal.symbol, max_spread_pct, exchange_connector, decision):
+   597	        decision.action           = DecisionAction.WAIT
+   598	        decision.rejection_reason = decision.gates_failed[-1]
+   599	        decision.decision_narrative = _build_narrative(decision, "WAIT — spread terlalu lebar")
+   600	        return decision
+   601	
+   602	    iset        = signal.observation.primary_tf_indicators
+   603	    entry_price = iset.current_price if iset else 0.0
+   604	
+   605	    risk_ok, approved_size = await _gate_risk_manager(
+   606	        signal, decision, risk_manager, portfolio_value, base_risk_pct,
+   607	        entry_price=entry_price, side=side,
+   608	    )
+   609	    if not risk_ok:
+   610	        # [FUTURES-READY -- capital_allocator prasyarat] Kehabisan kapasitas
+   611	        # (slot/margin) dipetakan ke WAIT (retry-worthy), bukan REJECT keras
+   612	        # -- konsisten dgn pemakaian WAIT lain di fungsi ini (regime belum
+   613	        # cocok, spread lebar: kondisi yg bisa membaik, bukan sinyal jelek
+   614	        # permanen). Kegagalan risk-manager lain (halted/drawdown/dst) tetap
+   615	        # REJECT seperti sebelumnya -- capital_constrained hanya True utk
+   616	        # kasus kapasitas spesifik.
+   617	        decision.action = (
+   618	            DecisionAction.WAIT if decision.capital_constrained else DecisionAction.REJECT
+   619	        )
+   620	        decision.rejection_reason = decision.gates_failed[-1]
+   621	        decision.decision_narrative = _build_narrative(
+   622	            decision,
+   623	            "WAIT — kapasitas modal penuh (kandidat layak, tunggu slot/margin)"
+   624	            if decision.capital_constrained else "REJECT — risk manager block",
+   625	        )
+   626	        return decision
+   627	
+   628	    kelly_size = await _gate_kelly_sizing(signal, decision, approved_size, profile_cfg, db_manager)
+   629	    if kelly_size <= 0:
+   630	        decision.action           = DecisionAction.REJECT
+   631	        decision.rejection_reason = "Kelly negative edge — tidak ada keuntungan statiskal"
+   632	        decision.decision_narrative = _build_narrative(decision, "REJECT — Kelly negative edge")
+   633	        return decision
+   634	
+   635	    final_size_pct = _gate_correlation(signal, decision, open_positions, kelly_size)
+   636	
+   637	    atr        = iset.volatility.atr if iset else None
+   638	
+   639	    final_sl, final_tp = _refine_sl_tp(
+   640	        entry_price=entry_price,
+   641	        suggested_sl=signal.suggested_sl,
+   642	        suggested_tp=signal.suggested_tp,
+   643	        iset=iset,
+   644	        profile_cfg=profile_cfg,
+   645	        atr=atr,
+   646	    )
+   647	
+   648	    if final_sl is None or final_tp is None or entry_price <= 0:
+   649	        decision.action           = DecisionAction.REJECT
+   650	        decision.rejection_reason = "Tidak bisa tentukan SL/TP yang valid"
+   651	        decision.add_gate_failed("G7_SLTP", decision.rejection_reason)
+   652	        decision.decision_narrative = _build_narrative(decision, "REJECT — SL/TP calculation failed")
+   653	        return decision
+   654	
+   655	    decision.add_gate_passed(
+   656	        f"G7_SLTP(sl={final_sl:.6f}, tp={final_tp:.6f})"
+   657	    )
+   658	
+   659	    decision.action            = DecisionAction.EXECUTE
+   660	    decision.final_sl          = final_sl
+   661	    decision.final_tp          = final_tp
+   662	    decision.position_size_pct = final_size_pct
+   663	
+   664	    if portfolio_value > 0:
+   665	        decision.position_size = round(portfolio_value * final_size_pct / 100, 2)
+   666	    else:
+   667	        # Fallback: store fractional sizing when portfolio value is unknown.
+   668	        decision.position_size = round(final_size_pct / 100, 6)
+   669	
+   670	    decision.decision_narrative = _build_narrative(
+   671	        decision,
+   672	        f"EXECUTE | {signal.symbol} | score={signal.total_score:.1f} | "
+   673	        f"size={final_size_pct:.2f}% | SL={final_sl:.6f} TP={final_tp:.6f}"
+   674	    )
+   675	
+   676	    log.info(
+   677	        "🟢 EXECUTE %s | score=%.1f/%.1f | regime=%s | "
+   678	        "size=%.2f%% | SL=%.6f TP=%.6f | gates=%d/%d passed",
+   679	        signal.symbol,
+   680	        signal.total_score, signal.threshold_used,
+   681	        signal.regime.value,
+   682	        final_size_pct, final_sl, final_tp,
+   683	        len(decision.gates_passed),
+   684	        len(decision.gates_passed) + len(decision.gates_failed),
+   685	    )
+   686	
+   687	    return decision
+   688	
+   689	def _build_narrative(decision: TradeDecision, summary_line: str) -> str:
+   690	    lines = [summary_line]
+   691	    if decision.gates_passed:
+   692	        lines.append(f"  ✅ Gates passed: {', '.join(decision.gates_passed)}")
+   693	    if decision.gates_failed:
+   694	        lines.append(f"  ❌ Gates failed: {', '.join(decision.gates_failed)}")
+   695	    if decision.correlated_symbols:
+   696	        lines.append(
+   697	            f"  🔗 Correlated: {decision.correlated_symbols} "
+   698	            f"(penalty={decision.correlation_penalty:.0%})"
+   699	        )
+   700	    if decision.kelly_method_used:
+   701	        lines.append(f"  📐 Kelly: {decision.kelly_method_used}")
+   702	    return "\n".join(lines)
+   703	
+   704	def should_exit_on_regime_change(
+   705	    symbol: str,
+   706	    current_regime: MarketRegime,
+   707	    entry_regime: Optional[MarketRegime],
+   708	    profile_name: str = "universal",
+   709	) -> Tuple[bool, str, str]:
+   710	    """Evaluasi aksi berdasarkan transisi regime.
+   711	    Return: (should_exit: bool, reason: str, action: str)
+   712	    action: HOLD | HOLD_TIGHTEN_SL | HOLD_RELAX_SL | EXIT
+   713	    """
+   714	    from engine.profiles.thresholds import get_transition_action
+   715	    current_val = current_regime.value if current_regime else "undefined"
+   716	    entry_val   = entry_regime.value   if entry_regime   else "undefined"
+   717	
+   718	    action = get_transition_action(profile_name, entry_val, current_val)
+   719	
+   720	    if action == "EXIT":
+   721	        return True, f"Regime {entry_val}→{current_val} [{profile_name}]: EXIT", action
+   722	    if action == "HOLD_TIGHTEN_SL":
+   723	        return False, f"Regime {entry_val}→{current_val} [{profile_name}]: TIGHTEN SL", action
+   724	    if action == "HOLD_RELAX_SL":
+   725	        return False, f"Regime {entry_val}→{current_val} [{profile_name}]: RELAX SL", action
+   726	    return False, f"Regime {entry_val}→{current_val} [{profile_name}]: HOLD", action
+   727	
+   728	def should_exit_on_score_drop(
+   729	    current_score: float,
+   730	    entry_score: float,
+   731	    drop_threshold: float = 30.0,
+   732	) -> Tuple[bool, str]:
+   733	    drop = entry_score - current_score
+   734	    if drop >= drop_threshold:
+   735	        return True, (
+   736	            f"Score drop signifikan: {entry_score:.1f} → {current_score:.1f} "
+   737	            f"(-{drop:.1f} poin)"
+   738	        )
+   739	    return False, ""
+   740	
+   741	def evaluate_exit(
+   742	    symbol: str,
+   743	    current_signal: ScoredSignal,
+   744	    entry_score: float,
+   745	    entry_regime: Optional[MarketRegime] = None,
+   746	) -> Tuple[bool, str]:
+   747	    regime_exit, regime_reason, regime_action = should_exit_on_regime_change(
+   748	        symbol=symbol,
+   749	        current_regime=current_signal.regime,
+   750	        entry_regime=entry_regime,
+   751	    )
+   752	    if regime_exit:
+   753	        return True, regime_reason
+   754	
+   755	    score_exit, score_reason = should_exit_on_score_drop(
+   756	        current_score=current_signal.total_score,
+   757	        entry_score=entry_score,
+   758	    )
+   759	    if score_exit:
+   760	        return True, score_reason
+   761	
+   762	    return False, ""
+   763	
+   764	async def decide_all(
+   765	    signals: Dict[str, ScoredSignal],
+   766	    open_positions: Optional[List[str]] = None,
+   767	    portfolio_value: float = 0.0,
+   768	    base_risk_pct: float = 1.0,
+   769	    min_regime_confidence: Optional[float] = None,
+   770	    max_spread_pct_override: Optional[float] = None,
+   771	    exchange_connector=None,
+   772	    risk_manager=None,
+   773	    db_manager=None,
+   774	) -> Dict[str, TradeDecision]:
+   775	    decisions: Dict[str, TradeDecision] = {}
+   776	
+   777	    effective_open = list(open_positions or [])
+   778	
+   779	    for symbol, signal in signals.items():
+   780	        try:
+   781	            decision = await decide( 
+   782	                signal=signal,
+   783	                open_positions=effective_open,
+   784	                portfolio_value=portfolio_value,
+   785	                base_risk_pct=base_risk_pct,
+   786	                min_regime_confidence=min_regime_confidence,
+   787	                max_spread_pct_override=max_spread_pct_override,
+   788	                exchange_connector=exchange_connector,
+   789	                risk_manager=risk_manager,
+   790	                db_manager=db_manager,
+   791	            )
+   792	            decisions[symbol] = decision
+   793	
+   794	            if decision.is_executable:
+   795	                effective_open.append(symbol)
+   796	
+   797	        except Exception as exc:
+   798	            log.exception("Error decide() untuk %s: %s", symbol, exc)
+   799	            fallback = TradeDecision(scored_signal=signal)
+   800	            fallback.action = DecisionAction.REJECT
+   801	            fallback.rejection_reason = f"Commander error: {exc}"
+   802	            decisions[symbol] = fallback
+   803	
+   804	    execute_count = sum(1 for d in decisions.values() if d.is_executable)
+   805	    wait_count    = sum(1 for d in decisions.values() if d.action == DecisionAction.WAIT)
+   806	    reject_count  = sum(1 for d in decisions.values() if d.action == DecisionAction.REJECT)
+   807	
+   808	    log.info(
+   809	        "decide_all: %d symbols | EXECUTE=%d WAIT=%d REJECT=%d",
+   810	        len(decisions), execute_count, wait_count, reject_count,
+   811	    )
+   812	
+   813	    return decisions
+   814	
+   815	def get_decision_summary_text(decisions: Dict[str, TradeDecision]) -> str:
+   816	    if not decisions:
+   817	        return "Tidak ada decision."
+   818	
+   819	    lines = ["🎯 Trade Decisions:"]
+   820	    for symbol, dec in sorted(decisions.items()):
+   821	        icon = {"execute": "🟢", "wait": "🟡", "reject": "🔴"}.get(
+   822	            dec.action.value, "⚪"
+   823	        )
+   824	        score = dec.scored_signal.total_score
+   825	        gates = f"{len(dec.gates_passed)}/{len(dec.gates_passed)+len(dec.gates_failed)}"
+   826	        lines.append(
+   827	            f"  {icon} {symbol:<12} {dec.action.value.upper():<7} "
+   828	            f"score={score:.1f} gates={gates}"
+   829	        )
+   830	        if dec.action == DecisionAction.EXECUTE:
+   831	            lines.append(
+   832	                f"       SL={dec.final_sl:.6f} TP={dec.final_tp:.6f} "
+   833	                f"size={dec.position_size_pct:.2f}%"
+   834	            )
+   835	        elif dec.rejection_reason:
+   836	            reason = dec.rejection_reason[:70]
+   837	            lines.append(f"       Reason: {reason}")
+   838	
+   839	    return "\n".join(lines)
+   840	
+   841	class TradeCommander:
+   842	
+   843	    def __init__(
+   844	        self,
+   845	        risk_manager=None,
+   846	        ws_feed=None,
+   847	        db=None,
+   848	        config: dict = None,
+   849	    ):
+   850	        self._risk    = risk_manager
+   851	        self._ws_feed = ws_feed
+   852	        self._db      = db
+   853	        self._config  = config or {}
+   854	        log.info(
+   855	            "TradeCommander init | risk=%s ws_feed=%s db=%s",
+   856	            risk_manager is not None,
+   857	            ws_feed is not None,
+   858	            db is not None,
+   859	        )
+   860	
+   861	    async def decide(self, signal: ScoredSignal) -> TradeDecision:
+   862	        open_symbols: List[str] = []
+   863	        try:
+   864	            open_positions_raw = await self._db.get_open_positions()
+   865	            open_symbols = [p.symbol for p in open_positions_raw]
+   866	        except Exception as exc:
+   867	            log.warning("TradeCommander.decide: gagal ambil open positions: %s", exc)
+   868	
+   869	        base_risk_pct = float(self._config.get("risk_per_trade_pct", 1.0))
+   870	
+   871	        decision = await decide(
+   872	            signal=signal,
+   873	            open_positions=open_symbols,
+   874	            portfolio_value=float(self._config.get("portfolio_value", 0.0)),
+   875	            base_risk_pct=base_risk_pct,
+   876	            min_regime_confidence=self._config.get("min_regime_confidence"),
+   877	            max_spread_pct_override=self._config.get("max_spread_pct"),
+   878	            exchange_connector=self._ws_feed,
+   879	            risk_manager=self._risk,
+   880	            db_manager=self._db,
+   881	        )
+   882	
+   883	        try:
+   884	            sig = decision.scored_signal
+   885	            bd  = getattr(sig, "score_breakdown", None)
+   886	            await self._db.save_signal_score(
+   887	                symbol           = sig.symbol,
+   888	                strategy_profile = getattr(sig, "strategy_profile", ""),
+   889	                total_score      = float(getattr(sig, "total_score", 0)),
+   890	                trend_score      = float(getattr(bd, "trend",      50) if bd else 50),
+   891	                momentum_score   = float(getattr(bd, "momentum",   50) if bd else 50),
+   892	                strength_score   = float(getattr(bd, "strength",   50) if bd else 50),
+   893	                volatility_score = float(getattr(bd, "volatility", 50) if bd else 50),
+   894	                pattern_score    = float(getattr(bd, "pattern",    50) if bd else 50),
+   895	                oscillator_score = float(getattr(bd, "oscillator", 50) if bd else 50),
+   896	                structure_score  = float(getattr(bd, "structure",  50) if bd else 50),
+   897	                orderbook_score  = float(getattr(bd, "orderbook",  50) if bd else 50),
+   898	                regime           = getattr(sig, "regime", None),
+   899	                regime_confidence= float(getattr(sig, "regime_confidence", 0)),
+   900	                trigger_met      = decision.is_executable,
+   901	                action_taken     = decision.action.value if decision.action else None,
+   902	                rejection_reason = decision.rejection_reason or None,
+   903	            )
+   904	        except Exception as exc:
+   905	            log.debug("TradeCommander.decide: gagal save_signal_score: %s", exc)
+   906	
+   907	        return decision
+   908	
+   909	    async def decide_all(
+   910	        self,
+   911	        signals: Dict[str, ScoredSignal],
+   912	        open_positions: Optional[List[str]] = None,
+   913	    ) -> Dict[str, TradeDecision]:
+   914	        base_risk_pct = float(self._config.get("risk_per_trade_pct", 1.0))
+   915	        return await decide_all(
+   916	            signals=signals,
+   917	            open_positions=open_positions,
+   918	            portfolio_value=float(self._config.get("portfolio_value", 0.0)),
+   919	            base_risk_pct=base_risk_pct,
+   920	            min_regime_confidence=self._config.get("min_regime_confidence"),
+   921	            max_spread_pct_override=self._config.get("max_spread_pct"),
+   922	            exchange_connector=self._ws_feed,
+   923	            risk_manager=self._risk,
+   924	            db_manager=self._db,
+   925	        )
+   926	
+   927	
+   928	class IntelligenceCommander:
+   929	
+   930	    def __init__(self, db, config: dict):
+   931	        self._db     = db
+   932	        self._config = config or {}
+   933	        log.info(
+   934	            "IntelligenceCommander init | intelligence=%s regime=%s",
+   935	            self._config.get("intelligence_enabled", True),
+   936	            self._config.get("regime_detection_enabled", True),
+   937	        )
+   938	
+   939	    async def process(
+   940	        self,
+   941	        symbol:   str,
+   942	        df,
+   943	        strategy,
+   944	        confirmation_df=None,
+   945	        confirmation_timeframe: Optional[str] = None,
+   946	    ):
+   947	        from engine.core.models import SignalEvent, SignalType, ExitMode
+   948	        from datetime import datetime, timezone
+   949	
+   950	        def _utcnow():
+   951	            return datetime.now(timezone.utc).replace(tzinfo=None)
+   952	
+   953	        signals = []
+   954	
+   955	        try:
+   956	            exit_signals = await strategy.generate_signals(symbol, df)
+   957	            signals.extend(exit_signals)
+   958	        except Exception as exc:
+   959	            log.error(
+   960	                "Commander.process: generate_signals error [%s]: %s",
+   961	                symbol, exc, exc_info=True,
+   962	            )
+   963	
+   964	        # [BUG-FIX -- efisiensi, ditemukan lewat pelacakan reachability]
+   965	        # Sebelumnya: pengecekan `if symbol in open_symbols: return` baru
+   966	        # dilakukan SETELAH get_scored_signal() dipanggil. get_scored_signal()
+   967	        # menjalankan pipeline intelligence PENUH (observe+classify+score+
+   968	        # validate, lewat run_in_executor) -- mahal secara komputasi. Satu-
+   969	        # satunya caller process() di seluruh repo adalah run_strategy_loop
+   970	        # (main.py), yang HANYA memanggil process() untuk symbol yang SUDAH
+   971	        # ADA di open_positions (loop "for pos in open_positions"). Artinya
+   972	        # `if symbol in open_symbols: return` di bawah SELALU True untuk
+   973	        # setiap pemanggilan process() di produksi -- dibuktikan lewat
+   974	        # eksperimen (register_position tidak pernah terpanggil). Akibatnya
+   975	        # seluruh hasil get_scored_signal()+decide() SELALU dibuang percuma,
+   976	        # setiap symbol, setiap siklus run_strategy_loop (CANDLE_POLL_INTERVAL)
+   977	        # -- pemborosan CPU/thread-pool nyata, bukan cuma dead code kosmetik.
+   978	        # Fix: pindahkan pengecekan open_symbols ke SEBELUM get_scored_signal,
+   979	        # supaya entry-evaluation yang mahal di-skip lebih awal saat memang
+   980	        # sudah pasti tidak akan dipakai -- exit_signals (generate_signals)
+   981	        # tetap dihitung seperti biasa krn itu fungsi utama loop ini.
+   982	        try:
+   983	            open_positions_raw = await self._db.get_open_positions()
+   984	            open_symbols       = [p.symbol for p in open_positions_raw]
+   985	            portfolio_value    = 0.0
+   986	        except Exception as exc:
+   987	            log.warning(
+   988	                "Commander.process: gagal ambil open positions: %s", exc
+   989	            )
+   990	            open_symbols    = []
+   991	            portfolio_value = 0.0
+   992	
+   993	        if symbol in open_symbols:
+   994	            log.debug(
+   995	                "Commander.process: [%s] already in position — skip entry "
+   996	                "evaluation (get_scored_signal dilewati, efisiensi).",
+   997	                symbol,
+   998	            )
+   999	            return signals
+  1000	
+  1001	        try:
+  1002	            scored = await strategy.get_scored_signal(
+  1003	                symbol,
+  1004	                df,
+  1005	                confirmation_df=confirmation_df,
+  1006	                confirmation_timeframe=confirmation_timeframe,
+  1007	            )
+  1008	        except Exception as exc:
+  1009	            log.warning(
+  1010	                "Commander.process: get_scored_signal error [%s]: %s — "
+  1011	                "skip entry evaluation.",
+  1012	                symbol, exc,
+  1013	            )
+  1014	            return signals
+  1015	
+  1016	        if scored is None:
+  1017	            log.debug(
+  1018	                "Commander.process: [%s] ScoredSignal=None — no entry candidate.",
+  1019	                symbol,
+  1020	            )
+  1021	            return signals
+  1022	
+  1023	        base_risk_pct = float(
+  1024	            self._config.get("risk_per_trade_pct", 1.0)
+  1025	        )
+  1026	
+  1027	        try:
+  1028	            decision = await decide(
+  1029	                signal=scored,
+  1030	                open_positions=open_symbols,
+  1031	                portfolio_value=portfolio_value,
+  1032	                base_risk_pct=base_risk_pct,
+  1033	                exchange_connector=getattr(self, "_exchange", None),
+  1034	                risk_manager=getattr(self, "_risk", None),
+  1035	                db_manager=self._db,
+  1036	            )
+  1037	        except Exception as exc:
+  1038	            log.error(
+  1039	                "Commander.process: decide() error [%s]: %s",
+  1040	                symbol, exc, exc_info=True,
+  1041	            )
+  1042	            return signals
+  1043	
+  1044	        log.debug(
+  1045	            "Commander.process: [%s] decision=%s score=%.1f gates=%d/%d",
+  1046	            symbol,
+  1047	            decision.action.value,
+  1048	            scored.total_score,
+  1049	            len(decision.gates_passed),
+  1050	            len(decision.gates_passed) + len(decision.gates_failed),
+  1051	        )
+  1052	
+  1053	        bd = scored.score_breakdown
+  1054	
+  1055	        def _bd_raw(attr: str) -> Optional[float]:
+  1056	            return getattr(bd, attr, None) if bd is not None else None
+  1057	
+  1058	        if decision.is_executable:
+  1059	            try:
+  1060	                iset  = scored.observation.primary_tf_indicators
+  1061	                price = (iset.current_price if iset else 0.0) or 0.0
+  1062	
+  1063	                if price <= 0:
+  1064	                    log.warning(
+  1065	                        "Commander.process: [%s] EXECUTE tapi price=0 — "
+  1066	                        "skip BUY signal.",
+  1067	                        symbol,
+  1068	                    )
+  1069	                    return signals
+  1070	
+  1071	                profile_obj = strategy.get_profile(symbol)
+  1072	                atr         = iset.volatility.atr if iset else 0.0
+  1073	                atr_pct     = (atr / price * 100) if price > 0 else 0.0
+  1074	                atr_thresh  = (
+  1075	                    profile_obj.atr_pct_threshold
+  1076	                    if profile_obj else 0.8
+  1077	                )
+  1078	                use_ride = atr_pct >= atr_thresh
+  1079	
+  1080	                buy_sig = SignalEvent(
+  1081	                    symbol=symbol,
+  1082	                    signal_type=SignalType.BUY,
+  1083	                    price=price,
+  1084	                    timestamp=_utcnow(),
+  1085	                    strategy=strategy.name,
+  1086	                    confidence=scored.total_score / 100.0,
+  1087	                    stop_loss=decision.final_sl,
+  1088	                    take_profit=decision.final_tp,
+  1089	                    size_pct=decision.position_size_pct,
+  1090	                    total_score=scored.total_score,
+  1091	                    regime=scored.regime.value,
+  1092	                    score_breakdown={
+  1093	                        "trend":      _bd_raw("trend_raw"),
+  1094	                        "momentum":   _bd_raw("momentum_raw"),
+  1095	                        "strength":   _bd_raw("strength_raw"),
+  1096	                        "volatility": _bd_raw("volatility_raw"),
+  1097	                        "pattern":    _bd_raw("pattern_raw"),
+  1098	                    },
+  1099	                    scoring_narrative=scored.scoring_narrative,
+  1100	                    metadata={
+  1101	                        "entry_trigger":    "intelligence_pipeline_v7",
+  1102	                        "pipeline_mode":    "v7",
+  1103	                        "gates_passed":     decision.gates_passed,
+  1104	                        "gates_failed":     decision.gates_failed,
+  1105	                        "kelly_method":     decision.kelly_method_used,
+  1106	                        "correlated":       decision.correlated_symbols,
+  1107	                        "correlation_pen":  decision.correlation_penalty,
+  1108	                        "exit_mode":        "RIDE_THE_WAVE" if use_ride
+  1109	                                            else "QUICK_PROFIT",
+  1110	                    },
+  1111	                )
+  1112	
+  1113	                p = strategy._resolve_params(symbol, price, atr, 1.0, 50.0)
+  1114	                exit_mode_enum = (
+  1115	                    ExitMode.RIDE_THE_WAVE
+  1116	                    if use_ride else ExitMode.QUICK_PROFIT
+  1117	                )
+  1118	                strategy.register_position(
+  1119	                    symbol=symbol,
+  1120	                    entry_price=price,
+  1121	                    exit_mode=exit_mode_enum,
+  1122	                    p=p,
+  1123	                    entry_score=scored.total_score,
+  1124	                    entry_regime=scored.regime.value,
+  1125	                )
+  1126	
+  1127	                signals.append(buy_sig)
+  1128	                log.info(
+  1129	                    "🟢 Commander EXECUTE [%s] score=%.1f regime=%s "
+  1130	                    "SL=%.6f TP=%.6f size=%.2f%%",
+  1131	                    symbol,
+  1132	                    scored.total_score,
+  1133	                    scored.regime.value,
+  1134	                    decision.final_sl or 0,
+  1135	                    decision.final_tp or 0,
+  1136	                    decision.position_size_pct,
+  1137	                )
+  1138	
+  1139	                try:
+  1140	                    await self._db.save_signal_score(
+  1141	                        symbol=symbol,
+  1142	                        strategy_profile=scored.strategy_profile,
+  1143	                        total_score=scored.total_score,
+  1144	                        trend_score=_bd_raw("trend_raw"),
+  1145	                        momentum_score=_bd_raw("momentum_raw"),
+  1146	                        strength_score=_bd_raw("strength_raw"),
+  1147	                        volatility_score=_bd_raw("volatility_raw"),
+  1148	                        pattern_score=_bd_raw("pattern_raw"),
+  1149	                        threshold_used=scored.threshold_used,
+  1150	                        regime=scored.regime.value,
+  1151	                        regime_confidence=scored.regime_confidence,
+  1152	                        trigger_met=scored.trigger_met,
+  1153	                        signal_type="buy",
+  1154	                        action_taken="EXECUTE",
+  1155	                        rejection_reason=None,
+  1156	                    )
+  1157	                except Exception as db_exc:
+  1158	                    log.debug(
+  1159	                        "Commander.process: gagal save signal_score: %s", db_exc
+  1160	                    )
+  1161	
+  1162	            except Exception as exc:
+  1163	                log.error(
+  1164	                    "Commander.process: gagal buat BUY SignalEvent [%s]: %s",
+  1165	                    symbol, exc, exc_info=True,
+  1166	                )
+  1167	
+  1168	        else:
+  1169	            action_str = decision.action.value.upper()
+  1170	            log.debug(
+  1171	                "Commander.process: [%s] %s | score=%.1f | reason=%s",
+  1172	                symbol,
+  1173	                action_str,
+  1174	                scored.total_score,
+  1175	                (decision.rejection_reason or "")[:80],
+  1176	            )
+  1177	
+  1178	            try:
+  1179	                await self._db.save_signal_score(
+  1180	                    symbol=symbol,
+  1181	                    strategy_profile=scored.strategy_profile,
+  1182	                    total_score=scored.total_score,
+  1183	                    trend_score=_bd_raw("trend_raw"),
+  1184	                    momentum_score=_bd_raw("momentum_raw"),
+  1185	                    strength_score=_bd_raw("strength_raw"),
+  1186	                    volatility_score=_bd_raw("volatility_raw"),
+  1187	                    pattern_score=_bd_raw("pattern_raw"),
+  1188	                    threshold_used=scored.threshold_used,
+  1189	                    regime=scored.regime.value,
+  1190	                    regime_confidence=scored.regime_confidence,
+  1191	                    trigger_met=scored.trigger_met,
+  1192	                    signal_type="hold",
+  1193	                    action_taken=action_str,
+  1194	                    rejection_reason=decision.rejection_reason,
+  1195	                )
+  1196	            except Exception as db_exc:
+  1197	                log.debug(
+  1198	                    "Commander.process: gagal save signal_score (non-exec): %s",
+  1199	                    db_exc,
+  1200	                )
+  1201	
+  1202	        return signals
+  1203	
+  1204	    def inject_dependencies(
+  1205	        self,
+  1206	        exchange_connector=None,
+  1207	        risk_manager=None,
+  1208	    ) -> None:
+  1209	        self._exchange = exchange_connector
+  1210	        self._risk     = risk_manager
+  1211	        if exchange_connector:
+  1212	            log.info("Commander: exchange connector injected.")
+  1213	        if risk_manager:
+  1214	            log.info("Commander: risk manager injected.")

@@ -64,7 +64,12 @@ class TestVerifyPositionExistsAtExchange(unittest.TestCase):
 
     def _fake_self(self, fetch_positions_return=None, fetch_positions_side_effect=None):
         fake_self = SimpleNamespace()
+        # [DOUBLE-COUNT FIX] _do_close_position() kini memegang _equity_lock
+        # (mirror _handle_entry) -- stub wajib menyediakannya, pola sama dgn
+        # test_main_future_entry_slot_reservation.py baris ~61.
+        fake_self._equity_lock = asyncio.Lock()
         fake_self.exchange = SimpleNamespace(
+        get_taker_fee=lambda symbol: 0.0005,
             fetch_positions=AsyncMock(
                 return_value=fetch_positions_return,
                 side_effect=fetch_positions_side_effect,
@@ -144,6 +149,10 @@ class TestSyncDbCloseWithoutOrder(unittest.TestCase):
 
     def _fake_self(self, db):
         fake_self = SimpleNamespace()
+        # [DOUBLE-COUNT FIX] _do_close_position() kini memegang _equity_lock
+        # (mirror _handle_entry) -- stub wajib menyediakannya, pola sama dgn
+        # test_main_future_entry_slot_reservation.py baris ~61.
+        fake_self._equity_lock = asyncio.Lock()
         fake_self.db = db
         fake_self.notifier = SimpleNamespace(notify_trade_closed=AsyncMock())
         return fake_self
@@ -232,8 +241,13 @@ class TestSyncDbCloseWithoutOrder(unittest.TestCase):
 
 def _build_fake_self_for_do_close(db, fetch_positions_return):
     fake_self = SimpleNamespace()
+    # [DOUBLE-COUNT FIX] _do_close_position() kini memegang _equity_lock
+    # (mirror _handle_entry) -- stub wajib menyediakannya, pola sama dgn
+    # test_main_future_entry_slot_reservation.py baris ~61.
+    fake_self._equity_lock = asyncio.Lock()
     fake_self.db = db
     fake_self.exchange = SimpleNamespace(
+        get_taker_fee=lambda symbol: 0.0005,
         fetch_positions=AsyncMock(return_value=fetch_positions_return),
     )
     fake_self.risk_manager = RiskManager({})

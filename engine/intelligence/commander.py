@@ -290,6 +290,7 @@ async def _gate_risk_manager(
     portfolio_value: float,
     base_position_size_pct: float,
     entry_price: float = 0.0,
+    side: str = "long",
 ) -> Tuple[bool, float]:
     if risk_manager is None:
         decision.add_gate_passed("G4_RISK_SKIPPED")
@@ -301,11 +302,20 @@ async def _gate_risk_manager(
             decision.add_gate_failed("G4_RISK_HALTED", str(reason))
             return False, 0.0
 
+        # [SLOT-LEAK FIX] G4 adalah PROBE (bertanya "boleh?"), BUKAN
+        # eksekusi -- reserve_slot=False supaya assessment ini TIDAK
+        # mengkonsumsi slot _open_positions_count. Reservasi otoritatif
+        # terjadi di evaluate_order() KEDUA di _handle_entry/_handle_buy
+        # (default reserve_slot=True), yang punya jalur release saat gagal.
+        # [SHORT-FIX F3] SEBELUMNYA hardcode side="buy" -- kandidat SHORT
+        # diprobe risk seolah LONG (halt/margin/arah salah). Kini mengikuti
+        # side kandidat; default "long" menjaga perilaku lama utk spot.
         assessment = await risk_manager.evaluate_order(
             symbol=signal.symbol,
-            side="buy",
+            side="buy" if side != "short" else "sell",
             price=entry_price,
             quantity=(portfolio_value * base_position_size_pct / 100) / entry_price if entry_price > 0 else 0.0,
+            reserve_slot=False,
         )
 
         if not assessment.is_approved:
@@ -324,10 +334,22 @@ async def _gate_risk_manager(
             )
             return False, 0.0
 
+        # [UNIT FIX -- G4] assessment.approved_size dari RiskManager bersatuan
+        # UNIT KOIN (mis. 8101 unit WIF), BUKAN persen -- sebelumnya ditimpa
+        # mentah ke approved_size lalu diperlakukan sbg persen di G5/G6
+        # (log "G4_RISK(size=2892.22%)" = 2892 UNIT MANTRA; insiden 720.72%
+        # di komentar fallback G5 adalah bug yang sama, saat itu ditambal
+        # clamp tanpa koreksi satuan). Laten-berbahaya: jalur
+        # kelly_enabled=False mengembalikan base_size_pct MENTAH tanpa clamp
+        # -- unit koin jadi persen sizing. Konversi yang benar:
+        # persen = unit * harga / portfolio_value * 100.
         approved_size = base_position_size_pct
         cand = getattr(assessment, "approved_size", None)
-        if isinstance(cand, (int, float)):
-            approved_size = float(cand)
+        if (
+            isinstance(cand, (int, float)) and cand > 0
+            and entry_price > 0 and portfolio_value > 0
+        ):
+            approved_size = float(cand) * entry_price / portfolio_value * 100.0
 
         decision.add_gate_passed(f"G4_RISK(size={approved_size:.2f}%)")
         return True, approved_size
@@ -582,7 +604,7 @@ async def decide(
 
     risk_ok, approved_size = await _gate_risk_manager(
         signal, decision, risk_manager, portfolio_value, base_risk_pct,
-        entry_price=entry_price,
+        entry_price=entry_price, side=side,
     )
     if not risk_ok:
         # [FUTURES-READY -- capital_allocator prasyarat] Kehabisan kapasitas

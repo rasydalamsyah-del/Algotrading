@@ -246,9 +246,12 @@ def _calc_weighted_breakdown(
     profile_name: str,
     indicator_scores: Dict[str, Dict[str, float]],
     regime: MarketRegime,
+    side: str = "long",
 ) -> ScoreBreakdown:
     l1_weights = get_level1_weights(profile_name)
-    regime_mod = get_regime_modifier(profile_name, regime.value)
+    # [SHORT-FIX F2] side diteruskan -- modifier trending_bear=0.00 (tabel
+    # long) tidak lagi membunuh kandidat short di sweet spot-nya.
+    regime_mod = get_regime_modifier(profile_name, regime.value, side=side)
 
     breakdown = ScoreBreakdown(regime_modifier=regime_mod)
 
@@ -441,6 +444,40 @@ def score_signal(
         _save_score_to_db(signal, action="REJECT_OPPOSING_REGIME", db_manager=db_manager, main_loop=main_loop, side=side)
         return signal
 
+    # [ENTRY-QUALITY 3b -- veto tren makro] Kasus WIF/BERA: long pantulan
+    # 15m pada koin -97% dari ATH / di tepi ATL. Data TF KONFIRMASI (4h/1d)
+    # SUDAH dihitung observer -- nol fetch tambahan. Aturan: close berjarak
+    # >3% di sisi salah EMA200 TF konfirmasi -> veto (long di bawah, short
+    # di atas). Ambang 3% menjaga pullback sehat dekat EMA200 tidak ikut
+    # terveto. Fail-open: data konfirmasi/EMA200 tidak tersedia -> lewati.
+    import os as _os2
+    if _os2.getenv("MACRO_TREND_VETO", "true").lower() == "true":
+        _conf_iset = getattr(observation, "confirmation_tf_indicators", None)
+        _conf_valid = bool(getattr(observation, "confirmation_tf_valid", False))
+        _veto_gap = float(_os2.getenv("MACRO_VETO_GAP_PCT", "3.0"))
+        if _conf_iset is not None and _conf_valid:
+            _t = getattr(_conf_iset, "trend", None)
+            _ema200 = getattr(_t, "ema200", None) if _t is not None else None
+            _close = getattr(_conf_iset, "current_price", None)
+            if not _close and _t is not None:
+                _close = getattr(_t, "close", None)
+            if _ema200 and _close and _ema200 > 0 and _close > 0:
+                _gap_pct = (_close - _ema200) / _ema200 * 100
+                _against_long  = side != "short" and _gap_pct < -_veto_gap
+                _against_short = side == "short" and _gap_pct > _veto_gap
+                if _against_long or _against_short:
+                    signal.total_score = 0.0
+                    signal.signal_type = "hold"
+                    signal.trigger_met = False
+                    signal.scoring_narrative = (
+                        f"❌ MACRO VETO: TF konfirmasi close={_close:.6f} "
+                        f"{'<' if side != 'short' else '>'} EMA200={_ema200:.6f} "
+                        f"(gap {_gap_pct:+.1f}%) -- melawan tren besar ({side})."
+                    )
+                    signal.add_validation_note("Blocked by macro trend veto (EMA200 conf TF)")
+                    _save_score_to_db(signal, action="REJECT_MACRO_TREND", db_manager=db_manager, main_loop=main_loop, side=side)
+                    return signal
+
     trigger_met, trigger_reason = _check_primary_trigger(profile_name, iset, profile_cfg, side=side)
     signal.trigger_met = trigger_met
 
@@ -453,7 +490,7 @@ def score_signal(
         return signal
 
     indicator_scores = _extract_indicator_scores(iset, side=side)
-    breakdown = _calc_weighted_breakdown(profile_name, indicator_scores, regime)
+    breakdown = _calc_weighted_breakdown(profile_name, indicator_scores, regime, side=side)
     total_score = breakdown.total()
     total_score = max(SCORE_MIN, min(SCORE_MAX, total_score))
 
@@ -478,7 +515,20 @@ def score_signal(
     )
     signal.confidence = max(0.0, min(1.0, signal.confidence))
 
-    if total_score >= dynamic_threshold:
+    # [ENTRY-QUALITY 3a -- score margin] Entry ambang-noise terbukti rugi
+    # (PARTI 52.1/52.0 -1.52, ADA 52.5/52): skor +0.1 di atas threshold
+    # secara statistik tak terbedakan dari noise tapi diberi ukuran posisi
+    # penuh. Trigger kini butuh threshold + margin (env SCORE_ENTRY_MARGIN,
+    # default 2.5). threshold_used TETAP nilai asli utk logging konsisten.
+    import os as _os
+    _entry_margin = float(_os.getenv("SCORE_ENTRY_MARGIN", "2.5"))
+    if dynamic_threshold <= total_score < dynamic_threshold + _entry_margin:
+        log.info(
+            "%s | skor %.1f di zona margin (thr=%.1f +%.1f) -- entry ditahan (ambang-noise).",
+            symbol, total_score, dynamic_threshold, _entry_margin,
+        )
+
+    if total_score >= dynamic_threshold + _entry_margin:
         # Konfirmasi BUY berdasarkan regime
         regime_key = regime.value
         required   = SIGNAL_CONFIRMATION_MATRIX.get(regime_key, 6)

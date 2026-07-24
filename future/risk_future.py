@@ -146,6 +146,7 @@ class RiskManager(BaseRiskManager):
         atr:         Optional[float] = None,
         margin_mode: str             = "isolated",
         exchange_min_cost: Optional[float] = None,
+        reserve_slot: bool           = True,
     ) -> RiskAssessment:
         async with self._evaluate_lock:
             return await self._evaluate_order_locked(
@@ -153,6 +154,7 @@ class RiskManager(BaseRiskManager):
                 leverage=leverage, existing_position_side=existing_position_side,
                 stop_loss=stop_loss, take_profit=take_profit, atr=atr,
                 margin_mode=margin_mode, exchange_min_cost=exchange_min_cost,
+                reserve_slot=reserve_slot,
             )
 
     async def _evaluate_order_locked(
@@ -168,6 +170,7 @@ class RiskManager(BaseRiskManager):
         atr:         Optional[float],
         margin_mode: str,
         exchange_min_cost: Optional[float],
+        reserve_slot: bool = True,
     ) -> RiskAssessment:
 
         if self._halted:
@@ -336,7 +339,12 @@ class RiskManager(BaseRiskManager):
         # is_opening_new (add/reduce/close tidak konsumsi slot baru, sudah
         # di-return lebih awal). Caller (_handle_entry) WAJIB
         # release_position_slot() kalau entry gagal setelah titik ini.
-        if is_opening_new and assessment.is_approved:
+        # [SLOT-LEAK FIX] reserve_slot=False = mode PROBE (read-only,
+        # dipakai commander G4) -- assessment tanpa konsumsi slot. Tanpa
+        # flag ini, probe G4 me-reserve slot yang TIDAK PERNAH di-release
+        # (commander bukan eksekutor), membuat counter bocor dan entry sah
+        # ditolak "Max open positions" oleh reservasi probe-nya sendiri.
+        if reserve_slot and is_opening_new and assessment.is_approved:
             self.reserve_position_slot()
         return assessment
 

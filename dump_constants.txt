@@ -1,0 +1,522 @@
+═══════════════════════════════════════════════════════
+ CONSTANTS.PY — seluruh isi file
+═══════════════════════════════════════════════════════
+./engine/constants.py
+
+     1	"""
+     2	constants.py
+     3	AlgoTrader Pro v7.0 — "The Intelligence Pipeline"
+     4	
+     5	"""
+     6	
+     7	from __future__ import annotations
+     8	
+     9	from typing import Dict, FrozenSet, Tuple
+    10	
+    11	COL_EMA9   = "EMA_9"
+    12	COL_EMA21  = "EMA_21"
+    13	COL_EMA50  = "EMA_50"
+    14	COL_EMA100 = "EMA_100"
+    15	COL_EMA200 = "EMA_200"
+    16	COL_RSI = "RSI_14"
+    17	COL_ATR = "ATRr_14"
+    18	COL_ATR_PCT = "ATRr_14_pct"
+    19	COL_MACD_LINE   = "MACD_12_26_9"
+    20	COL_MACD_SIGNAL = "MACDs_12_26_9"
+    21	COL_MACD_HIST   = "MACDh_12_26_9"
+    22	COL_STOCH_K = "STOCHRSIk_14_14_3_3"
+    23	COL_STOCH_D = "STOCHRSId_14_14_3_3"
+    24	COL_ADX      = "ADX_14"
+    25	COL_PLUS_DI  = "DMP_14"
+    26	COL_MINUS_DI = "DMN_14"
+    27	COL_OBV = "OBV"
+    28	COL_MFI = "MFI_14"
+    29	COL_BB_UPPER    = "BBU_20_2.0"
+    30	COL_BB_MIDDLE   = "BBM_20_2.0"
+    31	COL_BB_LOWER    = "BBL_20_2.0"
+    32	COL_BB_WIDTH    = "BBB_20_2.0"
+    33	COL_BB_POSITION = "BBP_20_2.0"
+    34	COL_KC_UPPER  = "KCUe_20_2"
+    35	COL_KC_LOWER  = "KCLe_20_2"
+    36	COL_KC_MIDDLE = "KCBe_20_2"
+    37	COL_SQUEEZE = "SQZ_20_2.0_20_1.5"
+    38	COL_SUPERTREND     = "SUPERT_7_3.0"
+    39	COL_SUPERTREND_DIR = "SUPERTd_7_3.0"
+    40	COL_VWAP         = "VWAP_D"
+    41	COL_VWAP_UPPER_1 = "VWAP_D_upper_1"
+    42	COL_VWAP_LOWER_1 = "VWAP_D_lower_1"
+    43	COL_VWAP_UPPER_2 = "VWAP_D_upper_2"
+    44	COL_VWAP_LOWER_2 = "VWAP_D_lower_2"
+    45	COL_RESISTANCE   = "_resistance"
+    46	COL_VOL_MA       = "_vol_ma"
+    47	COL_QVOL_MA      = "_qvol_ma"
+    48	COL_OBV_MA       = "_obv_ma"
+    49	COL_ATR_PCTILE   = "_atr_percentile"
+    50	COL_ATR_PCTILE_100 = "_atr_percentile_100"
+    51	
+    52	# ── Kolom v4/v5 — indikator tambahan enrich_production ────────────────────────
+    53	# Williams %R
+    54	COL_WILLR       = "WILLR_14"
+    55	
+    56	# Rate of Change
+    57	COL_ROC         = "ROC_9"
+    58	COL_ROC_SLOPE   = "ROC_SLOPE_9_5"
+    59	
+    60	# RSI slope & divergence
+    61	COL_RSI_SLOPE   = "RSI_14_slope"
+    62	COL_RSI_DIV     = "RSI_DIV_14"
+    63	
+    64	# EMA crossover signal (+1 bullish, -1 bearish, 0 none)
+    65	COL_EMAXS_9_21  = "EMAXS_9_21"
+    66	COL_EMAXS_21_50 = "EMAXS_21_50"
+    67	
+    68	# CCI
+    69	COL_CCI         = "CCI_20"
+    70	
+    71	# Donchian Channel
+    72	COL_DCU         = "DCU_20"
+    73	COL_DCM         = "DCM_20"
+    74	COL_DCL         = "DCL_20"
+    75	
+    76	# Chaikin Money Flow
+    77	COL_CMF         = "CMF_20"
+    78	
+    79	# Parabolic SAR
+    80	COL_PSAR        = "PSAR"
+    81	COL_PSAR_DIR    = "PSAR_DIR"    # +1 = bullish trend, -1 = bearish trend
+    82	COL_PSAR_REV    = "PSAR_REV"    # 1 = reversal terjadi di bar ini, 0 = tidak
+    83	
+    84	# Ichimoku
+    85	COL_ICH_TENKAN  = "ICH_TENKAN"
+    86	COL_ICH_KIJUN   = "ICH_KIJUN"
+    87	COL_ICH_SPAN_A  = "ICH_SPAN_A"
+    88	COL_ICH_SPAN_B  = "ICH_SPAN_B"
+    89	COL_ICH_CHIKOU  = "ICH_CHIKOU"
+    90	
+    91	# VWMA
+    92	COL_VWMA        = "VWMA_20"
+    93	
+    94	# EMA stack alignment score (0–100)
+    95	COL_EMA_STACK_SCORE = "_ema_stack_score"
+    96	
+    97	REQUIRED_INDICATOR_COLS: Tuple[str, ...] = (
+    98	    COL_EMA9,
+    99	    COL_EMA21,
+   100	    COL_EMA50,
+   101	    COL_RSI,
+   102	    COL_ATR,
+   103	)
+   104	
+   105	# [CATATAN] PRODUCTION_INDICATOR_COLS ini adalah referensi dokumentasi kolom
+   106	# yang dihasilkan enrich_production() — namun saat ini TIDAK DIPAKAI di manapun
+   107	# dalam codebase (grep: tidak ada caller selain definisi ini sendiri).
+   108	# Komentar "Referensikan via konstanta ini, BUKAN hardcode string literal" tidak
+   109	# akurat karena kode aktual tidak pernah menggunakan list ini untuk validasi
+   110	# atau filtering — setiap indikator mengakses kolomnya sendiri langsung.
+   111	# Juga: beberapa kolom penting yang di-generate ta_compat.py tidak ada di sini
+   112	# (DMP_14, DMN_14, VWMA_20, ICH_*, OBV_MA, VOL_MA, dll) — list ini tidak lengkap.
+   113	# Dipertahankan sebagai dokumentasi referensi saja, bukan untuk dipakai di runtime.
+   114	PRODUCTION_INDICATOR_COLS: Tuple[str, ...] = (
+   115	    # EMA stack
+   116	    COL_EMA9, COL_EMA21, COL_EMA50, COL_EMA100, COL_EMA200,
+   117	    COL_EMA_STACK_SCORE, COL_EMAXS_9_21, COL_EMAXS_21_50,
+   118	    # Momentum
+   119	    COL_RSI, COL_RSI_SLOPE, COL_RSI_DIV,
+   120	    COL_MACD_LINE, COL_MACD_SIGNAL, COL_MACD_HIST,
+   121	    COL_STOCH_K, COL_STOCH_D,
+   122	    COL_CCI, COL_WILLR, COL_ROC, COL_ROC_SLOPE,
+   123	    # Volatility
+   124	    COL_ATR, COL_ATR_PCT, COL_ATR_PCTILE_100,
+   125	    COL_BB_UPPER, COL_BB_MIDDLE, COL_BB_LOWER, COL_BB_WIDTH, COL_BB_POSITION,
+   126	    COL_KC_UPPER, COL_KC_MIDDLE, COL_KC_LOWER,
+   127	    COL_SQUEEZE, COL_ADX,
+   128	    # Structure
+   129	    COL_SUPERTREND, COL_SUPERTREND_DIR,
+   130	    COL_DCU, COL_DCM, COL_DCL,
+   131	    COL_PSAR, COL_PSAR_DIR, COL_PSAR_REV,
+   132	    # Strength
+   133	    COL_OBV, COL_MFI, COL_CMF,
+   134	    # VWAP
+   135	    COL_VWAP, COL_VWAP_UPPER_1, COL_VWAP_LOWER_1,
+   136	    COL_VWAP_UPPER_2, COL_VWAP_LOWER_2,
+   137	)
+   138	
+   139	TREND_REQUIRED_COLS: Tuple[str, ...] = (
+   140	    COL_EMA9,
+   141	    COL_EMA21,
+   142	    COL_EMA50,
+   143	)
+   144	
+   145	TREND_FULL_COLS: Tuple[str, ...] = (
+   146	    COL_EMA9,
+   147	    COL_EMA21,
+   148	    COL_EMA50,
+   149	    COL_EMA100,
+   150	    COL_EMA200,
+   151	    COL_SUPERTREND,
+   152	    COL_SUPERTREND_DIR,
+   153	    COL_VWAP,
+   154	)
+   155	
+   156	MOMENTUM_REQUIRED_COLS: Tuple[str, ...] = (
+   157	    COL_RSI,
+   158	)
+   159	
+   160	MOMENTUM_FULL_COLS: Tuple[str, ...] = (
+   161	    COL_RSI,
+   162	    COL_MACD_LINE,
+   163	    COL_MACD_SIGNAL,
+   164	    COL_MACD_HIST,
+   165	    COL_STOCH_K,
+   166	    COL_STOCH_D,
+   167	)
+   168	
+   169	STRENGTH_REQUIRED_COLS: Tuple[str, ...] = (
+   170	    "volume",
+   171	)
+   172	
+   173	STRENGTH_FULL_COLS: Tuple[str, ...] = (
+   174	    "volume",
+   175	    COL_ADX,
+   176	    COL_PLUS_DI,
+   177	    COL_MINUS_DI,
+   178	    COL_OBV,
+   179	    COL_MFI,
+   180	)
+   181	
+   182	VOLATILITY_REQUIRED_COLS: Tuple[str, ...] = (
+   183	    COL_ATR,
+   184	    COL_BB_UPPER,
+   185	    COL_BB_LOWER,
+   186	    COL_BB_MIDDLE,
+   187	)
+   188	
+   189	VOLATILITY_FULL_COLS: Tuple[str, ...] = (
+   190	    COL_ATR,
+   191	    COL_BB_UPPER,
+   192	    COL_BB_MIDDLE,
+   193	    COL_BB_LOWER,
+   194	    COL_BB_WIDTH,
+   195	    COL_BB_POSITION,
+   196	    COL_KC_UPPER,
+   197	    COL_KC_LOWER,
+   198	    COL_KC_MIDDLE,
+   199	    COL_SQUEEZE,
+   200	)
+   201	
+   202	PATTERN_REQUIRED_COLS: Tuple[str, ...] = (
+   203	    "open",
+   204	    "high",
+   205	    "low",
+   206	    "close",
+   207	    "volume",
+   208	)
+   209	
+   210	ALL_INDICATOR_COLS: Tuple[str, ...] = (
+   211	    *TREND_FULL_COLS,
+   212	    *MOMENTUM_FULL_COLS,
+   213	    *STRENGTH_FULL_COLS,
+   214	    *VOLATILITY_FULL_COLS,
+   215	)
+   216	
+   217	SCORE_MIN     = 0.0
+   218	SCORE_MAX     = 100.0
+   219	SCORE_NEUTRAL = 50.0
+   220	RSI_OVERSOLD_EXTREME  = 20.0
+   221	RSI_OVERSOLD          = 30.0
+   222	RSI_BULL_ZONE_LOW     = 40.0
+   223	RSI_BULL_ZONE_CENTER  = 55.0
+   224	RSI_OVERBOUGHT        = 70.0
+   225	RSI_OVERBOUGHT_EXTREME = 80.0
+   226	RSI_DIVERGENCE_THRESHOLD = 5.0
+   227	RSI_SLOPE_STRONG_UP   = 2.0
+   228	RSI_SLOPE_STRONG_DOWN = -2.0
+   229	MACD_HIST_STRONG_POSITIVE = 0.0
+   230	MACD_HIST_REVERSAL_MIN_BARS = 1
+   231	STOCH_OVERSOLD   = 20.0
+   232	STOCH_OVERBOUGHT = 80.0
+   233	STOCH_CROSS_ZONE_BONUS = 15.0
+   234	ADX_WEAK_TREND    = 20.0
+   235	ADX_MODERATE_TREND = 25.0
+   236	ADX_STRONG_TREND  = 35.0
+   237	ADX_VERY_STRONG   = 50.0
+   238	
+   239	EMA_STACK_PAIRS = (
+   240	    (COL_EMA9,  COL_EMA21),
+   241	    (COL_EMA21, COL_EMA50),
+   242	    (COL_EMA50, COL_EMA100),
+   243	    (COL_EMA100, COL_EMA200),
+   244	)
+   245	
+   246	EMA_STACK_WEIGHTS: Dict[int, float] = {
+   247	    0: 30.0,
+   248	    1: 30.0,
+   249	    2: 20.0,
+   250	    3: 20.0,
+   251	}
+   252	
+   253	EMA_GAP_BONUS_MAX = 10.0
+   254	SUPERTREND_BULL_SCORE = 85.0
+   255	SUPERTREND_BEAR_SCORE = 15.0
+   256	VOLUME_RATIO_WEAK     = 0.8
+   257	VOLUME_RATIO_NORMAL   = 1.0
+   258	VOLUME_RATIO_ELEVATED = 1.5
+   259	VOLUME_RATIO_STRONG   = 2.0
+   260	VOLUME_RATIO_SPIKE    = 3.0
+   261	VOLUME_RATIO_CLIMAX   = 5.0
+   262	VOLUME_CLIMAX_PENALTY = 20.0
+   263	BB_WIDTH_SQUEEZE    = 0.02
+   264	BB_WIDTH_NORMAL     = 0.05
+   265	BB_WIDTH_EXPANSION  = 0.10
+   266	BB_POS_BUY_ZONE     = 0.35
+   267	BB_POS_NEUTRAL_LOW  = 0.35
+   268	BB_POS_NEUTRAL_HIGH = 0.65
+   269	BB_POS_SELL_ZONE    = 0.65
+   270	ATR_PERCENTILE_LOW    = 25.0
+   271	ATR_PERCENTILE_NORMAL = 50.0
+   272	ATR_PERCENTILE_HIGH   = 75.0
+   273	ATR_PERCENTILE_VERY_HIGH = 90.0
+   274	PATTERN_BASE_SCORE_ENGULFING   = 75.0
+   275	PATTERN_BASE_SCORE_HAMMER      = 70.0
+   276	PATTERN_BASE_SCORE_DOJI        = 55.0
+   277	PATTERN_BASE_SCORE_MARUBOZU    = 80.0
+   278	PATTERN_VOLUME_CONFIRM_BONUS   = 15.0
+   279	PATTERN_CONTEXT_SUPPORT_BONUS  = 15.0
+   280	PATTERN_HIGHER_TF_ALIGN_BONUS  = 10.0
+   281	PATTERN_NO_CONFIRM_PENALTY     = -20.0
+   282	PATTERN_MIN_BODY_PCT_ENGULFING = 0.40
+   283	PATTERN_MIN_BODY_PCT_HAMMER    = 0.10
+   284	PATTERN_DOJI_MAX_BODY_PCT      = 0.05
+   285	PATTERN_HAMMER_SHADOW_RATIO    = 2.0
+   286	PATTERN_HAMMER_UPPER_SHADOW_MAX = 0.5
+   287	MFI_OVERSOLD   = 20.0
+   288	MFI_OVERBOUGHT = 80.0
+   289	
+   290	REGIME_SCORE_MODIFIERS: Dict[str, float] = {
+   291	    "trending_bull":      1.0,
+   292	    "trending_bear":      0.0,
+   293	    "ranging":            0.85,
+   294	    "volatile_expansion": 0.70,
+   295	    "undefined":          0.75,
+   296	}
+   297	
+   298	
+   299	MAX_CANDLE_CACHE = 200
+   300	MIN_CANDLES_FOR_INDICATORS = 60
+   301	MIN_CANDLES_FOR_EMA200 = 210
+   302	CANDLE_POLL_INTERVAL   = 10
+   303	SL_TP_CHECK_INTERVAL   = 5
+   304	SNAPSHOT_INTERVAL      = 60
+   305	DAILY_SUMMARY_HOUR     = 23
+   306	DAILY_SUMMARY_MIN      = 55
+   307	OBSERVATION_CACHE_TTL_SECONDS = 60
+   308	OBSERVATION_STALE_THRESHOLD_SECONDS = 120
+   309	
+   310	TIMEFRAME_SECONDS: Dict[str, int] = {
+   311	    "1m":  60,
+   312	    "3m":  180,
+   313	    "5m":  300,
+   314	    "15m": 900,
+   315	    "30m": 1800,
+   316	    "1h":  3600,
+   317	    "2h":  7200,
+   318	    "4h":  14400,
+   319	    "6h":  21600,
+   320	    "8h":  28800,
+   321	    "12h": 43200,
+   322	    "1d":  86400,
+   323	    "3d":  259200,
+   324	    "1w":  604800,
+   325	}
+   326	
+   327	EXCHANGE_RETRY_COUNT    = 3
+   328	EXCHANGE_RETRY_DELAY    = 1.5
+   329	SENTIMENT_API_TIMEOUT   = 5
+   330	SENTIMENT_CACHE_TTL     = 300
+   331	DIAGNOSA_API_TIMEOUT    = 60
+   332	MIN_PORTFOLIO_REFRESH_INTERVAL = 5.0
+   333	MAX_DB_SNAPSHOTS        = 10_000
+   334	MAX_DB_API_METRICS      = 1_000
+   335	MAX_DB_LOGS             = 5_000
+   336	MAX_DB_MARKET_REGIMES   = 30_000
+   337	MAX_DB_SIGNAL_SCORES    = 50_000
+   338	MAX_DB_PARAMETER_HISTORY = 1_000
+   339	SNAPSHOT_DEDUP_SECS     = 55
+   340	WS_MAX_STALE_SECS         = 30
+   341	WS_RECONNECT_DELAY        = 5
+   342	WS_MAX_RETRIES            = 10
+   343	WS_POLL_INTERVAL          = 10
+   344	ICEBERG_THRESHOLD_PCT  = 3.0
+   345	ICEBERG_CHUNK_COUNT    = 4
+   346	FILL_TIMEOUT_SECS      = 30
+   347	FILL_POLL_INTERVAL     = 2.0
+   348	MAX_SLIPPAGE_DEFAULT   = 0.5
+   349	SPREAD_LIMIT_DEFAULT   = 0.15
+   350	SIGNAL_ORIGIN_MAX_LEN  = 490
+   351	
+   352	MIN_SAMPLE_FOR_ATTRIBUTION     = 30
+   353	MIN_SAMPLE_FOR_INDICATOR_STATS = 20
+   354	ANALYTICS_REFRESH_INTERVAL_S   = 3600
+   355	ANALYTICS_TRIGGER_ON_N_TRADES  = 50
+   356	WIN_RATE_ROLLING_LONG  = 30
+   357	WIN_RATE_ROLLING_SHORT = 10
+   358	INSIGHT_MIN_WIN_RATE_DIFF   = 20.0
+   359	INSIGHT_MIN_SAMPLE_SIZE     = 30
+   360	INDICATOR_PREDICTIVE_THRESHOLD = 15.0
+   361	META_LEARNER_ENABLED_DEFAULT    = False
+   362	META_LEARNER_MIN_SAMPLE         = 50
+   363	META_LEARNER_MAX_THRESHOLD_CHANGE = 10.0
+   364	META_LEARNER_COOLING_OFF_DAYS   = 14
+   365	META_LEARNER_APPROVAL_WINDOW_H  = 24
+   366	META_WIN_RATE_LOW_THRESHOLD     = 45.0
+   367	META_WIN_RATE_HIGH_THRESHOLD    = 75.0
+   368	
+   369	META_PARAM_BOUNDS: Dict[str, Tuple[float, float]] = {
+   370	    "entry_threshold":         (55.0, 85.0),
+   371	    "volume_multiplier":       (1.0, 5.0),
+   372	    "rsi_min":                 (20.0, 60.0),  # mean_revert butuh rsi_min sampai 20.0
+   373	    "rsi_max":                 (60.0, 90.0),
+   374	    "atr_sl_mult":             (1.0, 4.0),
+   375	    "atr_tp_mult":             (1.5, 10.0),
+   376	    "trailing_activation_pct": (0.5, 5.0),
+   377	    "trailing_gap_pct":        (0.2, 3.0),
+   378	    "quick_sl_pct":            (0.5, 5.0),
+   379	    "quick_tp_pct":            (1.0, 10.0),
+   380	}
+   381	
+   382	META_MIN_PROJECTED_IMPROVEMENT = 3.0
+   383	META_TRACK_TRADES_AFTER_APPLY = 30
+   384	META_REVERT_WIN_RATE_DROP = 10.0
+   385	
+   386	REGIME_VOLATILE_ATR_PERCENTILE_MIN = 70.0
+   387	REGIME_VOLATILE_BB_WIDTH_MIN       = 0.06
+   388	REGIME_TRENDING_ADX_MIN            = 22.0
+   389	REGIME_TRENDING_STRONG_ADX         = 30.0
+   390	REGIME_BULL_EMA_REQUIRED_PAIRS     = 2
+   391	REGIME_BEAR_EMA_REQUIRED_PAIRS     = 2
+   392	REGIME_RANGING_ADX_MAX             = 25.0
+   393	REGIME_RANGING_BB_WIDTH_MAX        = 0.06
+   394	REGIME_HYSTERESIS_BARS             = 3
+   395	REGIME_CONFIDENCE_HIGH_ADX         = 40.0
+   396	REGIME_CONFIDENCE_LOW_ADX          = 25.0
+   397	REGIME_MIN_CONFIDENCE_TO_TRADE     = 0.40
+   398	REGIME_ACTION_COOLDOWN_SECS        = 120   # detik cooldown setelah aksi transisi
+   399	REGIME_STABILITY_MIN_CYCLES        = 2     # cycle minimum regime stabil sebelum aksi
+   400	ENGULFING_MIN_BODY_RATIO    = 0.40
+   401	ENGULFING_COVERAGE_RATIO    = 1.05
+   402	HAMMER_LOWER_SHADOW_MULT    = 2.0
+   403	HAMMER_UPPER_SHADOW_MAX_MULT = 0.5
+   404	HAMMER_MIN_BODY_PCT         = 0.05
+   405	DOJI_MAX_BODY_PCT           = 0.05
+   406	DOJI_BALANCED_SHADOW_RATIO  = 2.0
+   407	MARUBOZU_MIN_BODY_PCT       = 0.80
+   408	PATTERN_NEAR_SUPPORT_PCT    = 0.015
+   409	PATTERN_NEAR_RESISTANCE_PCT = 0.015
+   410	PATTERN_VOLUME_CONFIRM_RATIO = 1.2
+   411	
+   412	KELLY_MIN_SAMPLE            = 30
+   413	KELLY_FRACTION              = 0.5
+   414	KELLY_LOOKBACK_TRADES       = 50
+   415	KELLY_MAX_SIZE_PCT          = 10.0
+   416	KELLY_MIN_SIZE_PCT          = 0.5
+   417	CORRELATED_POSITION_PENALTY = 0.50
+   418	CORRELATION_HIGH_THRESHOLD  = 0.75
+   419	
+   420	CORRELATION_GROUPS: Dict[str, FrozenSet[str]] = {
+   421	    "crypto_majors":  frozenset({"BTC", "ETH"}),
+   422	    "large_cap_alt":  frozenset({"SOL", "BNB", "AVAX", "DOT", "LINK", "ADA"}),
+   423	    "mid_cap_defi":   frozenset({"UNI", "AAVE", "SNX"}),
+   424	    "high_beta_alt":  frozenset({"NEAR", "APT", "SUI", "FET", "INJ", "OP", "ARB"}),
+   425	    "meme_tokens":    frozenset({"PEPE", "DOGE", "SHIB", "FLOKI", "WIF", "BONK"}),
+   426	    "payment_l1":     frozenset({"XRP", "LTC"}),
+   427	    "polygon_eco":    frozenset({"POL"}),
+   428	    "cosmos_eco":     frozenset({"ATOM"}),
+   429	}
+   430	
+   431	def get_correlation_group(base: str) -> str:
+   432	    for group_name, members in CORRELATION_GROUPS.items():
+   433	        if base.upper() in members:
+   434	            return group_name
+   435	    return ""
+   436	
+   437	SCORE_DISPLAY_HIGH   = 80.0
+   438	SCORE_DISPLAY_MEDIUM = 60.0
+   439	TG_MAX_MESSAGE_LEN = 3800
+   440	DASHBOARD_API_KEY_MIN_LEN = 16
+   441	LOG_ROTATION_MAX_BYTES = 50 * 1024 * 1024
+   442	LOG_ROTATION_BACKUP_COUNT = 30
+   443	
+   444	APP_VERSION = "7.0"
+   445	APP_NAME    = "AlgoTrader Pro"
+   446	APP_CODENAME = "The Intelligence Pipeline"
+   447	
+   448	def _validate_constants() -> None:
+   449	
+   450	    assert SCORE_MIN < SCORE_NEUTRAL < SCORE_MAX, \
+   451	        f"Score range tidak valid: {SCORE_MIN} < {SCORE_NEUTRAL} < {SCORE_MAX}"
+   452	
+   453	    assert (RSI_OVERSOLD_EXTREME < RSI_OVERSOLD < RSI_BULL_ZONE_LOW
+   454	            < RSI_BULL_ZONE_CENTER < RSI_OVERBOUGHT < RSI_OVERBOUGHT_EXTREME), \
+   455	        "RSI boundaries harus ascending"
+   456	
+   457	    assert (ADX_WEAK_TREND < ADX_MODERATE_TREND < ADX_STRONG_TREND < ADX_VERY_STRONG), \
+   458	        "ADX boundaries harus ascending"
+   459	
+   460	    assert STOCH_OVERSOLD < STOCH_OVERBOUGHT, \
+   461	        "Stoch oversold harus lebih kecil dari overbought"
+   462	
+   463	    assert 0.0 < KELLY_FRACTION <= 1.0, \
+   464	        f"KELLY_FRACTION harus (0, 1], got: {KELLY_FRACTION}"
+   465	    assert KELLY_MIN_SIZE_PCT < KELLY_MAX_SIZE_PCT, \
+   466	        "Kelly min size harus lebih kecil dari max size"
+   467	
+   468	    assert REGIME_HYSTERESIS_BARS >= 1, \
+   469	        "Regime hysteresis minimal 1 bar"
+   470	
+   471	    ema_weight_sum = sum(EMA_STACK_WEIGHTS.values())
+   472	    assert abs(ema_weight_sum - 100.0) < 0.001, \
+   473	        f"EMA_STACK_WEIGHTS harus sum ke 100, got: {ema_weight_sum}"
+   474	
+   475	    assert REGIME_SCORE_MODIFIERS["trending_bear"] == 0.0, \
+   476	        "REGIME_SCORE_MODIFIERS['trending_bear'] HARUS 0.0"
+   477	
+   478	    for param, (lo, hi) in META_PARAM_BOUNDS.items():
+   479	        assert lo < hi, f"META_PARAM_BOUNDS['{param}']: min {lo} >= max {hi}"
+   480	
+   481	    for tf, secs in TIMEFRAME_SECONDS.items():
+   482	        assert secs > 0, f"TIMEFRAME_SECONDS['{tf}'] harus positif"
+   483	
+   484	    seen: set = set()
+   485	    for group_name, members in CORRELATION_GROUPS.items():
+   486	        for m in members:
+   487	            assert m not in seen, \
+   488	                f"'{m}' muncul di lebih dari satu CORRELATION_GROUPS group"
+   489	            seen.add(m)
+   490	
+   491	    # [TAMBAHAN] Validasi konsistensi SIGNAL_CONFIRMATION_MATRIX vs REGIME_SCORE_MODIFIERS
+   492	    # Kedua dict harus punya key yang sama persis — kalau ada regime baru ditambahkan
+   493	    # ke salah satu, harus ditambahkan ke keduanya juga.
+   494	    scm_keys = set(SIGNAL_CONFIRMATION_MATRIX.keys())
+   495	    rsm_keys = set(REGIME_SCORE_MODIFIERS.keys())
+   496	    assert scm_keys == rsm_keys, (
+   497	        f"SIGNAL_CONFIRMATION_MATRIX dan REGIME_SCORE_MODIFIERS harus punya "
+   498	        f"key yang sama. SCM extra: {scm_keys - rsm_keys}, RSM extra: {rsm_keys - scm_keys}"
+   499	    )
+   500	    assert SIGNAL_CONFIRMATION_MATRIX.get("trending_bear", 0) >= 100, \
+   501	        "SIGNAL_CONFIRMATION_MATRIX['trending_bear'] harus sangat besar (>=100) untuk blokir buy"
+   502	
+   503	# [BUG-FIX] Sebelumnya: SIGNAL_CONFIRMATION_MATRIX didefinisikan DUA KALI
+   504	# (di atas APP_CODENAME dan di bawah _validate_constants). Definisi pertama
+   505	# selalu ditimpa definisi kedua — kode yang membingungkan dan rawan bug kalau
+   506	# suatu saat dua versi tidak sengaja dibuat berbeda. Definisi pertama dihapus,
+   507	# hanya satu definisi yang tersisa (di bawah, langsung sebelum _validate_constants()).
+   508	# Jumlah konfirmasi BUY berturut-turut yang dibutuhkan per regime
+   509	SIGNAL_CONFIRMATION_MATRIX: dict = {
+   510	    "trending_bull":      5,  # Trending = butuh 5x konfirmasi (75 menit di 15m)
+   511	    "volatile_expansion": 3,  # Volatile = cepat tangkap momentum
+   512	    "ranging":            4,  # Ranging = sedang
+   513	    "undefined":          6,  # Undefined = paling ketat
+   514	    "trending_bear":    999,  # Bear = tidak pernah buy
+   515	}
+   516	
+   517	_validate_constants()

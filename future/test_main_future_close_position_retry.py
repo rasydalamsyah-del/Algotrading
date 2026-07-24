@@ -46,6 +46,10 @@ def _make_trade():
 
 def _build_fake_self(close_position_side_effect=None):
     fake_self = SimpleNamespace()
+    # [DOUBLE-COUNT FIX] _do_close_position() kini memegang _equity_lock
+    # (mirror _handle_entry) -- stub wajib menyediakannya, pola sama dgn
+    # test_main_future_entry_slot_reservation.py baris ~61.
+    fake_self._equity_lock = asyncio.Lock()
     fake_self.risk_manager = RiskManager({})
     fake_self.executor = SimpleNamespace(execute_signal=AsyncMock(return_value=_make_trade()))
     fake_self._close_retry_count = {}
@@ -70,6 +74,7 @@ def _build_fake_self(close_position_side_effect=None):
     # spt biasa" (perilaku lama, tidak berubah). Skenario "posisi sudah
     # tidak ada" diuji terpisah di future/test_item15_verify_before_send.py.
     fake_self.exchange = SimpleNamespace(
+        get_taker_fee=lambda symbol: 0.0005,
         fetch_positions=AsyncMock(return_value=[
             {"symbol": "TEST/USDT", "side": "long", "amount": 1.0},
         ]),

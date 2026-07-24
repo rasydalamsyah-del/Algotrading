@@ -26,6 +26,7 @@ from engine.strategy_base import (
 )
 from engine.profiles.base_profile import CoinProfile, AdaptiveParams, StrategyProfile
 from engine.profiles.registry import get_coin_profile
+from engine.constants import APP_VERSION
 
 log = logging.getLogger("strategy")
 

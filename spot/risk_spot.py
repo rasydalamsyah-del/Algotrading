@@ -30,6 +30,7 @@ class RiskManager(BaseRiskManager):
         atr:         Optional[float] = None,
         free_coin_balance: Optional[float] = None,
         exchange_min_cost: Optional[float] = None,
+        reserve_slot: bool = True,
     ) -> RiskAssessment:
         async with self._evaluate_lock:
             return await self._evaluate_order_locked(
@@ -37,6 +38,7 @@ class RiskManager(BaseRiskManager):
                 stop_loss=stop_loss, take_profit=take_profit, atr=atr,
                 free_coin_balance=free_coin_balance,
                 exchange_min_cost=exchange_min_cost,
+                reserve_slot=reserve_slot,
             )
 
     async def _evaluate_order_locked(
@@ -50,6 +52,7 @@ class RiskManager(BaseRiskManager):
         atr:         Optional[float] = None,
         free_coin_balance: Optional[float] = None,
         exchange_min_cost: Optional[float] = None,
+        reserve_slot: bool = True,
     ) -> RiskAssessment:
 
         if self._halted:
@@ -238,7 +241,10 @@ class RiskManager(BaseRiskManager):
         # spot SELALU berarti posisi baru (side="sell" SELALU menutup
         # existing, tidak lewat jalur ini). Caller (_handle_buy) WAJIB
         # release_position_slot() kalau entry gagal setelah titik ini.
-        if side == "buy" and assessment.is_approved:
+        # [SLOT-LEAK FIX] reserve_slot=False = mode PROBE (read-only,
+        # dipakai commander G4) -- lihat komentar identik di
+        # future/risk_future.py utk penjelasan lengkap kebocoran slot.
+        if reserve_slot and side == "buy" and assessment.is_approved:
             self.reserve_position_slot()
         return assessment
 

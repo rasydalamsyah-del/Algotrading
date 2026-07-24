@@ -1,0 +1,2721 @@
+═══════════════════════════════════════════════════════
+ 1. TREN — seluruh isi classifier.py (bagian deteksi tren)
+═══════════════════════════════════════════════════════
+38:class _RegimeBuffer:
+45:    def propose(self, new_regime: MarketRegime, confidence: float, hysteresis: int) -> Tuple[MarketRegime, float]:
+119:def _get_buffer(symbol: str) -> _RegimeBuffer:
+125:def _count_bullish_ema_pairs(iset: IndicatorSet) -> int:
+139:def _count_bearish_ema_pairs(iset: IndicatorSet) -> int:
+153:def _supertrend_is_bull(iset: IndicatorSet) -> Optional[bool]:
+158:def _is_volatile(iset: IndicatorSet) -> bool:
+179:def _is_ranging(iset: IndicatorSet) -> bool:
+193:def _calc_confidence(iset: IndicatorSet, regime: MarketRegime) -> float:
+248:def _classify_raw(iset: IndicatorSet) -> Tuple[MarketRegime, float]:
+302:def classify_regime(
+326:def classify_from_observation(
+346:def is_tradeable_regime(
+391:def get_regime_history(symbol: str, last_n: int = 10) -> list:
+396:def get_current_regime(symbol: str) -> Tuple[MarketRegime, float]:
+403:def reset_regime(symbol: str) -> None:
+409:def summarize_all_regimes() -> str:
+424:class MarketClassifier:
+425:    def classify(self, observation: ObservationReport, db_manager=None) -> Tuple[MarketRegime, float]:
+450:def is_regime_transition(symbol: str) -> tuple:
+
+--- Isi lengkap file classifier.py ---
+     1	"""
+     2	intelligence/classifier.py
+     3	AlgoTrader Pro v7.0 — "The Intelligence Pipeline"
+     4	
+     5	"""
+     6	
+     7	from __future__ import annotations
+     8	
+     9	import logging
+    10	import threading
+    11	from collections import deque
+    12	from dataclasses import dataclass, field
+    13	from typing import Deque, Dict, Optional, Tuple
+    14	
+    15	from engine.constants import (
+    16	    REGIME_VOLATILE_ATR_PERCENTILE_MIN,
+    17	    REGIME_VOLATILE_BB_WIDTH_MIN,
+    18	    REGIME_TRENDING_ADX_MIN,
+    19	    REGIME_TRENDING_STRONG_ADX,
+    20	    REGIME_BULL_EMA_REQUIRED_PAIRS,
+    21	    REGIME_BEAR_EMA_REQUIRED_PAIRS,
+    22	    REGIME_RANGING_ADX_MAX,
+    23	    REGIME_RANGING_BB_WIDTH_MAX,
+    24	    REGIME_HYSTERESIS_BARS,
+    25	    REGIME_CONFIDENCE_HIGH_ADX,
+    26	    REGIME_CONFIDENCE_LOW_ADX,
+    27	    REGIME_MIN_CONFIDENCE_TO_TRADE,
+    28	)
+    29	from engine.core.models import (
+    30	    IndicatorSet,
+    31	    MarketRegime,
+    32	    ObservationReport,
+    33	)
+    34	
+    35	log = logging.getLogger("intelligence.classifier")
+    36	
+    37	@dataclass
+    38	class _RegimeBuffer:
+    39	    current_regime: MarketRegime = MarketRegime.UNDEFINED
+    40	    current_confidence: float = 0.0
+    41	    pending_regime: MarketRegime = MarketRegime.UNDEFINED
+    42	    pending_count: int = 0
+    43	    history: Deque[MarketRegime] = field(default_factory=lambda: deque(maxlen=10))
+    44	
+    45	    def propose(self, new_regime: MarketRegime, confidence: float, hysteresis: int) -> Tuple[MarketRegime, float]:
+    46	        self.history.append(new_regime)
+    47	
+    48	        # [HYSTERESIS-BOOTSTRAP FIX -- data produksi: 172/174 sampel regime
+    49	        # terjebak UNDEFINED/conf=0.0] Buffer mulai UNDEFINED/0.0 dan butuh
+    50	        # N usulan IDENTIK beruntun; usulan berbeda me-reset antrean -- di
+    51	        # pasar 15m yang berisik antrean tak pernah selesai utk mayoritas
+    52	        # simbol -> raw classification yang benar dihitung lalu DIBUANG,
+    53	        # sistem dihukum 3x (conf 0.0 + threshold & modifier undefined)
+    54	        # karena ANTREAN, bukan karena datanya. Fase BOOTSTRAP: selama
+    55	        # belum ada regime mapan, teruskan raw dgn penalti conf x0.6;
+    56	        # antrean tetap dihitung (N x identik -> mapan penuh), dan
+    57	        # hysteresis PENUH tetap berlaku utk transisi regime mapan.
+    58	        if (
+    59	            self.current_regime == MarketRegime.UNDEFINED
+    60	            and new_regime != MarketRegime.UNDEFINED
+    61	        ):
+    62	            if new_regime == self.pending_regime:
+    63	                self.pending_count += 1
+    64	            else:
+    65	                self.pending_regime = new_regime
+    66	                self.pending_count = 1
+    67	            if self.pending_count >= hysteresis:
+    68	                self.current_regime = new_regime
+    69	                self.current_confidence = confidence
+    70	                self.pending_regime = MarketRegime.UNDEFINED
+    71	                self.pending_count = 0
+    72	                return self.current_regime, self.current_confidence
+    73	            return new_regime, round(confidence * 0.6, 3)
+    74	
+    75	        if new_regime == self.current_regime:
+    76	            self.current_confidence = confidence
+    77	            self.pending_regime = MarketRegime.UNDEFINED
+    78	            self.pending_count = 0
+    79	            return self.current_regime, self.current_confidence
+    80	
+    81	        if new_regime == self.pending_regime:
+    82	            self.pending_count += 1
+    83	        else:
+    84	            self.pending_regime = new_regime
+    85	            self.pending_count = 1
+    86	
+    87	        if self.pending_count >= hysteresis:
+    88	            old = self.current_regime
+    89	            self.current_regime = new_regime
+    90	            self.current_confidence = confidence
+    91	            self.pending_regime = MarketRegime.UNDEFINED
+    92	            self.pending_count = 0
+    93	            log.info(
+    94	                "Regime changed: %s → %s (confidence=%.2f, confirmed after %d bars)",
+    95	                old.value, new_regime.value, confidence, hysteresis,
+    96	            )
+    97	
+    98	        return self.current_regime, self.current_confidence
+    99	
+   100	_REGIME_BUFFERS: Dict[str, _RegimeBuffer] = {}
+   101	# [BUG-FIX] _REGIME_BUFFERS diakses dari 2 jalur berbeda yg bisa jalan
+   102	# BERSAMAAN: (1) Gate3 worker via run_in_executor (worker thread terpisah,
+   103	# lihat strategy.py get_scored_signal), dan (2) run_position_sync_loop
+   104	# (main thread langsung, main.py, interval 5 menit) -- kedua jalur bisa
+   105	# mengenai SYMBOL YANG SAMA (symbol tanpa posisi terbuka di DB relevan utk
+   106	# Gate3 scan, TAPI juga bisa punya balance non-dust di Binance yg terdeteksi
+   107	# position_sync). Tidak ada dedup lintas jalur (beda dgn _pipeline_active yg
+   108	# cuma melindungi dalam 1 jalur Gate3). _RegimeBuffer.propose() melakukan
+   109	# beberapa statement read-modify-write berurutan (history.append, lalu
+   110	# pending_count/current_regime) yg TIDAK atomik sbg satu kesatuan -- window
+   111	# race nyata ada di level bytecode antar 2 OS thread (dibuktikan lewat stress
+   112	# test paralel, meski tidak selalu menghasilkan korupsi kelihatan tiap run).
+   113	# Fix: lock ringan (bukan asyncio.Lock -- ini perlu melindungi lintas THREAD,
+   114	# bukan cuma lintas coroutine dalam 1 thread) membungkus get-buffer+propose
+   115	# sbg satu critical section atomik. Critical section murni CPU, tanpa I/O,
+   116	# jadi aman & cepat (tidak memblokir event loop lama).
+   117	_REGIME_BUFFERS_LOCK = threading.RLock()
+   118	
+   119	def _get_buffer(symbol: str) -> _RegimeBuffer:
+   120	    with _REGIME_BUFFERS_LOCK:
+   121	        if symbol not in _REGIME_BUFFERS:
+   122	            _REGIME_BUFFERS[symbol] = _RegimeBuffer()
+   123	        return _REGIME_BUFFERS[symbol]
+   124	
+   125	def _count_bullish_ema_pairs(iset: IndicatorSet) -> int:
+   126	    pairs = [
+   127	        (iset.trend.ema9,   iset.trend.ema21),
+   128	        (iset.trend.ema21,  iset.trend.ema50),
+   129	        (iset.trend.ema50,  iset.trend.ema100),
+   130	        (iset.trend.ema100, iset.trend.ema200),
+   131	    ]
+   132	    count = 0
+   133	    for fast, slow in pairs:
+   134	        if fast is not None and slow is not None:
+   135	            if fast > slow:
+   136	                count += 1
+   137	    return count
+   138	
+   139	def _count_bearish_ema_pairs(iset: IndicatorSet) -> int:
+   140	    pairs = [
+   141	        (iset.trend.ema9,   iset.trend.ema21),
+   142	        (iset.trend.ema21,  iset.trend.ema50),
+   143	        (iset.trend.ema50,  iset.trend.ema100),
+   144	        (iset.trend.ema100, iset.trend.ema200),
+   145	    ]
+   146	    count = 0
+   147	    for fast, slow in pairs:
+   148	        if fast is not None and slow is not None:
+   149	            if fast < slow:
+   150	                count += 1
+   151	    return count
+   152	
+   153	def _supertrend_is_bull(iset: IndicatorSet) -> Optional[bool]:
+   154	    if iset.trend.supertrend_direction is None:
+   155	        return None
+   156	    return iset.trend.supertrend_direction == 1
+   157	
+   158	def _is_volatile(iset: IndicatorSet) -> bool:
+   159	    vol = iset.volatility
+   160	    # [ITEM #4 -- migrasi classifier.py, Opsi 1 direct switch] Baca
+   161	    # atr_percentile_normalized (ranking atr_pct, ternormalisasi harga),
+   162	    # BUKAN atr_percentile lagi (ranking ATR absolut, bias arah -- lihat
+   163	    # CLAUDE.md item audit #4). Field lama TETAP ada di models.py (tidak
+   164	    # dihapus) utk referensi/dashboard & jalan mundur kalau perlu rollback.
+   165	    atr_pct = vol.atr_percentile_normalized
+   166	    bb_w    = vol.bb_width
+   167	
+   168	    log.debug(
+   169	        "_is_volatile: atr_percentile(lama)=%s atr_percentile_normalized(baru)=%s bb_width=%s",
+   170	        vol.atr_percentile, vol.atr_percentile_normalized, bb_w,
+   171	    )
+   172	
+   173	    if atr_pct is not None and atr_pct >= REGIME_VOLATILE_ATR_PERCENTILE_MIN:
+   174	        return True
+   175	    if bb_w is not None and bb_w >= REGIME_VOLATILE_BB_WIDTH_MIN:
+   176	        return True
+   177	    return False
+   178	
+   179	def _is_ranging(iset: IndicatorSet) -> bool:
+   180	    vol = iset.volatility
+   181	    str_ = iset.strength
+   182	
+   183	    adx  = str_.adx
+   184	    bb_w = vol.bb_width
+   185	
+   186	    if adx is not None and adx >= REGIME_RANGING_ADX_MAX:
+   187	        return False
+   188	    if bb_w is not None and bb_w >= REGIME_RANGING_BB_WIDTH_MAX:
+   189	        return False
+   190	
+   191	    return True
+   192	
+   193	def _calc_confidence(iset: IndicatorSet, regime: MarketRegime) -> float:
+   194	    adx = iset.strength.adx
+   195	    # [ITEM #4 -- migrasi classifier.py, Opsi 1 direct switch] Sama seperti
+   196	    # _is_volatile() di atas -- baca atr_percentile_normalized, bukan
+   197	    # atr_percentile lagi.
+   198	    atr_pct = iset.volatility.atr_percentile_normalized
+   199	    bb_w    = iset.volatility.bb_width
+   200	
+   201	    log.debug(
+   202	        "_calc_confidence[%s]: atr_percentile(lama)=%s atr_percentile_normalized(baru)=%s bb_width=%s adx=%s",
+   203	        regime.value, iset.volatility.atr_percentile, iset.volatility.atr_percentile_normalized, bb_w, adx,
+   204	    )
+   205	
+   206	    if regime in (MarketRegime.TRENDING_BULL, MarketRegime.TRENDING_BEAR):
+   207	        if adx is None:
+   208	            return 0.5
+   209	        if adx >= REGIME_CONFIDENCE_HIGH_ADX:
+   210	            base = 0.90
+   211	        elif adx >= REGIME_TRENDING_STRONG_ADX:
+   212	            t = (adx - REGIME_TRENDING_STRONG_ADX) / (REGIME_CONFIDENCE_HIGH_ADX - REGIME_TRENDING_STRONG_ADX)
+   213	            base = 0.70 + t * 0.20
+   214	        elif adx >= REGIME_TRENDING_ADX_MIN:
+   215	            t = (adx - REGIME_TRENDING_ADX_MIN) / (REGIME_TRENDING_STRONG_ADX - REGIME_TRENDING_ADX_MIN)
+   216	            base = 0.50 + t * 0.20
+   217	        else:
+   218	            base = 0.40
+   219	
+   220	        st = _supertrend_is_bull(iset)
+   221	        if st is not None:
+   222	            is_bull_regime = regime == MarketRegime.TRENDING_BULL
+   223	            if st == is_bull_regime:
+   224	                base = min(1.0, base + 0.08)
+   225	            else:
+   226	                base = max(0.0, base - 0.10)
+   227	
+   228	        return round(base, 3)
+   229	
+   230	    elif regime == MarketRegime.VOLATILE_EXPANSION:
+   231	        if atr_pct is not None and atr_pct >= 90.0:
+   232	            return 0.88
+   233	        if bb_w is not None and bb_w >= 0.12:
+   234	            return 0.80
+   235	        return 0.65
+   236	
+   237	    elif regime == MarketRegime.RANGING:
+   238	        if adx is None:
+   239	            return 0.55
+   240	        if adx <= REGIME_CONFIDENCE_LOW_ADX:
+   241	            t = adx / REGIME_CONFIDENCE_LOW_ADX
+   242	            return round(0.85 - t * 0.20, 3)
+   243	        return 0.50
+   244	
+   245	    else:
+   246	        return 0.30
+   247	
+   248	def _classify_raw(iset: IndicatorSet) -> Tuple[MarketRegime, float]:
+   249	    if not iset.trend.is_valid() or not iset.strength.is_valid():
+   250	        return MarketRegime.UNDEFINED, 0.25
+   251	
+   252	    if _is_volatile(iset):
+   253	        conf = _calc_confidence(iset, MarketRegime.VOLATILE_EXPANSION)
+   254	        return MarketRegime.VOLATILE_EXPANSION, conf
+   255	
+   256	    adx       = iset.strength.adx
+   257	    plus_di   = iset.strength.plus_di
+   258	    minus_di  = iset.strength.minus_di
+   259	    has_adx   = adx is not None
+   260	
+   261	    bullish_pairs = _count_bullish_ema_pairs(iset)
+   262	    bearish_pairs = _count_bearish_ema_pairs(iset)
+   263	    st_bull       = _supertrend_is_bull(iset)
+   264	
+   265	    trending = has_adx and adx >= REGIME_TRENDING_ADX_MIN
+   266	
+   267	    is_bear = (
+   268	        bearish_pairs >= REGIME_BEAR_EMA_REQUIRED_PAIRS
+   269	        and (st_bull is None or st_bull is False)
+   270	    )
+   271	    if trending and is_bear and plus_di is not None and minus_di is not None:
+   272	        if minus_di > plus_di:
+   273	            conf = _calc_confidence(iset, MarketRegime.TRENDING_BEAR)
+   274	            return MarketRegime.TRENDING_BEAR, conf
+   275	    # [SHORT-FIX F1 -- asimetri fallback DI] Bull di bawah punya fallback
+   276	    # `plus_di is None -> tetap BULL x0.80`; bear SEBELUMNYA tidak (DI hilang
+   277	    # = langsung jatuh UNDEFINED). Akibat terukur: 287/307 (93%) kandidat
+   278	    # short regime undefined -> threshold 59-68 + modifier 0.5-0.75 ->
+   279	    # NOL short pernah lolos trigger. Fallback bear ini SENGAJA lebih ketat
+   280	    # dari bull: wajib konfirmasi supertrend bearish eksplisit (st_bull is
+   281	    # False, bukan None) sebagai pengganti bukti DI yang hilang.
+   282	    elif trending and is_bear and (plus_di is None or minus_di is None):
+   283	        if st_bull is False:
+   284	            conf = _calc_confidence(iset, MarketRegime.TRENDING_BEAR) * 0.80
+   285	            return MarketRegime.TRENDING_BEAR, round(conf, 3)
+   286	
+   287	    is_bull = bullish_pairs >= REGIME_BULL_EMA_REQUIRED_PAIRS
+   288	    if trending and is_bull:
+   289	        if plus_di is not None and minus_di is not None and plus_di > minus_di:
+   290	            conf = _calc_confidence(iset, MarketRegime.TRENDING_BULL)
+   291	            return MarketRegime.TRENDING_BULL, conf
+   292	        elif plus_di is None:
+   293	            conf = _calc_confidence(iset, MarketRegime.TRENDING_BULL) * 0.80
+   294	            return MarketRegime.TRENDING_BULL, round(conf, 3)
+   295	
+   296	    if _is_ranging(iset):
+   297	        conf = _calc_confidence(iset, MarketRegime.RANGING)
+   298	        return MarketRegime.RANGING, conf
+   299	
+   300	    return MarketRegime.UNDEFINED, 0.35
+   301	
+   302	def classify_regime(
+   303	    symbol: str,
+   304	    iset: IndicatorSet,
+   305	    hysteresis_bars: int = REGIME_HYSTERESIS_BARS,
+   306	    db_manager=None,
+   307	) -> Tuple[MarketRegime, float]:
+   308	    raw_regime, raw_confidence = _classify_raw(iset)
+   309	
+   310	    with _REGIME_BUFFERS_LOCK:
+   311	        buf = _get_buffer(symbol)
+   312	        effective_regime, effective_confidence = buf.propose(
+   313	            raw_regime, raw_confidence, hysteresis_bars
+   314	        )
+   315	
+   316	    log.debug(
+   317	        "%s: raw=%s(%.2f) → effective=%s(%.2f) | pending=%s(%d/%d)",
+   318	        symbol,
+   319	        raw_regime.value, raw_confidence,
+   320	        effective_regime.value, effective_confidence,
+   321	        buf.pending_regime.value if buf.pending_regime != MarketRegime.UNDEFINED else "-",
+   322	        buf.pending_count, hysteresis_bars,
+   323	    )
+   324	    return effective_regime, effective_confidence
+   325	
+   326	def classify_from_observation(
+   327	    observation: ObservationReport,
+   328	    hysteresis_bars: int = REGIME_HYSTERESIS_BARS,
+   329	    db_manager=None,
+   330	) -> Tuple[MarketRegime, float]:
+   331	    iset = observation.primary_tf_indicators
+   332	    if iset is None:
+   333	        log.warning(
+   334	            "%s: Tidak ada primary_tf_indicators di ObservationReport.",
+   335	            observation.symbol,
+   336	        )
+   337	        return MarketRegime.UNDEFINED, 0.0
+   338	
+   339	    return classify_regime(
+   340	        symbol=observation.symbol,
+   341	        iset=iset,
+   342	        hysteresis_bars=hysteresis_bars,
+   343	        db_manager=db_manager,
+   344	    )
+   345	
+   346	def is_tradeable_regime(
+   347	    regime: MarketRegime,
+   348	    confidence: float,
+   349	    allowed_regimes: Optional[list] = None,
+   350	    min_confidence: float = REGIME_MIN_CONFIDENCE_TO_TRADE,
+   351	    side: str = "long",
+   352	    # [BIAS-FIX] Default "long" -- semua caller lama (spot, dan future
+   353	    # sebelum threading side ditambahkan di titik lain) tetap dapat
+   354	    # perilaku identik persis dengan sebelum parameter ini ada.
+   355	) -> Tuple[bool, str]:
+   356	    if confidence < min_confidence:
+   357	        return False, (
+   358	            f"Regime confidence terlalu rendah: {confidence:.2f} < {min_confidence:.2f}"
+   359	        )
+   360	
+   361	    if allowed_regimes is not None:
+   362	        if regime.value not in allowed_regimes:
+   363	            return False, (
+   364	                f"Regime '{regime.value}' tidak diizinkan. "
+   365	                f"Allowed: {allowed_regimes}"
+   366	            )
+   367	
+   368	    # [BUG-FIX] Sebelumnya hardcode "if regime == TRENDING_BEAR" di sini —
+   369	    # padahal MarketRegime.allows_long property sudah ada persis untuk
+   370	    # tujuan ini (dan sudah lama jadi dead code karena tak dipakai siapa pun).
+   371	    # Pakai allows_long sebagai satu sumber kebenaran: otomatis ikut kalau
+   372	    # daftar regime yang diizinkan long berubah di masa depan, tidak perlu
+   373	    # sinkronkan manual di 2 tempat berbeda.
+   374	    #
+   375	    # [BIAS-FIX -- short regime gate] Sebelumnya SELALU cek allows_long
+   376	    # apapun side-nya -- akibatnya regime trending_bear (ideal utk short)
+   377	    # SELALU tertolak di sini bahkan utk kandidat short, karena tidak ada
+   378	    # padanan allows_short yang pernah dicek. Sekarang pilih properti sesuai
+   379	    # side; allows_long tetap satu-satunya sumber kebenaran utk long (tidak
+   380	    # berubah), allows_short (baru) sumber kebenaran utk short.
+   381	    is_long = side != "short"
+   382	    regime_ok = regime.allows_long if is_long else regime.allows_short
+   383	    if not regime_ok:
+   384	        return False, (
+   385	            f"Regime '{regime.value}' tidak mengizinkan posisi {side} "
+   386	            f"(allows_{side}=False)."
+   387	        )
+   388	
+   389	    return True, f"Regime {regime.value} OK (confidence={confidence:.2f})"
+   390	
+   391	def get_regime_history(symbol: str, last_n: int = 10) -> list:
+   392	    with _REGIME_BUFFERS_LOCK:
+   393	        buf = _get_buffer(symbol)
+   394	        return list(buf.history)[-last_n:]
+   395	
+   396	def get_current_regime(symbol: str) -> Tuple[MarketRegime, float]:
+   397	    with _REGIME_BUFFERS_LOCK:
+   398	        buf = _REGIME_BUFFERS.get(symbol)
+   399	        if buf is None:
+   400	            return MarketRegime.UNDEFINED, 0.0
+   401	        return buf.current_regime, buf.current_confidence
+   402	
+   403	def reset_regime(symbol: str) -> None:
+   404	    with _REGIME_BUFFERS_LOCK:
+   405	        if symbol in _REGIME_BUFFERS:
+   406	            del _REGIME_BUFFERS[symbol]
+   407	            log.info("Regime buffer reset: %s", symbol)
+   408	
+   409	def summarize_all_regimes() -> str:
+   410	    with _REGIME_BUFFERS_LOCK:
+   411	        if not _REGIME_BUFFERS:
+   412	            return "⚪ Belum ada data regime. Jalankan strategy loop terlebih dahulu."
+   413	
+   414	        lines = ["🌐 Market Regimes:"]
+   415	        for symbol, buf in sorted(_REGIME_BUFFERS.items()):
+   416	            emoji = buf.current_regime.emoji
+   417	            name  = buf.current_regime.display_name
+   418	            conf  = buf.current_confidence
+   419	            lines.append(f"  {emoji} {symbol:<12} {name:<20} (conf={conf:.0%})")
+   420	
+   421	        return "\n".join(lines)
+   422	
+   423	
+   424	class MarketClassifier:
+   425	    def classify(self, observation: ObservationReport, db_manager=None) -> Tuple[MarketRegime, float]:
+   426	        return classify_from_observation(observation, db_manager=db_manager)
+   427	async def restore_regimes_from_db(symbols: list, db) -> None:
+   428	    """Load regime terakhir tiap symbol dari DB ke buffer saat startup."""
+   429	    restored = 0
+   430	    for symbol in symbols:
+   431	        try:
+   432	            record = await db.get_latest_regime(symbol)
+   433	            if record is None:
+   434	                continue
+   435	            with _REGIME_BUFFERS_LOCK:
+   436	                buf = _get_buffer(symbol)
+   437	                buf.current_regime     = MarketRegime(record.regime)
+   438	                buf.current_confidence = record.regime_confidence
+   439	                buf.pending_regime     = MarketRegime.UNDEFINED
+   440	                buf.pending_count      = 0
+   441	            log.info(
+   442	                "Regime restored [%s]: %s (conf=%.2f) dari %s",
+   443	                symbol, record.regime, record.regime_confidence, record.timestamp,
+   444	            )
+   445	            restored += 1
+   446	        except Exception as exc:
+   447	            log.warning("Gagal restore regime [%s]: %s", symbol, exc)
+   448	    log.info("Regime restore selesai: %d/%d symbol.", restored, len(symbols))
+   449	
+   450	def is_regime_transition(symbol: str) -> tuple:
+   451	    """Cek apakah regime symbol sedang dalam transisi (pending != current).
+   452	    Return: (is_transitioning: bool, from_regime: str, to_regime: str)
+   453	    """
+   454	    with _REGIME_BUFFERS_LOCK:
+   455	        buf = _get_buffer(symbol)
+   456	        if buf.pending_regime == MarketRegime.UNDEFINED:
+   457	            return False, buf.current_regime.value, buf.current_regime.value
+   458	        return True, buf.current_regime.value, buf.pending_regime.value
+
+═══════════════════════════════════════════════════════
+ 2. THRESHOLD — seluruh isi thresholds.py
+═══════════════════════════════════════════════════════
+     1	"""
+     2	profiles/thresholds.py
+     3	AlgoTrader Pro v7.0 — "The Intelligence Pipeline"
+     4	
+     5	"""
+     6	
+     7	from __future__ import annotations
+     8	
+     9	import logging
+    10	from dataclasses import dataclass, field
+    11	from typing import Any, Dict, List, Optional, Tuple
+    12	
+    13	from engine.profiles.base_profile import (
+    14	    CoinProfile,
+    15	    ParameterBounds,
+    16	    PrimaryTriggerType,
+    17	    StrategyProfile,
+    18	)
+    19	from engine.constants import (
+    20	    SCORE_NEUTRAL,
+    21	    KELLY_MIN_SAMPLE,
+    22	    KELLY_MAX_SIZE_PCT,
+    23	    KELLY_MIN_SIZE_PCT,
+    24	    SPREAD_LIMIT_DEFAULT,
+    25	    META_PARAM_BOUNDS,
+    26	)
+    27	
+    28	log = logging.getLogger("profiles.thresholds")
+    29	
+    30	ENTRY_THRESHOLDS: Dict[str, float] = {
+    31	    "hodl_accumulate":  65.0,  # fallback regime undefined
+    32	    "trend_follow":     65.0,  # fallback regime undefined
+    33	    "breakout_swift":   62.0,  # fallback regime undefined
+    34	    "scalp_volatile":   61.0,  # fallback regime undefined
+    35	    "mean_revert":      59.0,  # fallback regime undefined
+    36	    "extreme_momentum": 68.0,  # fallback regime undefined
+    37	}
+    38	
+    39	# Dynamic threshold matrix: profile × regime
+    40	# Threshold berubah otomatis sesuai kombinasi profil dan kondisi pasar
+    41	DYNAMIC_THRESHOLD_MATRIX: Dict[str, Dict[str, float]] = {
+    42	    "hodl_accumulate": {
+    43	        "trending_bull":      52.0,  # Trending = sweet spot hodl
+    44	        "trending_bear":     999.0,  # Tidak trade saat bear
+    45	        "ranging":            68.0,  # Hodl di ranging = kurang ideal
+    46	        "volatile_expansion": 72.0,  # Hodl di volatile = berisiko
+    47	        "undefined":          65.0,
+    48	    },
+    49	    "trend_follow": {
+    50	        "trending_bull":      58.0,  # Trend follower — butuh sinyal di atas netral
+    51	        "trending_bear":     999.0,
+    52	        "ranging":            75.0,  # Skeptis saat ranging
+    53	        "volatile_expansion": 68.0,  # Volatile tidak cocok untuk trend follower
+    54	        "undefined":          65.0,
+    55	    },
+    56	    "breakout_swift": {
+    57	        "trending_bull":      55.0,  # Breakout butuh konfirmasi di atas netral
+    58	        "trending_bear":     999.0,
+    59	        "ranging":            70.0,  # Breakout di ranging sering palsu
+    60	        "volatile_expansion": 52.0,  # Sweet spot breakout — tidak boleh di bawah netral
+    61	        "undefined":          62.0,
+    62	    },
+    63	    "scalp_volatile": {
+    64	        "trending_bull":      63.0,  # Scalp oke saat trending
+    65	        "trending_bear":     999.0,
+    66	        "ranging":            65.0,  # Scalp di ranging butuh konfirmasi
+    67	        "volatile_expansion": 52.0,  # Sweet spot scalp — tidak boleh di bawah netral
+    68	        "undefined":          61.0,
+    69	    },
+    70	    "mean_revert": {
+    71	        "trending_bull":      70.0,  # Mean revert saat trending = melawan arus
+    72	        "trending_bear":     999.0,
+    73	        "ranging":            50.0,  # Gold Mine — ranging = ideal mean revert
+    74	        "volatile_expansion": 68.0,  # Volatile sangat berbahaya untuk mean revert
+    75	        "undefined":          59.0,
+    76	    },
+    77	    "extreme_momentum": {
+    78	        "trending_bull":      55.0,  # Momentum kuat saat trending
+    79	        "trending_bear":     999.0,
+    80	        "ranging":            80.0,  # Extreme momentum di ranging = bahaya
+    81	        "volatile_expansion": 48.0,  # Sweet spot agresif — sedikit di bawah netral ok
+    82	        "undefined":          68.0,
+    83	    },
+    84	}
+    85	
+    86	# [BIAS-FIX -- short threshold] Mirror DYNAMIC_THRESHOLD_MATRIX di atas --
+    87	# trending_bull/trending_bear DITUKAR (999.0 pindah ke trending_bull, angka
+    88	# sebelumnya di trending_bull pindah ke trending_bear), ranging/volatile_
+    89	# expansion/undefined TIDAK DIUBAH (regime netral-arah, tidak ada alasan
+    90	# direksional beda ketat antara long/short). Matrix long di atas TIDAK
+    91	# disentuh sama sekali -- ini dict baru terpisah, tidak modifikasi existing.
+    92	DYNAMIC_THRESHOLD_MATRIX_SHORT: Dict[str, Dict[str, float]] = {
+    93	    "hodl_accumulate": {
+    94	        "trending_bull":     999.0,
+    95	        "trending_bear":      52.0,
+    96	        "ranging":            68.0,
+    97	        "volatile_expansion": 72.0,
+    98	        "undefined":          65.0,
+    99	    },
+   100	    "trend_follow": {
+   101	        "trending_bull":     999.0,
+   102	        "trending_bear":      58.0,
+   103	        "ranging":            75.0,
+   104	        "volatile_expansion": 68.0,
+   105	        "undefined":          65.0,
+   106	    },
+   107	    "breakout_swift": {
+   108	        "trending_bull":     999.0,
+   109	        "trending_bear":      55.0,
+   110	        "ranging":            70.0,
+   111	        "volatile_expansion": 52.0,
+   112	        "undefined":          62.0,
+   113	    },
+   114	    "scalp_volatile": {
+   115	        "trending_bull":     999.0,
+   116	        "trending_bear":      63.0,
+   117	        "ranging":            65.0,
+   118	        "volatile_expansion": 52.0,
+   119	        "undefined":          61.0,
+   120	    },
+   121	    "mean_revert": {
+   122	        "trending_bull":     999.0,
+   123	        "trending_bear":      70.0,
+   124	        "ranging":            50.0,
+   125	        "volatile_expansion": 68.0,
+   126	        "undefined":          59.0,
+   127	    },
+   128	    "extreme_momentum": {
+   129	        "trending_bull":     999.0,
+   130	        "trending_bear":      55.0,
+   131	        "ranging":            80.0,
+   132	        "volatile_expansion": 48.0,
+   133	        "undefined":          68.0,
+   134	    },
+   135	}
+   136	
+   137	def get_dynamic_threshold(profile_name: str, regime_value: str, side: str = "long") -> float:
+   138	    """Ambil threshold dinamis berdasarkan kombinasi profil, regime, dan side.
+   139	    [BIAS-FIX] side="long" default -- caller lama yang tidak eksplisit
+   140	    mengirim side tetap dapat perilaku identik persis (pakai
+   141	    DYNAMIC_THRESHOLD_MATRIX seperti sebelumnya)."""
+   142	    matrix = DYNAMIC_THRESHOLD_MATRIX_SHORT if side == "short" else DYNAMIC_THRESHOLD_MATRIX
+   143	    return matrix.get(profile_name, {}).get(regime_value, ENTRY_THRESHOLDS.get(profile_name, 65.0))
+   144	
+   145	# Transition Action Matrix: profile × entry_regime × current_regime
+   146	# Aksi: HOLD | HOLD_TIGHTEN_SL | HOLD_RELAX_SL | EXIT | NO_POSITION
+   147	TRANSITION_ACTION_MATRIX: Dict[str, Dict[str, Dict[str, str]]] = {
+   148	    "hodl_accumulate": {
+   149	        "trending_bull":      {"trending_bull": "HOLD", "ranging": "HOLD_TIGHTEN_SL", "trending_bear": "EXIT", "volatile_expansion": "HOLD_TIGHTEN_SL", "undefined": "HOLD"},
+   150	        "ranging":            {"trending_bull": "HOLD_RELAX_SL", "ranging": "HOLD", "trending_bear": "EXIT", "volatile_expansion": "HOLD_TIGHTEN_SL", "undefined": "HOLD"},
+   151	        "volatile_expansion": {"trending_bull": "HOLD_RELAX_SL", "ranging": "HOLD_TIGHTEN_SL", "trending_bear": "EXIT", "volatile_expansion": "HOLD", "undefined": "HOLD"},
+   152	        "undefined":          {"trending_bull": "HOLD", "ranging": "HOLD", "trending_bear": "EXIT", "volatile_expansion": "HOLD_TIGHTEN_SL", "undefined": "HOLD"},
+   153	    },
+   154	    "trend_follow": {
+   155	        "trending_bull":      {"trending_bull": "HOLD", "ranging": "HOLD_TIGHTEN_SL", "trending_bear": "EXIT", "volatile_expansion": "HOLD_TIGHTEN_SL", "undefined": "HOLD"},
+   156	        "ranging":            {"trending_bull": "HOLD_RELAX_SL", "ranging": "HOLD", "trending_bear": "EXIT", "volatile_expansion": "HOLD_TIGHTEN_SL", "undefined": "HOLD"},
+   157	        "volatile_expansion": {"trending_bull": "HOLD_RELAX_SL", "ranging": "HOLD_TIGHTEN_SL", "trending_bear": "EXIT", "volatile_expansion": "HOLD", "undefined": "HOLD"},
+   158	        "undefined":          {"trending_bull": "HOLD", "ranging": "HOLD", "trending_bear": "EXIT", "volatile_expansion": "HOLD_TIGHTEN_SL", "undefined": "HOLD"},
+   159	    },
+   160	    "breakout_swift": {
+   161	        "trending_bull":      {"trending_bull": "HOLD", "ranging": "HOLD_TIGHTEN_SL", "trending_bear": "EXIT", "volatile_expansion": "HOLD", "undefined": "HOLD"},
+   162	        "ranging":            {"trending_bull": "HOLD_RELAX_SL", "ranging": "HOLD", "trending_bear": "EXIT", "volatile_expansion": "HOLD", "undefined": "HOLD"},
+   163	        "volatile_expansion": {"trending_bull": "HOLD_RELAX_SL", "ranging": "HOLD_TIGHTEN_SL", "trending_bear": "EXIT", "volatile_expansion": "HOLD", "undefined": "HOLD"},
+   164	        "undefined":          {"trending_bull": "HOLD", "ranging": "HOLD", "trending_bear": "EXIT", "volatile_expansion": "HOLD", "undefined": "HOLD"},
+   165	    },
+   166	    "scalp_volatile": {
+   167	        "trending_bull":      {"trending_bull": "HOLD", "ranging": "HOLD_TIGHTEN_SL", "trending_bear": "EXIT", "volatile_expansion": "HOLD", "undefined": "HOLD"},
+   168	        "ranging":            {"trending_bull": "HOLD_RELAX_SL", "ranging": "HOLD", "trending_bear": "EXIT", "volatile_expansion": "HOLD", "undefined": "HOLD"},
+   169	        "volatile_expansion": {"trending_bull": "HOLD_RELAX_SL", "ranging": "HOLD", "trending_bear": "EXIT", "volatile_expansion": "HOLD", "undefined": "HOLD"},
+   170	        "undefined":          {"trending_bull": "HOLD", "ranging": "HOLD", "trending_bear": "EXIT", "volatile_expansion": "HOLD", "undefined": "HOLD"},
+   171	    },
+   172	    "mean_revert": {
+   173	        "trending_bull":      {"trending_bull": "HOLD", "ranging": "HOLD_TIGHTEN_SL", "trending_bear": "EXIT", "volatile_expansion": "HOLD_TIGHTEN_SL", "undefined": "HOLD"},
+   174	        "ranging":            {"trending_bull": "HOLD_RELAX_SL", "ranging": "HOLD", "trending_bear": "EXIT", "volatile_expansion": "HOLD_TIGHTEN_SL", "undefined": "HOLD"},
+   175	        "volatile_expansion": {"trending_bull": "HOLD_RELAX_SL", "ranging": "HOLD", "trending_bear": "EXIT", "volatile_expansion": "HOLD_TIGHTEN_SL", "undefined": "HOLD"},
+   176	        "undefined":          {"trending_bull": "HOLD", "ranging": "HOLD", "trending_bear": "EXIT", "volatile_expansion": "HOLD_TIGHTEN_SL", "undefined": "HOLD"},
+   177	    },
+   178	    "extreme_momentum": {
+   179	        "trending_bull":      {"trending_bull": "HOLD", "ranging": "HOLD_TIGHTEN_SL", "trending_bear": "EXIT", "volatile_expansion": "HOLD", "undefined": "HOLD"},
+   180	        "ranging":            {"trending_bull": "HOLD_RELAX_SL", "ranging": "HOLD", "trending_bear": "EXIT", "volatile_expansion": "HOLD_TIGHTEN_SL", "undefined": "HOLD"},
+   181	        "volatile_expansion": {"trending_bull": "HOLD_RELAX_SL", "ranging": "HOLD_TIGHTEN_SL", "trending_bear": "EXIT", "volatile_expansion": "HOLD", "undefined": "HOLD"},
+   182	        "undefined":          {"trending_bull": "HOLD", "ranging": "HOLD", "trending_bear": "EXIT", "volatile_expansion": "HOLD", "undefined": "HOLD"},
+   183	    },
+   184	}
+   185	
+   186	def get_transition_action(profile_name: str, entry_regime: str, current_regime: str) -> str:
+   187	    """Ambil aksi transisi berdasarkan profile x entry_regime x current_regime.
+   188	    Return: HOLD | HOLD_TIGHTEN_SL | HOLD_RELAX_SL | EXIT
+   189	
+   190	    # [BUG-FIX] Sebelumnya: docstring menyebut 'NO_POSITION' sebagai salah satu
+   191	    # kemungkinan return value. Tapi tidak ada satupun entry di
+   192	    # TRANSITION_ACTION_MATRIX yang mengandung 'NO_POSITION' — matrix hanya
+   193	    # berisi: HOLD, HOLD_TIGHTEN_SL, HOLD_RELAX_SL, EXIT. Docstring yang
+   194	    # tidak akurat ini bisa menyesatkan caller yang menyiapkan handler untuk
+   195	    # 'NO_POSITION' yang tidak pernah datang. Dihapus dari docstring.
+   196	    """
+   197	    if current_regime == "trending_bear":
+   198	        return "EXIT"
+   199	    profile_matrix = TRANSITION_ACTION_MATRIX.get(profile_name, {})
+   200	    entry_map = profile_matrix.get(entry_regime, {})
+   201	    return entry_map.get(current_regime, "HOLD")
+   202	
+   203	VOLUME_PARAMS: Dict[str, Dict[str, float]] = {
+   204	    "hodl_accumulate": {
+   205	        "volume_mult":  1.5,
+   206	        "volume_spike": 3.0,
+   207	    },
+   208	    "trend_follow": {
+   209	        "volume_mult":  1.8,
+   210	        "volume_spike": 2.5,
+   211	    },
+   212	    "breakout_swift": {
+   213	        "volume_mult":  2.0,
+   214	        "volume_spike": 3.0,
+   215	    },
+   216	    "scalp_volatile": {
+   217	        "volume_mult":  2.0,
+   218	        "volume_spike": 2.5,
+   219	    },
+   220	    "mean_revert": {
+   221	        "volume_mult":  1.2,
+   222	        "volume_spike": 2.0,
+   223	    },
+   224	    "extreme_momentum": {
+   225	        "volume_mult":  4.0,
+   226	        "volume_spike": 6.0,
+   227	    },
+   228	}
+   229	
+   230	RSI_PARAMS: Dict[str, Dict[str, float]] = {
+   231	    "hodl_accumulate": {
+   232	        "rsi_min":      40.0,
+   233	        "rsi_max":      65.0,
+   234	        "rsi_gc_min":   42.0,
+   235	    },
+   236	    "trend_follow": {
+   237	        "rsi_min":      48.0,
+   238	        "rsi_max":      72.0,
+   239	        "rsi_gc_min":   48.0,
+   240	    },
+   241	    "breakout_swift": {
+   242	        "rsi_min":      50.0,
+   243	        "rsi_max":      73.0,
+   244	        "rsi_gc_min":   50.0,
+   245	    },
+   246	    "scalp_volatile": {
+   247	        "rsi_min":      52.0,
+   248	        "rsi_max":      68.0,
+   249	        "rsi_gc_min":   50.0,
+   250	    },
+   251	    "mean_revert": {
+   252	        "rsi_min":      25.0,
+   253	        "rsi_max":      55.0,
+   254	        "rsi_gc_min":   38.0,
+   255	    },
+   256	    "extreme_momentum": {
+   257	        "rsi_min":      60.0,
+   258	        "rsi_max":      82.0,
+   259	        "rsi_gc_min":   58.0,
+   260	    },
+   261	}
+   262	
+   263	BREAKOUT_PARAMS: Dict[str, Dict[str, float]] = {
+   264	    "hodl_accumulate": {
+   265	        "min_breakout_pct": 0.30,
+   266	    },
+   267	    "trend_follow": {
+   268	        "min_breakout_pct": 0.20,
+   269	    },
+   270	    "breakout_swift": {
+   271	        "min_breakout_pct": 0.15,
+   272	    },
+   273	    "scalp_volatile": {
+   274	        "min_breakout_pct": 0.12,
+   275	    },
+   276	    "mean_revert": {
+   277	        "min_breakout_pct": 0.10,
+   278	    },
+   279	    "extreme_momentum": {
+   280	        "min_breakout_pct": 0.50,
+   281	    },
+   282	}
+   283	
+   284	ATR_MULTIPLIERS: Dict[str, Dict[str, float]] = {
+   285	    "hodl_accumulate": {
+   286	        "atr_sl_mult":       3.0,
+   287	        "atr_tp_mult":       8.0,
+   288	        "atr_pct_threshold": 1.5,
+   289	    },
+   290	    "trend_follow": {
+   291	        "atr_sl_mult":       2.5,
+   292	        "atr_tp_mult":       6.0,
+   293	        "atr_pct_threshold": 0.7,
+   294	    },
+   295	    "breakout_swift": {
+   296	        "atr_sl_mult":       2.0,
+   297	        "atr_tp_mult":       4.0,
+   298	        "atr_pct_threshold": 0.6,
+   299	    },
+   300	    "scalp_volatile": {
+   301	        "atr_sl_mult":       2.2,
+   302	        "atr_tp_mult":       3.5,
+   303	        "atr_pct_threshold": 0.4,
+   304	    },
+   305	    "mean_revert": {
+   306	        "atr_sl_mult":       2.5,
+   307	        "atr_tp_mult":       3.5,
+   308	        "atr_pct_threshold": 0.8,
+   309	    },
+   310	    "extreme_momentum": {
+   311	        "atr_sl_mult":       1.8,
+   312	        "atr_tp_mult":       4.0,
+   313	        "atr_pct_threshold": 0.3,
+   314	    },
+   315	}
+   316	
+   317	QUICK_SLTP_PARAMS: Dict[str, Dict[str, float]] = {
+   318	    "hodl_accumulate": {
+   319	        "quick_sl_pct": 5.0,
+   320	        "quick_tp_pct": 15.0,
+   321	    },
+   322	    "trend_follow": {
+   323	        "quick_sl_pct": 3.0,
+   324	        "quick_tp_pct": 7.0,
+   325	    },
+   326	    "breakout_swift": {
+   327	        "quick_sl_pct": 2.0,
+   328	        "quick_tp_pct": 4.0,
+   329	    },
+   330	    "scalp_volatile": {
+   331	        "quick_sl_pct": 2.0,
+   332	        "quick_tp_pct": 3.0,
+   333	    },
+   334	    "mean_revert": {
+   335	        "quick_sl_pct": 2.5,
+   336	        "quick_tp_pct": 3.5,
+   337	    },
+   338	    "extreme_momentum": {
+   339	        "quick_sl_pct": 1.5,
+   340	        "quick_tp_pct": 4.0,
+   341	    },
+   342	}
+   343	
+   344	TRAILING_PARAMS: Dict[str, Dict[str, float]] = {
+   345	    "hodl_accumulate": {
+   346	        "trailing_act_pct": 5.0,
+   347	        "trailing_gap_pct": 2.5,
+   348	    },
+   349	    "trend_follow": {
+   350	        "trailing_act_pct": 3.0,
+   351	        "trailing_gap_pct": 1.5,
+   352	    },
+   353	    "breakout_swift": {
+   354	        "trailing_act_pct": 2.5,
+   355	        "trailing_gap_pct": 1.0,
+   356	    },
+   357	    "scalp_volatile": {
+   358	        "trailing_act_pct": 1.8,
+   359	        "trailing_gap_pct": 0.7,
+   360	    },
+   361	    "mean_revert": {
+   362	        "trailing_act_pct": 2.0,
+   363	        "trailing_gap_pct": 1.0,
+   364	    },
+   365	    "extreme_momentum": {
+   366	        "trailing_act_pct": 3.0,
+   367	        "trailing_gap_pct": 1.2,
+   368	    },
+   369	}
+   370	
+   371	MAX_HOLD_CANDLES: Dict[str, int] = {
+   372	    "hodl_accumulate":  0,
+   373	    "trend_follow":     100,
+   374	    "breakout_swift":   48,
+   375	    "scalp_volatile":   24,
+   376	    "mean_revert":      60,
+   377	    "extreme_momentum": 8,
+   378	}
+   379	
+   380	VOLATILITY_PARAMS: Dict[str, Dict[str, float]] = {
+   381	    "hodl_accumulate": {
+   382	        "typical_atr_pct": 2.5,
+   383	        "max_spread_pct":  0.20,
+   384	    },
+   385	    "trend_follow": {
+   386	        "typical_atr_pct": 1.5,
+   387	        "max_spread_pct":  0.18,
+   388	    },
+   389	    "breakout_swift": {
+   390	        "typical_atr_pct": 0.8,
+   391	        "max_spread_pct":  0.15,
+   392	    },
+   393	    "scalp_volatile": {
+   394	        "typical_atr_pct": 0.5,
+   395	        "max_spread_pct":  0.12,
+   396	    },
+   397	    "mean_revert": {
+   398	        "typical_atr_pct": 1.0,
+   399	        "max_spread_pct":  0.15,
+   400	    },
+   401	    "extreme_momentum": {
+   402	        "typical_atr_pct": 1.5,
+   403	        "max_spread_pct":  0.25,
+   404	    },
+   405	}
+   406	
+   407	MTF_PARAMS: Dict[str, Dict[str, float]] = {
+   408	    "hodl_accumulate": {
+   409	        "confirmation_weight":    0.20,
+   410	        "confirmation_min_score": 40.0,
+   411	    },
+   412	    "trend_follow": {
+   413	        "confirmation_weight":    0.25,
+   414	        "confirmation_min_score": 45.0,
+   415	    },
+   416	    "breakout_swift": {
+   417	        "confirmation_weight":    0.25,
+   418	        "confirmation_min_score": 45.0,
+   419	    },
+   420	    "scalp_volatile": {
+   421	        "confirmation_weight":    0.20,
+   422	        "confirmation_min_score": 42.0,
+   423	    },
+   424	    "mean_revert": {
+   425	        "confirmation_weight":    0.15,
+   426	        "confirmation_min_score": 35.0,
+   427	    },
+   428	    "extreme_momentum": {
+   429	        "confirmation_weight":    0.15,
+   430	        "confirmation_min_score": 40.0,
+   431	    },
+   432	}
+   433	
+   434	RISK_PARAMS: Dict[str, Dict[str, Any]] = {
+   435	    "hodl_accumulate": {
+   436	        "kelly_lookback_trades":     50,
+   437	        "kelly_enabled":             True,
+   438	        "max_consecutive_losses":    3,
+   439	        "consecutive_loss_size_mult": 0.5,
+   440	    },
+   441	    "trend_follow": {
+   442	        "kelly_lookback_trades":     50,
+   443	        "kelly_enabled":             True,
+   444	        "max_consecutive_losses":    3,
+   445	        "consecutive_loss_size_mult": 0.5,
+   446	    },
+   447	    "breakout_swift": {
+   448	        "kelly_lookback_trades":     50,
+   449	        "kelly_enabled":             True,
+   450	        "max_consecutive_losses":    3,
+   451	        "consecutive_loss_size_mult": 0.5,
+   452	    },
+   453	    "scalp_volatile": {
+   454	        "kelly_lookback_trades":     75,
+   455	        "kelly_enabled":             True,
+   456	        "max_consecutive_losses":    4,
+   457	        "consecutive_loss_size_mult": 0.6,
+   458	    },
+   459	    "mean_revert": {
+   460	        "kelly_lookback_trades":     50,
+   461	        "kelly_enabled":             True,
+   462	        "max_consecutive_losses":    3,
+   463	        "consecutive_loss_size_mult": 0.5,
+   464	    },
+   465	    "extreme_momentum": {
+   466	        "kelly_lookback_trades":     30,
+   467	        "kelly_enabled":             True,
+   468	        "max_consecutive_losses":    2,
+   469	        "consecutive_loss_size_mult": 0.3,
+   470	    },
+   471	}
+   472	
+   473	ALLOWED_REGIMES: Dict[str, List[str]] = {
+   474	    "hodl_accumulate": [
+   475	        "trending_bull",
+   476	    ],
+   477	    "trend_follow": [
+   478	        "trending_bull",
+   479	    ],
+   480	    "breakout_swift": [
+   481	        "trending_bull",
+   482	        "ranging",
+   483	        "volatile_expansion",
+   484	    ],
+   485	    "scalp_volatile": [
+   486	        "trending_bull",
+   487	        "ranging",
+   488	        "volatile_expansion",
+   489	    ],
+   490	    "mean_revert": [
+   491	        "trending_bull",
+   492	        "ranging",
+   493	    ],
+   494	    "extreme_momentum": [
+   495	        "trending_bull",
+   496	        "volatile_expansion",
+   497	    ],
+   498	}
+   499	
+   500	# [BIAS-FIX -- short regime whitelist] Mirror ALLOWED_REGIMES di atas --
+   501	# trending_bull/trending_bear ditukar, ranging/volatile_expansion tetap
+   502	# sama persis dengan versi long per profil (regime netral-arah). Sebelumnya
+   503	# TIDAK ADA padanan ini -- is_tradeable_regime()'s allowed_regimes check
+   504	# selalu pakai ALLOWED_REGIMES (long) apapun side-nya, jadi trending_bear
+   505	# (ideal utk short) selalu tertolak di gate whitelist ini duluan, bahkan
+   506	# sebelum sempat dicek allows_long/allows_short.
+   507	ALLOWED_REGIMES_SHORT: Dict[str, List[str]] = {
+   508	    "hodl_accumulate": [
+   509	        "trending_bear",
+   510	    ],
+   511	    "trend_follow": [
+   512	        "trending_bear",
+   513	    ],
+   514	    "breakout_swift": [
+   515	        "trending_bear",
+   516	        "ranging",
+   517	        "volatile_expansion",
+   518	    ],
+   519	    "scalp_volatile": [
+   520	        "trending_bear",
+   521	        "ranging",
+   522	        "volatile_expansion",
+   523	    ],
+   524	    "mean_revert": [
+   525	        "trending_bear",
+   526	        "ranging",
+   527	    ],
+   528	    "extreme_momentum": [
+   529	        "trending_bear",
+   530	        "volatile_expansion",
+   531	    ],
+   532	}
+   533	
+   534	PARAMETER_BOUNDS_OVERRIDE: Dict[str, Dict[str, Tuple[float, float]]] = {
+   535	    "hodl_accumulate": {
+   536	        "entry_threshold":  (50.0, 80.0),
+   537	        "quick_sl_pct":     (3.0, 8.0),
+   538	        "quick_tp_pct":     (8.0, 25.0),
+   539	        "rsi_min":          (30.0, 55.0),
+   540	        "rsi_max":          (55.0, 80.0),
+   541	        "trailing_act_pct": (3.0, 8.0),
+   542	    },
+   543	    "trend_follow": {
+   544	        "entry_threshold":  (52.0, 82.0),
+   545	        "quick_sl_pct":     (2.0, 5.0),
+   546	        "quick_tp_pct":     (5.0, 15.0),
+   547	        "rsi_min":          (40.0, 58.0),
+   548	        "rsi_max":          (60.0, 82.0),
+   549	    },
+   550	    "breakout_swift": {
+   551	        "entry_threshold":  (54.0, 82.0),
+   552	        "quick_sl_pct":     (1.5, 4.0),
+   553	        "quick_tp_pct":     (3.0, 10.0),
+   554	        "volume_multiplier": (1.5, 4.0),
+   555	        "rsi_min":          (44.0, 60.0),
+   556	        "rsi_max":          (62.0, 82.0),
+   557	    },
+   558	    "scalp_volatile": {
+   559	        "entry_threshold":  (53.0, 82.0),
+   560	        "quick_sl_pct":     (1.2, 3.5),
+   561	        "quick_tp_pct":     (1.8, 6.0),
+   562	        "rsi_min":          (45.0, 62.0),
+   563	        "rsi_max":          (58.0, 78.0),
+   564	        "trailing_act_pct": (0.8, 3.0),
+   565	        "trailing_gap_pct": (0.3, 1.5),
+   566	    },
+   567	    "mean_revert": {
+   568	        "entry_threshold":  (48.0, 78.0),
+   569	        "quick_sl_pct":     (1.5, 4.0),
+   570	        "quick_tp_pct":     (2.5, 7.0),
+   571	        "rsi_min":          (20.0, 45.0),
+   572	        "rsi_max":          (45.0, 65.0),
+   573	        "volume_multiplier": (0.8, 2.5),
+   574	    },
+   575	    "extreme_momentum": {
+   576	        "entry_threshold":  (60.0, 88.0),
+   577	        "quick_sl_pct":     (1.0, 2.5),
+   578	        "quick_tp_pct":     (3.0, 8.0),
+   579	        "volume_multiplier": (3.0, 6.0),
+   580	        "rsi_min":          (55.0, 72.0),
+   581	        "rsi_max":          (72.0, 90.0),
+   582	        "trailing_act_pct": (2.0, 5.0),
+   583	        "trailing_gap_pct": (0.8, 2.0),
+   584	    },
+   585	}
+   586	
+   587	@dataclass
+   588	class ProfileThreshold:
+   589	
+   590	    profile_name: str
+   591	    entry_threshold: float
+   592	    volume_mult:   float
+   593	    volume_spike:  float
+   594	    rsi_min:     float
+   595	    rsi_max:     float
+   596	    rsi_gc_min:  float
+   597	    min_breakout_pct: float
+   598	    atr_sl_mult:       float
+   599	    atr_tp_mult:       float
+   600	    atr_pct_threshold: float
+   601	    quick_sl_pct: float
+   602	    quick_tp_pct: float
+   603	    trailing_act_pct: float
+   604	    trailing_gap_pct: float
+   605	    max_hold_candles: int
+   606	    typical_atr_pct: float
+   607	    max_spread_pct:  float
+   608	    confirmation_weight:    float
+   609	    confirmation_min_score: float
+   610	    kelly_lookback_trades:      int
+   611	    kelly_enabled:              bool
+   612	    max_consecutive_losses:     int
+   613	    consecutive_loss_size_mult: float
+   614	    allowed_regimes: List[str]
+   615	    # [BIAS-FIX -- short regime whitelist] Padanan allowed_regimes utk short,
+   616	    # dari ALLOWED_REGIMES_SHORT. Dibaca commander.py::decide() saat side="short".
+   617	    allowed_regimes_short: List[str]
+   618	    param_bounds: ParameterBounds
+   619	    primary_trigger_type: PrimaryTriggerType
+   620	    meta_learner_allowed: bool
+   621	    meta_learner_level1:  bool
+   622	    meta_learner_level2:  bool
+   623	
+   624	    def validate(self) -> List[str]:
+   625	        errors: List[str] = []
+   626	
+   627	        if self.rsi_min >= self.rsi_max:
+   628	            errors.append(
+   629	                f"[{self.profile_name}] rsi_min ({self.rsi_min}) >= rsi_max ({self.rsi_max})"
+   630	            )
+   631	
+   632	        if self.quick_sl_pct >= self.quick_tp_pct:
+   633	            errors.append(
+   634	                f"[{self.profile_name}] quick_sl_pct ({self.quick_sl_pct}) "
+   635	                f">= quick_tp_pct ({self.quick_tp_pct})"
+   636	            )
+   637	
+   638	        rr = self.atr_tp_mult / self.atr_sl_mult if self.atr_sl_mult > 0 else 0
+   639	        if rr < 1.3:
+   640	            errors.append(
+   641	                f"[{self.profile_name}] ATR R/R terlalu rendah: "
+   642	                f"{self.atr_tp_mult}/{self.atr_sl_mult} = {rr:.2f} (minimum 1.3)"
+   643	            )
+   644	
+   645	        if self.volume_spike <= self.volume_mult:
+   646	            errors.append(
+   647	                f"[{self.profile_name}] volume_spike ({self.volume_spike}) "
+   648	                f"<= volume_mult ({self.volume_mult})"
+   649	            )
+   650	
+   651	        if self.trailing_act_pct <= self.trailing_gap_pct:
+   652	            errors.append(
+   653	                f"[{self.profile_name}] trailing_act_pct ({self.trailing_act_pct}) "
+   654	                f"<= trailing_gap_pct ({self.trailing_gap_pct})"
+   655	            )
+   656	
+   657	        if not (40.0 <= self.entry_threshold <= 95.0):
+   658	            errors.append(
+   659	                f"[{self.profile_name}] entry_threshold {self.entry_threshold} "
+   660	                f"di luar [40, 95]"
+   661	            )
+   662	
+   663	        if not (0.0 <= self.confirmation_weight <= 1.0):
+   664	            errors.append(
+   665	                f"[{self.profile_name}] confirmation_weight {self.confirmation_weight} "
+   666	                f"di luar [0, 1]"
+   667	            )
+   668	
+   669	        return errors
+   670	
+   671	    def to_coinprofile_kwargs(self) -> Dict[str, Any]:
+   672	        return {
+   673	            "entry_threshold":            self.entry_threshold,
+   674	            "volume_mult":                self.volume_mult,
+   675	            "volume_spike":               self.volume_spike,
+   676	            "rsi_min":                    self.rsi_min,
+   677	            "rsi_max":                    self.rsi_max,
+   678	            "rsi_gc_min":                 self.rsi_gc_min,
+   679	            "min_breakout_pct":           self.min_breakout_pct,
+   680	            "atr_sl_mult":                self.atr_sl_mult,
+   681	            "atr_tp_mult":                self.atr_tp_mult,
+   682	            "atr_pct_threshold":          self.atr_pct_threshold,
+   683	            "quick_sl_pct":               self.quick_sl_pct,
+   684	            "quick_tp_pct":               self.quick_tp_pct,
+   685	            "trailing_act_pct":           self.trailing_act_pct,
+   686	            "trailing_gap_pct":           self.trailing_gap_pct,
+   687	            "max_hold_candles":           self.max_hold_candles,
+   688	            "typical_atr_pct":            self.typical_atr_pct,
+   689	            "max_spread_pct":             self.max_spread_pct,
+   690	            "confirmation_weight":        self.confirmation_weight,
+   691	            "confirmation_min_score":     self.confirmation_min_score,
+   692	            "kelly_lookback_trades":      self.kelly_lookback_trades,
+   693	            "kelly_enabled":              self.kelly_enabled,
+   694	            "max_consecutive_losses":     self.max_consecutive_losses,
+   695	            "consecutive_loss_size_mult": self.consecutive_loss_size_mult,
+   696	            "allowed_regimes":            list(self.allowed_regimes),
+   697	            "param_bounds":               self.param_bounds,
+   698	            "primary_trigger_type":       self.primary_trigger_type,
+   699	            "meta_learner_allowed":       self.meta_learner_allowed,
+   700	            "meta_learner_level1":        self.meta_learner_level1,
+   701	            "meta_learner_level2":        self.meta_learner_level2,
+   702	        }
+   703	
+   704	_PRIMARY_TRIGGER_MAP: Dict[str, PrimaryTriggerType] = {
+   705	    "hodl_accumulate":  PrimaryTriggerType.TREND_CONFIRMATION,
+   706	
+   707	    "trend_follow":     PrimaryTriggerType.TREND_CONFIRMATION,
+   708	
+   709	    "breakout_swift":   PrimaryTriggerType.BREAKOUT_VOLUME,
+   710	
+   711	    "scalp_volatile":   PrimaryTriggerType.COMPOSITE,
+   712	
+   713	    "mean_revert":      PrimaryTriggerType.MOMENTUM_REVERSAL,
+   714	
+   715	    "extreme_momentum": PrimaryTriggerType.BREAKOUT_VOLUME,
+   716	
+   717	}
+   718	
+   719	_META_LEARNER_PERMISSIONS: Dict[str, Dict[str, bool]] = {
+   720	    "hodl_accumulate": {
+   721	        "allowed": True,
+   722	        "level1":  False,
+   723	        "level2":  True,
+   724	    },
+   725	    "trend_follow": {
+   726	        "allowed": True,
+   727	        "level1":  False,
+   728	        "level2":  True,
+   729	    },
+   730	    "breakout_swift": {
+   731	        "allowed": True,
+   732	        "level1":  False,
+   733	        "level2":  True,
+   734	    },
+   735	    "scalp_volatile": {
+   736	        "allowed": True,
+   737	        "level1":  False,
+   738	        "level2":  True,
+   739	    },
+   740	    "mean_revert": {
+   741	        "allowed": True,
+   742	        "level1":  False,
+   743	        "level2":  True,
+   744	    },
+   745	    "extreme_momentum": {
+   746	        "allowed": True,
+   747	        "level1":  False,
+   748	        "level2":  False,
+   749	    },
+   750	}
+   751	
+   752	def _build_parameter_bounds(profile_name: str) -> ParameterBounds:
+   753	    bounds  = ParameterBounds()
+   754	    overrides = PARAMETER_BOUNDS_OVERRIDE.get(profile_name, {})
+   755	
+   756	    _BOUNDS_FIELD_MAP = {
+   757	        "entry_threshold":  ("entry_threshold_min",  "entry_threshold_max"),
+   758	        "volume_multiplier": ("volume_mult_min",      "volume_mult_max"),
+   759	        "rsi_min":          ("rsi_min_lower",         "rsi_min_upper"),
+   760	        "rsi_max":          ("rsi_max_lower",         "rsi_max_upper"),
+   761	        "atr_sl_mult":      ("atr_sl_mult_min",       "atr_sl_mult_max"),
+   762	        "atr_tp_mult":      ("atr_tp_mult_min",       "atr_tp_mult_max"),
+   763	        "trailing_act_pct": ("trailing_act_pct_min",  "trailing_act_pct_max"),
+   764	        "trailing_gap_pct": ("trailing_gap_pct_min",  "trailing_gap_pct_max"),
+   765	        "quick_sl_pct":     ("quick_sl_pct_min",      "quick_sl_pct_max"),
+   766	        "quick_tp_pct":     ("quick_tp_pct_min",      "quick_tp_pct_max"),
+   767	    }
+   768	
+   769	    for param_key, (lo, hi) in overrides.items():
+   770	        field_pair = _BOUNDS_FIELD_MAP.get(param_key)
+   771	        if field_pair is None:
+   772	            log.warning(
+   773	                "PARAMETER_BOUNDS_OVERRIDE[%s][%s]: tidak ada mapping — diabaikan.",
+   774	                profile_name, param_key,
+   775	            )
+   776	            continue
+   777	        setattr(bounds, field_pair[0], lo)
+   778	        setattr(bounds, field_pair[1], hi)
+   779	
+   780	        if lo >= hi:
+   781	            raise ValueError(
+   782	                f"PARAMETER_BOUNDS_OVERRIDE[{profile_name}][{param_key}]: "
+   783	                f"min {lo} >= max {hi}. Ini adalah konfigurasi yang tidak valid."
+   784	            )
+   785	
+   786	    return bounds
+   787	
+   788	def _assemble_profile_threshold(profile_name: str) -> ProfileThreshold:
+   789	
+   790	    vol    = VOLUME_PARAMS[profile_name]
+   791	    rsi    = RSI_PARAMS[profile_name]
+   792	    brk    = BREAKOUT_PARAMS[profile_name]
+   793	    atr    = ATR_MULTIPLIERS[profile_name]
+   794	    sltp   = QUICK_SLTP_PARAMS[profile_name]
+   795	    trail  = TRAILING_PARAMS[profile_name]
+   796	    vola   = VOLATILITY_PARAMS[profile_name]
+   797	    mtf    = MTF_PARAMS[profile_name]
+   798	    risk   = RISK_PARAMS[profile_name]
+   799	    perms  = _META_LEARNER_PERMISSIONS[profile_name]
+   800	    bounds = _build_parameter_bounds(profile_name)
+   801	
+   802	    return ProfileThreshold(
+   803	        profile_name          = profile_name,
+   804	        entry_threshold       = ENTRY_THRESHOLDS[profile_name],
+   805	        volume_mult           = vol["volume_mult"],
+   806	        volume_spike          = vol["volume_spike"],
+   807	        rsi_min               = rsi["rsi_min"],
+   808	        rsi_max               = rsi["rsi_max"],
+   809	        rsi_gc_min            = rsi["rsi_gc_min"],
+   810	        min_breakout_pct      = brk["min_breakout_pct"],
+   811	        atr_sl_mult           = atr["atr_sl_mult"],
+   812	        atr_tp_mult           = atr["atr_tp_mult"],
+   813	        atr_pct_threshold     = atr["atr_pct_threshold"],
+   814	        quick_sl_pct          = sltp["quick_sl_pct"],
+   815	        quick_tp_pct          = sltp["quick_tp_pct"],
+   816	        trailing_act_pct      = trail["trailing_act_pct"],
+   817	        trailing_gap_pct      = trail["trailing_gap_pct"],
+   818	        max_hold_candles      = MAX_HOLD_CANDLES[profile_name],
+   819	        typical_atr_pct       = vola["typical_atr_pct"],
+   820	        max_spread_pct        = vola["max_spread_pct"],
+   821	        confirmation_weight   = mtf["confirmation_weight"],
+   822	        confirmation_min_score = mtf["confirmation_min_score"],
+   823	        kelly_lookback_trades      = risk["kelly_lookback_trades"],
+   824	        kelly_enabled              = risk["kelly_enabled"],
+   825	        max_consecutive_losses     = risk["max_consecutive_losses"],
+   826	        consecutive_loss_size_mult = risk["consecutive_loss_size_mult"],
+   827	        allowed_regimes       = ALLOWED_REGIMES[profile_name],
+   828	        allowed_regimes_short = ALLOWED_REGIMES_SHORT[profile_name],
+   829	        param_bounds          = bounds,
+   830	        primary_trigger_type  = _PRIMARY_TRIGGER_MAP[profile_name],
+   831	        meta_learner_allowed  = perms["allowed"],
+   832	        meta_learner_level1   = perms["level1"],
+   833	        meta_learner_level2   = perms["level2"],
+   834	    )
+   835	
+   836	_KNOWN_PROFILES = [
+   837	    "hodl_accumulate",
+   838	    "trend_follow",
+   839	    "breakout_swift",
+   840	    "scalp_volatile",
+   841	    "mean_revert",
+   842	    "extreme_momentum",
+   843	]
+   844	
+   845	_THRESHOLD_REGISTRY: Dict[str, ProfileThreshold] = {}
+   846	
+   847	def get_profile_thresholds(profile_name: str) -> ProfileThreshold:
+   848	
+   849	    if profile_name not in _THRESHOLD_REGISTRY:
+   850	        available = list(_THRESHOLD_REGISTRY.keys())
+   851	        raise KeyError(
+   852	            f"Profile '{profile_name}' tidak ada di threshold registry. "
+   853	            f"Profile yang tersedia: {available}. "
+   854	            f"Tambahkan ke semua blok di profiles/thresholds.py jika ini profile baru."
+   855	        )
+   856	    return _THRESHOLD_REGISTRY[profile_name]
+   857	
+   858	def get_entry_threshold(profile_name: str) -> float:
+   859	    return get_profile_thresholds(profile_name).entry_threshold
+   860	
+   861	
+   862	def get_all_profile_names() -> List[str]:
+   863	    return list(_THRESHOLD_REGISTRY.keys())
+   864	
+   865	
+   866	def get_regime_allowed(profile_name: str, regime_value: str) -> bool:
+   867	    try:
+   868	        thresh = get_profile_thresholds(profile_name)
+   869	        return regime_value in thresh.allowed_regimes
+   870	    except KeyError:
+   871	        return False
+   872	
+   873	def compare_profiles(
+   874	    profile_a: str,
+   875	    profile_b: str,
+   876	    fields: Optional[List[str]] = None,
+   877	) -> Dict[str, Dict[str, Any]]:
+   878	    thresh_a = get_profile_thresholds(profile_a)
+   879	    thresh_b = get_profile_thresholds(profile_b)
+   880	
+   881	    _NUMERIC_FIELDS = [
+   882	        "entry_threshold", "volume_mult", "volume_spike",
+   883	        "rsi_min", "rsi_max", "rsi_gc_min", "min_breakout_pct",
+   884	        "atr_sl_mult", "atr_tp_mult", "atr_pct_threshold",
+   885	        "quick_sl_pct", "quick_tp_pct",
+   886	        "trailing_act_pct", "trailing_gap_pct",
+   887	        "typical_atr_pct", "max_spread_pct",
+   888	        "confirmation_weight", "confirmation_min_score",
+   889	    ]
+   890	
+   891	    target_fields = fields if fields else _NUMERIC_FIELDS
+   892	    result: Dict[str, Dict[str, Any]] = {}
+   893	
+   894	    for f in target_fields:
+   895	        val_a = getattr(thresh_a, f, None)
+   896	        val_b = getattr(thresh_b, f, None)
+   897	        if val_a is None or val_b is None:
+   898	            continue
+   899	        try:
+   900	            diff = float(val_b) - float(val_a)
+   901	        except (TypeError, ValueError):
+   902	            diff = None
+   903	        result[f] = {"a": val_a, "b": val_b, "diff": diff}
+   904	
+   905	    return result
+   906	
+   907	def _validate_all_thresholds() -> None:
+   908	
+   909	    all_bloks = {
+   910	        "ENTRY_THRESHOLDS":          ENTRY_THRESHOLDS,
+   911	        "VOLUME_PARAMS":             VOLUME_PARAMS,
+   912	        "RSI_PARAMS":                RSI_PARAMS,
+   913	        "BREAKOUT_PARAMS":           BREAKOUT_PARAMS,
+   914	        "ATR_MULTIPLIERS":           ATR_MULTIPLIERS,
+   915	        "QUICK_SLTP_PARAMS":         QUICK_SLTP_PARAMS,
+   916	        "TRAILING_PARAMS":           TRAILING_PARAMS,
+   917	        "MAX_HOLD_CANDLES":          MAX_HOLD_CANDLES,
+   918	        "VOLATILITY_PARAMS":         VOLATILITY_PARAMS,
+   919	        "MTF_PARAMS":                MTF_PARAMS,
+   920	        "RISK_PARAMS":               RISK_PARAMS,
+   921	        "ALLOWED_REGIMES":           ALLOWED_REGIMES,
+   922	        "_PRIMARY_TRIGGER_MAP":      _PRIMARY_TRIGGER_MAP,
+   923	        "_META_LEARNER_PERMISSIONS": _META_LEARNER_PERMISSIONS,
+   924	    }
+   925	
+   926	    for blok_name, blok_dict in all_bloks.items():
+   927	        for pname in _KNOWN_PROFILES:
+   928	            if pname not in blok_dict:
+   929	                raise ValueError(
+   930	                    f"Profil '{pname}' TIDAK ADA di blok '{blok_name}'. "
+   931	                    f"Setiap blok WAJIB mengandung semua profil. "
+   932	                    f"Tambahkan entry untuk '{pname}' di '{blok_name}'."
+   933	                )
+   934	
+   935	    for pname in _KNOWN_PROFILES:
+   936	        try:
+   937	            thresh = _assemble_profile_threshold(pname)
+   938	        except Exception as e:
+   939	            raise ValueError(
+   940	                f"Gagal assemble ProfileThreshold untuk '{pname}': {e}"
+   941	            ) from e
+   942	
+   943	        errs = thresh.validate()
+   944	        if errs:
+   945	            raise ValueError(
+   946	                f"ProfileThreshold '{pname}' tidak valid:\n"
+   947	                + "\n".join(f"  • {e}" for e in errs)
+   948	                + "\nPerbaiki nilai di blok yang sesuai di profiles/thresholds.py."
+   949	            )
+   950	
+   951	        _THRESHOLD_REGISTRY[pname] = thresh
+   952	
+   953	    extreme_thresh = ENTRY_THRESHOLDS["extreme_momentum"]
+   954	    for pname, thresh_val in ENTRY_THRESHOLDS.items():
+   955	        if pname != "extreme_momentum" and thresh_val > extreme_thresh:
+   956	            raise ValueError(
+   957	                f"entry_threshold '{pname}' ({thresh_val}) lebih tinggi dari "
+   958	                f"extreme_momentum ({extreme_thresh}). "
+   959	                f"extreme_momentum harus memiliki threshold tertinggi karena "
+   960	                f"merupakan profil paling berisiko."
+   961	            )
+   962	
+   963	    mean_rsi_min = RSI_PARAMS["mean_revert"]["rsi_min"]
+   964	    for pname, rsi_p in RSI_PARAMS.items():
+   965	        if pname != "mean_revert" and rsi_p["rsi_min"] < mean_rsi_min:
+   966	            raise ValueError(
+   967	                f"RSI min '{pname}' ({rsi_p['rsi_min']}) lebih rendah dari "
+   968	                f"mean_revert ({mean_rsi_min}). "
+   969	                f"mean_revert harus punya RSI min terendah (itu nature-nya)."
+   970	            )
+   971	
+   972	    extreme_vol = VOLUME_PARAMS["extreme_momentum"]["volume_mult"]
+   973	    for pname, vol_p in VOLUME_PARAMS.items():
+   974	        if pname != "extreme_momentum" and vol_p["volume_mult"] > extreme_vol:
+   975	            raise ValueError(
+   976	                f"volume_mult '{pname}' ({vol_p['volume_mult']}) lebih tinggi dari "
+   977	                f"extreme_momentum ({extreme_vol}). "
+   978	                f"extreme_momentum membutuhkan volume requirement tertinggi."
+   979	            )
+   980	
+   981	    for pname in _KNOWN_PROFILES:
+   982	        thresh = _THRESHOLD_REGISTRY[pname]
+   983	        bounds = thresh.param_bounds
+   984	
+   985	        # entry_threshold harus dalam bounds-nya sendiri
+   986	        et = thresh.entry_threshold
+   987	        et_bounds = bounds.get_bounds("entry_threshold")
+   988	        if et_bounds and not (et_bounds[0] <= et <= et_bounds[1]):
+   989	            raise ValueError(
+   990	                f"[{pname}] entry_threshold default ({et}) di luar bounds "
+   991	                f"{et_bounds}. Nilai default harus selalu dalam bounds."
+   992	            )
+   993	
+   994	        sl = thresh.quick_sl_pct
+   995	        sl_bounds = bounds.get_bounds("quick_sl_pct")
+   996	        if sl_bounds and not (sl_bounds[0] <= sl <= sl_bounds[1]):
+   997	            raise ValueError(
+   998	                f"[{pname}] quick_sl_pct default ({sl}) di luar bounds "
+   999	                f"{sl_bounds}."
+  1000	            )
+  1001	
+  1002	        tp = thresh.quick_tp_pct
+  1003	        tp_bounds = bounds.get_bounds("quick_tp_pct")
+  1004	        if tp_bounds and not (tp_bounds[0] <= tp <= tp_bounds[1]):
+  1005	            raise ValueError(
+  1006	                f"[{pname}] quick_tp_pct default ({tp}) di luar bounds "
+  1007	                f"{tp_bounds}."
+  1008	            )
+  1009	
+  1010	    log.debug(
+  1011	        "Semua threshold valid: %d profiles, %d blok divalidasi.",
+  1012	        len(_KNOWN_PROFILES), len(all_bloks),
+  1013	    )
+  1014	
+  1015	try:
+  1016	    _validate_all_thresholds()
+  1017	except ValueError as _thresh_err:
+  1018	    raise ImportError(
+  1019	        f"FATAL: Threshold konfigurasi tidak valid — sistem tidak bisa dimulai.\n"
+  1020	        f"Detail: {_thresh_err}\n"
+  1021	        f"Perbaiki profiles/thresholds.py sebelum menjalankan bot."
+  1022	    ) from _thresh_err
+═══════════════════════════════════════════════════════
+ 3. PROFILE — seluruh isi base_profile.py
+═══════════════════════════════════════════════════════
+     1	"""
+     2	profiles/base_profile.py
+     3	AlgoTrader Pro v7.0 — "The Intelligence Pipeline"
+     4	
+     5	"""
+     6	
+     7	from __future__ import annotations
+     8	
+     9	import logging
+    10	from dataclasses import dataclass, field
+    11	from enum import Enum
+    12	from typing import Any, Dict, List, Optional, Tuple
+    13	
+    14	from engine.constants import TIMEFRAME_SECONDS
+    15	
+    16	log = logging.getLogger("profiles.base")
+    17	
+    18	class StrategyProfile(str, Enum):
+    19	    HODL_ACCUMULATE  = "hodl_accumulate"
+    20	    TREND_FOLLOW     = "trend_follow"
+    21	    BREAKOUT_SWIFT   = "breakout_swift"
+    22	    SCALP_VOLATILE   = "scalp_volatile"
+    23	    MEAN_REVERT      = "mean_revert"
+    24	    EXTREME_MOMENTUM = "extreme_momentum"
+    25	
+    26	class PrimaryTriggerType(str, Enum):
+    27	    BREAKOUT_VOLUME    = "breakout_volume"
+    28	    TREND_CONFIRMATION = "trend_confirmation"
+    29	    MOMENTUM_REVERSAL  = "momentum_reversal"
+    30	    COMPOSITE          = "composite"
+    31	
+    32	@dataclass
+    33	class ParameterBounds:
+    34	    entry_threshold_min: float = 55.0
+    35	    entry_threshold_max: float = 85.0
+    36	    volume_mult_min: float = 1.0
+    37	    volume_mult_max: float = 5.0
+    38	    rsi_min_lower: float = 25.0
+    39	    rsi_min_upper: float = 60.0
+    40	    rsi_max_lower: float = 55.0
+    41	    rsi_max_upper: float = 92.0
+    42	    atr_sl_mult_min: float = 1.0
+    43	    atr_sl_mult_max: float = 4.5
+    44	    atr_tp_mult_min: float = 1.5
+    45	    atr_tp_mult_max: float = 12.0
+    46	    trailing_act_pct_min: float = 0.5
+    47	    trailing_act_pct_max: float = 6.0
+    48	    trailing_gap_pct_min: float = 0.2
+    49	    trailing_gap_pct_max: float = 3.5
+    50	    quick_sl_pct_min: float = 0.5
+    51	    quick_sl_pct_max: float = 6.0
+    52	    quick_tp_pct_min: float = 0.8
+    53	    quick_tp_pct_max: float = 12.0
+    54	
+    55	    def get_bounds(self, param_name: str) -> Optional[Tuple[float, float]]:
+    56	        _MAP: Dict[str, Tuple[str, str]] = {
+    57	            "entry_threshold":         ("entry_threshold_min",  "entry_threshold_max"),
+    58	            "volume_mult":             ("volume_mult_min",       "volume_mult_max"),
+    59	            "volume_multiplier":       ("volume_mult_min",       "volume_mult_max"),
+    60	            "rsi_min":                 ("rsi_min_lower",         "rsi_min_upper"),
+    61	            "rsi_max":                 ("rsi_max_lower",         "rsi_max_upper"),
+    62	            "atr_sl_mult":             ("atr_sl_mult_min",       "atr_sl_mult_max"),
+    63	            "atr_tp_mult":             ("atr_tp_mult_min",       "atr_tp_mult_max"),
+    64	            "trailing_act_pct":        ("trailing_act_pct_min",  "trailing_act_pct_max"),
+    65	            "trailing_activation_pct": ("trailing_act_pct_min",  "trailing_act_pct_max"),
+    66	            "trailing_gap_pct":        ("trailing_gap_pct_min",  "trailing_gap_pct_max"),
+    67	            "quick_sl_pct":            ("quick_sl_pct_min",      "quick_sl_pct_max"),
+    68	            "quick_tp_pct":            ("quick_tp_pct_min",      "quick_tp_pct_max"),
+    69	        }
+    70	        entry = _MAP.get(param_name)
+    71	        if entry is None:
+    72	            return None
+    73	        lo = getattr(self, entry[0])
+    74	        hi = getattr(self, entry[1])
+    75	        return (lo, hi)
+    76	
+    77	    def is_within_bounds(self, param_name: str, value: Any) -> bool:
+    78	        bounds = self.get_bounds(param_name)
+    79	        if bounds is None:
+    80	            return True
+    81	        try:
+    82	            v = float(value)
+    83	            return bounds[0] <= v <= bounds[1]
+    84	        except (TypeError, ValueError):
+    85	            return False
+    86	
+    87	@dataclass
+    88	class CoinProfile:
+    89	    symbol:   str
+    90	    profile:  StrategyProfile
+    91	    timeframe:         str
+    92	    timeframe_conf:    str
+    93	    volume_mult:   float
+    94	    volume_spike:  float
+    95	    rsi_min:       float
+    96	    rsi_max:       float
+    97	    rsi_gc_min:    float
+    98	    min_breakout_pct: float
+    99	    atr_sl_mult:  float
+   100	    atr_tp_mult:  float
+   101	    quick_sl_pct:  float
+   102	    quick_tp_pct:  float
+   103	    atr_pct_threshold: float
+   104	    trailing_act_pct:  float
+   105	    trailing_gap_pct:  float
+   106	    max_hold_candles: int
+   107	    description:     str   = ""
+   108	    typical_atr_pct: float = 0.5
+   109	    notes:           str   = ""
+   110	    confirmation_timeframe: str   = ""
+   111	    confirmation_weight:    float = 0.25
+   112	    confirmation_min_score: float = 45.0
+   113	    max_spread_pct: float = 0.15
+   114	    max_consecutive_losses: int   = 3
+   115	    consecutive_loss_size_mult: float = 0.5
+   116	    kelly_lookback_trades: int   = 50
+   117	    kelly_enabled:         bool  = True
+   118	    meta_learner_allowed:  bool = True
+   119	    meta_learner_level1:   bool = False
+   120	    meta_learner_level2:   bool = True
+   121	    
+   122	    param_bounds: ParameterBounds = field(default_factory=ParameterBounds)
+   123	    
+   124	    entry_threshold: float = 70.0
+   125	    
+   126	    primary_trigger_type: PrimaryTriggerType = PrimaryTriggerType.COMPOSITE
+   127	
+   128	    allowed_regimes: List[str] = field(default_factory=lambda: ["trending_bull"])
+   129	    allowed_entry_on_transition:      bool  = False  # boleh entry saat regime transisi
+   130	    transition_size_mult:             float = 0.5    # size multiplier saat entry transisi
+   131	    regime_transition_sl_tighten_pct: float = 0.30  # % SL diperketat saat HOLD_TIGHTEN_SL
+   132	    regime_transition_sl_relax_pct:   float = 0.20  # % SL dilonggarkan saat HOLD_RELAX_SL
+   133	
+   134	    _is_overridden: bool = field(default=False, repr=False)
+   135	    _override_source: str = field(default="", repr=False)
+   136	    _override_timestamp: Optional[str] = field(default=None, repr=False)
+   137	
+   138	    @property
+   139	    def max_hold_seconds(self) -> int:
+   140	        if self.max_hold_candles <= 0:
+   141	            return 0
+   142	        # [DEDUP] Sebelumnya dict tf->detik terduplikasi lokal di sini,
+   143	        # terpisah dari engine.constants.TIMEFRAME_SECONDS yang isinya
+   144	        # PERSIS SAMA (14 entri identik) -- risiko drift kalau salah satu
+   145	        # diupdate tapi yang lain lupa. Sekarang reference satu sumber yang
+   146	        # sama, juga dipakai future/capital_allocator.py.
+   147	        secs = TIMEFRAME_SECONDS.get(self.timeframe, 900)
+   148	        return self.max_hold_candles * secs
+   149	
+   150	    @property
+   151	    def effective_confirmation_tf(self) -> str:
+   152	        if self.confirmation_timeframe:
+   153	            return self.confirmation_timeframe
+   154	        if self.timeframe_conf:
+   155	            return self.timeframe_conf
+   156	        _FALLBACK = {
+   157	            "1m": "5m", "3m": "15m", "5m": "15m",
+   158	            "15m": "1h", "30m": "1h",
+   159	            "1h": "4h", "2h": "4h",
+   160	            "4h": "1d", "6h": "1d", "8h": "1d",
+   161	            "12h": "1d", "1d": "1w",
+   162	        }
+   163	        return _FALLBACK.get(self.timeframe, "15m")
+   164	
+   165	    @property
+   166	    def is_high_frequency(self) -> bool:
+   167	        return self.timeframe in ("1m", "3m", "5m")
+   168	
+   169	    @property
+   170	    def is_swing(self) -> bool:
+   171	        return self.timeframe in ("1h", "2h", "4h", "6h", "8h", "12h", "3d", "1w")
+   172	
+   173	    @property
+   174	    def risk_level(self) -> str:
+   175	        if self.profile == StrategyProfile.EXTREME_MOMENTUM:
+   176	            return "very_high"
+   177	        if self.quick_sl_pct <= 2.0 and self.max_hold_candles > 0 and self.max_hold_candles <= 12:
+   178	            return "high"
+   179	        if self.quick_sl_pct <= 3.0:
+   180	            return "medium"
+   181	        return "low"
+   182	
+   183	    def validate(self) -> List[str]:
+   184	        errors: List[str] = []
+   185	
+   186	        if self.rsi_min >= self.rsi_max:
+   187	            errors.append(
+   188	                f"rsi_min ({self.rsi_min}) harus < rsi_max ({self.rsi_max})"
+   189	            )
+   190	
+   191	        if self.atr_sl_mult <= 0:
+   192	            errors.append(f"atr_sl_mult harus > 0, got {self.atr_sl_mult}")
+   193	        if self.atr_tp_mult <= 0:
+   194	            errors.append(f"atr_tp_mult harus > 0, got {self.atr_tp_mult}")
+   195	
+   196	        if self.quick_sl_pct >= self.quick_tp_pct:
+   197	            errors.append(
+   198	                f"quick_sl_pct ({self.quick_sl_pct}) harus < quick_tp_pct ({self.quick_tp_pct})"
+   199	            )
+   200	
+   201	        if not (40.0 <= self.entry_threshold <= 95.0):
+   202	            errors.append(
+   203	                f"entry_threshold harus dalam [40, 95], got {self.entry_threshold}"
+   204	            )
+   205	
+   206	        if self.volume_spike <= self.volume_mult:
+   207	            errors.append(
+   208	                f"volume_spike ({self.volume_spike}) harus > volume_mult ({self.volume_mult})"
+   209	            )
+   210	
+   211	        if self.trailing_act_pct <= self.trailing_gap_pct:
+   212	            errors.append(
+   213	                f"trailing_act_pct ({self.trailing_act_pct}) harus > trailing_gap_pct ({self.trailing_gap_pct})"
+   214	            )
+   215	
+   216	        if not (0.0 <= self.confirmation_weight <= 1.0):
+   217	            errors.append(
+   218	                f"confirmation_weight harus dalam [0, 1], got {self.confirmation_weight}"
+   219	            )
+   220	
+   221	        if self.kelly_lookback_trades < 10:
+   222	            errors.append(
+   223	                f"kelly_lookback_trades harus >= 10, got {self.kelly_lookback_trades}"
+   224	            )
+   225	
+   226	        return errors
+   227	
+   228	    def with_override(
+   229	        self,
+   230	        source: str,
+   231	        timestamp: str,
+   232	        **kwargs: Any,
+   233	    ) -> "CoinProfile":
+   234	        for param_name, new_value in kwargs.items():
+   235	            if not self.param_bounds.is_within_bounds(param_name, new_value):
+   236	                bounds = self.param_bounds.get_bounds(param_name)
+   237	                raise ValueError(
+   238	                    f"Override '{param_name}' = {new_value} di luar bounds {bounds} "
+   239	                    f"untuk profile {self.profile.value}/{self.symbol}. "
+   240	                    f"Meta_learner tidak boleh melebihi batas keamanan."
+   241	                )
+   242	
+   243	        # [BUG-FIX] Sebelumnya pakai dataclasses.asdict(self) yang REKURSIF —
+   244	        # ini mengonversi semua nested dataclass (termasuk param_bounds, yang
+   245	        # tipenya ParameterBounds) jadi dict biasa. Akibatnya new_profile.param_bounds
+   246	        # jadi dict, bukan ParameterBounds lagi -> with_override() ke-2 kali
+   247	        # (override berantai, misal dari meta_learner yang adjust parameter
+   248	        # bertahap) CRASH: AttributeError 'dict' object has no attribute
+   249	        # 'is_within_bounds'. Terbukti reproduksi nyata sebelum fix ini.
+   250	        # Sekarang shallow-copy manual via dataclasses.fields() — param_bounds
+   251	        # & allowed_regimes tetap objek/reference asli (sudah dicek: tidak ada
+   252	        # mutasi in-place di mana pun, jadi shared reference ini aman).
+   253	        import dataclasses
+   254	        current_dict = {
+   255	            f.name: getattr(self, f.name)
+   256	            for f in dataclasses.fields(self)
+   257	            if not f.name.startswith("_")
+   258	        }
+   259	
+   260	        current_dict.update(kwargs)
+   261	
+   262	        new_profile = CoinProfile(**current_dict)
+   263	        new_profile._is_overridden      = True
+   264	        new_profile._override_source    = source
+   265	        new_profile._override_timestamp = timestamp
+   266	
+   267	        errs = new_profile.validate()
+   268	        if errs:
+   269	            raise ValueError(
+   270	                f"Override menghasilkan profile tidak valid: {'; '.join(errs)}"
+   271	            )
+   272	
+   273	        log.info(
+   274	            "Profile override: %s/%s | source=%s | changes=%s",
+   275	            self.profile.value, self.symbol,
+   276	            source, list(kwargs.keys()),
+   277	        )
+   278	        return new_profile
+   279	
+   280	    def to_dict(self) -> Dict[str, Any]:
+   281	        return {
+   282	            "symbol":              self.symbol,
+   283	            "profile":             self.profile.value,
+   284	            "timeframe":           self.timeframe,
+   285	            "timeframe_conf":      self.timeframe_conf,
+   286	            "volume_mult":         self.volume_mult,
+   287	            "volume_spike":        self.volume_spike,
+   288	            "rsi_min":             self.rsi_min,
+   289	            "rsi_max":             self.rsi_max,
+   290	            "rsi_gc_min":          self.rsi_gc_min,
+   291	            "min_breakout_pct":    self.min_breakout_pct,
+   292	            "atr_sl_mult":         self.atr_sl_mult,
+   293	            "atr_tp_mult":         self.atr_tp_mult,
+   294	            "quick_sl_pct":        self.quick_sl_pct,
+   295	            "quick_tp_pct":        self.quick_tp_pct,
+   296	            "atr_pct_threshold":   self.atr_pct_threshold,
+   297	            "trailing_act_pct":    self.trailing_act_pct,
+   298	            "trailing_gap_pct":    self.trailing_gap_pct,
+   299	            "max_hold_candles":    self.max_hold_candles,
+   300	            "typical_atr_pct":     self.typical_atr_pct,
+   301	            "entry_threshold":     self.entry_threshold,
+   302	            "max_spread_pct":      self.max_spread_pct,
+   303	            "confirmation_weight": self.confirmation_weight,
+   304	            "kelly_lookback_trades": self.kelly_lookback_trades,
+   305	        }
+   306	
+   307	    def summary_line(self) -> str:
+   308	        return (
+   309	            f"{self.symbol:<14} | {self.profile.value:<22} | "
+   310	            f"TF={self.timeframe:<4} | "
+   311	            f"SL={self.quick_sl_pct:.1f}% TP={self.quick_tp_pct:.1f}% | "
+   312	            f"threshold={self.entry_threshold:.0f} | risk={self.risk_level}"
+   313	            + (" [OVERRIDE]" if self._is_overridden else "")
+   314	        )
+   315	
+   316	
+   317	
+   318	class AdaptiveParams:
+   319	    @staticmethod
+   320	    def adjust_for_market(
+   321	        profile: CoinProfile,
+   322	        cur_atr: float,
+   323	        cur_price: float,
+   324	        cur_vol_ratio: float,
+   325	        cur_rsi: float,
+   326	    ) -> Dict[str, Any]:
+   327	        cur_atr_pct = (cur_atr / cur_price * 100) if cur_price > 0 else 0.0
+   328	        typical_atr = profile.typical_atr_pct or 1.0
+   329	        atr_ratio = cur_atr_pct / typical_atr if typical_atr > 0 else 1.0
+   330	
+   331	        if atr_ratio > 2.0:
+   332	            sl_mult = profile.atr_sl_mult * 1.3
+   333	            tp_mult = profile.atr_tp_mult * 1.2
+   334	            mode = "HIGH_VOLATILITY"
+   335	        elif atr_ratio > 1.5:
+   336	            sl_mult = profile.atr_sl_mult * 1.15
+   337	            tp_mult = profile.atr_tp_mult * 1.1
+   338	            mode = "ELEVATED_VOLATILITY"
+   339	        elif atr_ratio < 0.5:
+   340	            sl_mult = profile.atr_sl_mult * 0.9
+   341	            tp_mult = profile.atr_tp_mult * 0.9
+   342	            mode = "LOW_VOLATILITY"
+   343	        else:
+   344	            sl_mult = profile.atr_sl_mult
+   345	            tp_mult = profile.atr_tp_mult
+   346	            mode = "NORMAL"
+   347	
+   348	        vol_threshold = profile.volume_mult * (0.85 if cur_vol_ratio > 3.0 else 1.0)
+   349	        if atr_ratio > 1.5:
+   350	            rsi_min = max(profile.rsi_min - 5, 30)
+   351	            rsi_max = min(profile.rsi_max + 5, 85)
+   352	        else:
+   353	            rsi_min = profile.rsi_min
+   354	            rsi_max = profile.rsi_max
+   355	
+   356	        sl_atr = cur_atr * sl_mult
+   357	        sl_pct = cur_price * (profile.quick_sl_pct / 100)
+   358	        sl_final = cur_price - max(sl_atr, sl_pct)
+   359	
+   360	        tp_atr = cur_atr * tp_mult
+   361	        tp_pct = cur_price * (profile.quick_tp_pct / 100)
+   362	        tp_final = cur_price + max(tp_atr, tp_pct)
+   363	
+   364	        return {
+   365	            "profile": profile.profile.value,
+   366	            "adaptive_mode": mode,
+   367	            "atr_ratio": round(atr_ratio, 2),
+   368	            "atr_pct": round(cur_atr_pct, 4),
+   369	            "sl_mult": round(sl_mult, 2),
+   370	            "tp_mult": round(tp_mult, 2),
+   371	            "sl": round(sl_final, 8),
+   372	            "tp": round(tp_final, 8),
+   373	            "vol_threshold": round(vol_threshold, 2),
+   374	            "rsi_min": rsi_min,
+   375	            "rsi_max": rsi_max,
+   376	            "timeframe": profile.timeframe,
+   377	            "trailing_act_pct": profile.trailing_act_pct,
+   378	            "trailing_gap_pct": profile.trailing_gap_pct,
+   379	        }
+   380	
+   381	PROFILE_EMOJI: Dict[str, str] = {
+   382	    StrategyProfile.HODL_ACCUMULATE.value:  "🏦",
+   383	    StrategyProfile.TREND_FOLLOW.value:     "📈",
+   384	    StrategyProfile.BREAKOUT_SWIFT.value:   "⚡",
+   385	    StrategyProfile.SCALP_VOLATILE.value:   "🎯",
+   386	    StrategyProfile.MEAN_REVERT.value:      "↩️",
+   387	    StrategyProfile.EXTREME_MOMENTUM.value: "🚀",
+   388	}
+   389	
+   390	PROFILE_TIMEFRAME: Dict[str, str] = {
+   391	    StrategyProfile.HODL_ACCUMULATE.value:  "1d",
+   392	    StrategyProfile.TREND_FOLLOW.value:     "4h",
+   393	    StrategyProfile.BREAKOUT_SWIFT.value:   "1h",
+   394	    StrategyProfile.SCALP_VOLATILE.value:   "15m",
+   395	    StrategyProfile.MEAN_REVERT.value:      "4h",
+   396	    StrategyProfile.EXTREME_MOMENTUM.value: "15m",
+   397	}
+   398	
+   399	PROFILE_RISK_LABEL: Dict[str, str] = {
+   400	    StrategyProfile.HODL_ACCUMULATE.value:  "Low",
+   401	    StrategyProfile.TREND_FOLLOW.value:     "Medium",
+   402	    StrategyProfile.BREAKOUT_SWIFT.value:   "Medium-High",
+   403	    StrategyProfile.SCALP_VOLATILE.value:   "High",
+   404	    StrategyProfile.MEAN_REVERT.value:      "Medium",
+   405	    StrategyProfile.EXTREME_MOMENTUM.value: "Very High ⚠️",
+   406	}
+   407	
+   408	TIMEFRAME_CONFIRMATION_MAP: Dict[str, str] = {
+   409	    "1m":  "5m",
+   410	    "3m":  "15m",
+   411	    "5m":  "15m",
+   412	    "15m": "1h",
+   413	    "30m": "1h",
+   414	    "1h":  "4h",
+   415	    "2h":  "4h",
+   416	    "4h":  "1d",
+   417	    "6h":  "1d",
+   418	    "8h":  "1d",
+   419	    "12h": "1d",
+   420	    "1d":  "1w",
+   421	    "3d":  "1w",
+   422	    "1w":  "1w",
+   423	}
+
+═══════════════════════════════════════════════════════
+ 4. PROFILE — seluruh isi registry.py
+═══════════════════════════════════════════════════════
+     1	"""
+     2	profiles/registry.py
+     3	AlgoTrader Pro v7.0 — "The Intelligence Pipeline"
+     4	
+     5	"""
+     6	
+     7	from __future__ import annotations
+     8	
+     9	import logging
+    10	import asyncio
+    11	import warnings
+    12	from dataclasses import dataclass, field
+    13	from typing import Any, Dict, List, Optional, Tuple
+    14	
+    15	from engine.profiles.base_profile import (
+    16	    CoinProfile,
+    17	    ParameterBounds,
+    18	    PrimaryTriggerType,
+    19	    StrategyProfile,
+    20	    PROFILE_EMOJI,
+    21	    PROFILE_TIMEFRAME,
+    22	    TIMEFRAME_CONFIRMATION_MAP,
+    23	)
+    24	from engine.profiles.thresholds import get_profile_thresholds, get_all_profile_names
+    25	
+    26	log = logging.getLogger("profiles.registry")
+    27	
+    28	
+    29	def _fire_and_forget_db(coro_or_result) -> None:
+    30	    """
+    31	    [TAMBAHAN] Helper untuk handle db calls yang bisa sync ATAU async.
+    32	    registry.py dipanggil dari konteks sync (set_profile_override,
+    33	    revert_parameter_override, dll) tapi DatabaseManager menggunakan
+    34	    async methods. Tanpa penanganan ini, coroutine dari async DB call
+    35	    tidak pernah dieksekusi — perubahan tidak tersimpan ke DB secara
+    36	    diam-diam tanpa error.
+    37	
+    38	    Solusi: kalau ada running event loop, schedule via create_task.
+    39	    Kalau tidak ada running loop (konteks sync murni), tutup coroutine
+    40	    agar tidak memory leak dan log debug.
+    41	    Konsisten dengan cara apply_parameter_override sudah melakukannya.
+    42	    """
+    43	    if coro_or_result is None:
+    44	        return
+    45	    if not hasattr(coro_or_result, "__await__"):
+    46	        return  # sudah sync result
+    47	    try:
+    48	        loop = asyncio.get_running_loop()
+    49	        loop.create_task(coro_or_result)
+    50	    except RuntimeError:
+    51	        try:
+    52	            coro_or_result.close()
+    53	        except Exception:
+    54	            pass
+    55	        log.debug(
+    56	            "DB call tidak bisa di-schedule (no running loop) — "
+    57	            "perubahan mungkin tidak tersimpan ke DB."
+    58	        )
+    59	
+    60	
+    61	_COIN_PROFILE_MAP: Dict[str, str] = {
+    62	    # [BUG-FIX] BTC hilang dari map akibat str_replace error saat audit
+    63	    "BTC": "hodl_accumulate",
+    64	    "ETH": "hodl_accumulate",
+    65	    "SOL":  "breakout_swift",
+    66	    "BNB":  "trend_follow",
+    67	    "AVAX": "trend_follow",
+    68	    "XRP":  "breakout_swift",
+    69	    "ADA":  "breakout_swift",
+    70	    "DOT":  "breakout_swift",
+    71	    "LINK": "breakout_swift",
+    72	    "ATOM": "breakout_swift",
+    73	    "LTC":  "breakout_swift",
+    74	    "NEAR": "scalp_volatile",
+    75	    "APT":  "scalp_volatile",
+    76	    "SUI":  "scalp_volatile",
+    77	    "FET":  "scalp_volatile",
+    78	    "INJ":  "scalp_volatile",
+    79	    "OP":   "scalp_volatile",
+    80	    "ARB":  "scalp_volatile",
+    81	    "AIGENSYN": "scalp_volatile",
+    82	    "BIO":  "scalp_volatile",
+    83	    "HYPER":"scalp_volatile",
+    84	    "UNI":  "mean_revert",
+    85	    "AAVE": "mean_revert",
+    86	    "SNX":  "mean_revert",
+    87	    "SPK":  "mean_revert",
+    88	    "PEPE":  "extreme_momentum",
+    89	    "POL":   "extreme_momentum",
+    90	    "DOGE":  "extreme_momentum",
+    91	    "SHIB":  "extreme_momentum",
+    92	    "FLOKI": "extreme_momentum",
+    93	    "WIF":   "extreme_momentum",
+    94	    "BONK":  "extreme_momentum",
+    95	}
+    96	
+    97	_LEGACY_PROFILE_ALIAS: Dict[str, str] = {
+    98	    "hodl":        "hodl_accumulate",
+    99	    "trend":       "trend_follow",
+   100	    "breakout":    "breakout_swift",
+   101	    "scalp":       "scalp_volatile",
+   102	    "mean_revert": "mean_revert",
+   103	    "extreme":     "extreme_momentum",
+   104	    # v6.0 names
+   105	    "long_term":  "trend_follow",
+   106	    "short_term": "breakout_swift",
+   107	}
+   108	
+   109	def _build_coin_profile(symbol: str, profile_name: str, overrides: Optional[Dict[str, Any]] = None) -> CoinProfile:
+   110	    thresh = get_profile_thresholds(profile_name)
+   111	    kwargs = thresh.to_coinprofile_kwargs()
+   112	
+   113	    timeframe = PROFILE_TIMEFRAME.get(profile_name, "1h")
+   114	    timeframe_conf = TIMEFRAME_CONFIRMATION_MAP.get(timeframe, "4h")
+   115	
+   116	    if overrides:
+   117	        for param, value in overrides.items():
+   118	            if param in kwargs:
+   119	                if thresh.param_bounds.is_within_bounds(param, value):
+   120	                    kwargs[param] = value
+   121	                    log.info(
+   122	                        "Applied override: %s/%s | %s = %s",
+   123	                        symbol, profile_name, param, value,
+   124	                    )
+   125	                else:
+   126	                    bounds = thresh.param_bounds.get_bounds(param)
+   127	                    log.warning(
+   128	                        "Override '%s' = %s di luar bounds %s untuk %s/%s — diabaikan.",
+   129	                        param, value, bounds, symbol, profile_name,
+   130	                    )
+   131	
+   132	    profile_enum = StrategyProfile(profile_name)
+   133	
+   134	    coin_profile = CoinProfile(
+   135	        symbol=symbol,
+   136	        profile=profile_enum,
+   137	        timeframe=timeframe,
+   138	        timeframe_conf=timeframe_conf,
+   139	        description=f"{PROFILE_EMOJI.get(profile_name, '⚙️')} {profile_name} | {symbol}",
+   140	        **kwargs,
+   141	    )
+   142	
+   143	    errors = coin_profile.validate()
+   144	    if errors:
+   145	        log.error(
+   146	            "CoinProfile %s/%s validation errors: %s",
+   147	            symbol, profile_name, errors,
+   148	        )
+   149	
+   150	    return coin_profile
+   151	
+   152	def _build_conservative_profile(symbol: str) -> CoinProfile:
+   153	    thresh = get_profile_thresholds("scalp_volatile")
+   154	    kwargs = thresh.to_coinprofile_kwargs()
+   155	
+   156	    kwargs.update({
+   157	        "volume_mult":       3.0,
+   158	        "volume_spike":      5.0,
+   159	        "rsi_min":           55.0,
+   160	        "rsi_max":           65.0,
+   161	        "rsi_gc_min":        55.0,
+   162	        "min_breakout_pct":  0.25,
+   163	        "atr_sl_mult":       1.5,
+   164	        "atr_tp_mult":       2.5,
+   165	        "quick_sl_pct":      1.5,
+   166	        "quick_tp_pct":      2.5,
+   167	        "trailing_act_pct":  2.0,
+   168	        "trailing_gap_pct":  0.8,
+   169	        "max_hold_candles":  12,
+   170	        "entry_threshold":   75.0,
+   171	        "typical_atr_pct":   0.8,
+   172	    })
+   173	
+   174	    return CoinProfile(
+   175	        symbol=symbol,
+   176	        profile=StrategyProfile.SCALP_VOLATILE,
+   177	        timeframe="1h",
+   178	        timeframe_conf="4h",
+   179	        description=f"⚠️ Conservative fallback | {symbol} (tidak terdaftar)",
+   180	        notes="Tambahkan ke _COIN_PROFILE_MAP untuk konfigurasi optimal.",
+   181	        **kwargs,
+   182	    )
+   183	
+   184	_ACTIVE_OVERRIDES: Dict[str, Dict[str, Any]] = {}
+   185	
+   186	_MANUAL_PROFILE_OVERRIDES: Dict[str, str] = {}
+   187	
+   188	_PROFILE_CACHE: Dict[str, CoinProfile] = {}
+   189	
+   190	def _invalidate_cache(symbol: Optional[str] = None) -> None:
+   191	    if symbol:
+   192	        base = symbol.split("/")[0].upper()
+   193	        _PROFILE_CACHE.pop(base, None)
+   194	    else:
+   195	        _PROFILE_CACHE.clear()
+   196	
+   197	
+   198	def select_profile_from_indicators(
+   199	    symbol: str,
+   200	    ind_volatility: float = 50.0,
+   201	    ind_momentum:   float = 50.0,
+   202	    ind_trend:      float = 50.0,
+   203	    ema_stack_score: float = 50.0,
+   204	    adx:            float = 20.0,
+   205	    rsi:            float = 50.0,
+   206	    atr_pct:        float = 0.5,
+   207	    regime:         str   = "trending_bull",
+   208	) -> str:
+   209	    """
+   210	    Pilih profile otomatis berdasarkan kondisi indikator saat itu.
+   211	    Koin tetap punya jati diri (base profile dari _COIN_PROFILE_MAP)
+   212	    tapi bisa naik/turun profile sesuai kondisi lapangan.
+   213	    """
+   214	    base = symbol.split("/")[0].upper()
+   215	    base_profile = _COIN_PROFILE_MAP.get(base, "scalp_volatile")
+   216	
+   217	    # Kondisi extreme_momentum — semua koin bisa masuk kalau syarat terpenuhi
+   218	    if (
+   219	        ema_stack_score >= 88
+   220	        and ind_trend    >= 80
+   221	        and ind_momentum >= 78
+   222	        and adx          >= 30
+   223	        and rsi          >= 60
+   224	    ):
+   225	        return "extreme_momentum"
+   226	
+   227	    # Kondisi trend_follow — tren kuat, volatilitas normal
+   228	    if (
+   229	        ind_trend    >= 75
+   230	        and ema_stack_score >= 75
+   231	        and adx          >= 25
+   232	        and ind_volatility <= 70
+   233	        and regime == "trending_bull"
+   234	    ):
+   235	        return "trend_follow"
+   236	
+   237	    # Kondisi breakout_swift — momentum tinggi + volatilitas sedang
+   238	    if (
+   239	        ind_momentum >= 70
+   240	        and ind_trend >= 65
+   241	        and adx       >= 22
+   242	        and atr_pct   >= 0.4
+   243	    ):
+   244	        return "breakout_swift"
+   245	
+   246	    # Kondisi scalp_volatile — volatilitas tinggi
+   247	    if (
+   248	        ind_volatility >= 72
+   249	        or atr_pct      >= 1.2
+   250	        or regime == "volatile_expansion"
+   251	    ):
+   252	        return "scalp_volatile"
+   253	
+   254	    # Kondisi mean_revert — pasar ranging, momentum lemah
+   255	    if (
+   256	        regime == "ranging"
+   257	        or (adx <= 20 and ind_momentum <= 45)
+   258	    ):
+   259	        return "mean_revert"
+   260	
+   261	    # Kondisi hodl_accumulate — tren lemah, semua indikator netral
+   262	    if (
+   263	        ind_trend    <= 55
+   264	        and ind_momentum <= 50
+   265	        and adx          <= 20
+   266	    ):
+   267	        return "hodl_accumulate"
+   268	
+   269	    # Fallback — pakai jati diri koin
+   270	    return base_profile
+   271	
+   272	def get_coin_profile(
+   273	    symbol: str,
+   274	    override_profile: Optional[str] = None,
+   275	    db_manager=None,
+   276	) -> CoinProfile:
+   277	
+   278	    base = symbol.split("/")[0].upper()
+   279	
+   280	    if db_manager is not None and base not in _ACTIVE_OVERRIDES:
+   281	        _load_overrides_from_db(base, db_manager)
+   282	
+   283	    if override_profile is None and base in _PROFILE_CACHE:
+   284	        return _PROFILE_CACHE[base]
+   285	
+   286	    if override_profile:
+   287	        profile_name = _resolve_profile_name(override_profile)
+   288	        if profile_name is None:
+   289	            log.warning(
+   290	                "get_coin_profile: override_profile '%s' tidak dikenal, diabaikan.",
+   291	                override_profile,
+   292	            )
+   293	            profile_name = _get_default_profile_name(base)
+   294	    elif base in _MANUAL_PROFILE_OVERRIDES:
+   295	        profile_name = _MANUAL_PROFILE_OVERRIDES[base]
+   296	    else:
+   297	        profile_name = _get_default_profile_name(base)
+   298	
+   299	    param_overrides = _ACTIVE_OVERRIDES.get(base, {})
+   300	
+   301	    if profile_name is None:
+   302	        # Cek apakah auto_classify sudah cache di _COIN_PROFILE_MAP runtime
+   303	        auto_name = _COIN_PROFILE_MAP.get(base)
+   304	        if auto_name:
+   305	            profile_name = auto_name
+   306	            profile = _build_coin_profile(symbol, profile_name, param_overrides)
+   307	            log.info("AutoClassify (cached): %s → %s", base, profile_name)
+   308	        else:
+   309	            log.warning(
+   310	                "Coin '%s' tidak ada di _COIN_PROFILE_MAP — menggunakan profil konservatif.",
+   311	                base,
+   312	            )
+   313	            profile = _build_conservative_profile(symbol)
+   314	    else:
+   315	        profile = _build_coin_profile(symbol, profile_name, param_overrides)
+   316	
+   317	    if override_profile is None:
+   318	        _PROFILE_CACHE[base] = profile
+   319	
+   320	    return profile
+   321	
+   322	def _get_default_profile_name(base: str) -> Optional[str]:
+   323	    return _COIN_PROFILE_MAP.get(base)
+   324	
+   325	def auto_classify_profile(base: str, ticker: dict, spread_pct: float = 0.0) -> str:
+   326	    """
+   327	    Klasifikasi otomatis profil koin berdasarkan data live ticker.
+   328	    Dipakai sebagai fallback kalau koin tidak ada di _COIN_PROFILE_MAP.
+   329	
+   330	    Parameter:
+   331	        base       : simbol base coin (misal "SOL", "BONK")
+   332	        ticker     : dict dari ws_feed.live_tickers[symbol]
+   333	        spread_pct : spread % dari ws_feed.get_spread_pct(symbol)
+   334	
+   335	    Return:
+   336	        nama profil (str) — salah satu dari StrategyProfile values
+   337	    """
+   338	    try:
+   339	        quote_volume = float(ticker.get("quote_volume") or 0)
+   340	        last         = float(ticker.get("last") or 0)
+   341	        # Fallback volume dari base_volume * price
+   342	        if quote_volume <= 0 and last > 0:
+   343	            quote_volume = float(ticker.get("volume") or 0) * last
+   344	    except Exception:
+   345	        quote_volume = 0.0
+   346	
+   347	    spread = abs(spread_pct) if spread_pct else 0.0
+   348	
+   349	    # ── Klasifikasi berdasarkan volume + spread ──────────────────
+   350	    # Tier 1: Blue chip — volume sangat tinggi, spread sangat kecil
+   351	    if quote_volume >= 50_000_000 and spread < 0.15:
+   352	        profile = "hodl_accumulate"
+   353	
+   354	    # Tier 2: Mid cap stabil — volume tinggi, spread kecil
+   355	    elif quote_volume >= 10_000_000 and spread < 0.25:
+   356	        profile = "trend_follow"
+   357	
+   358	    # Tier 3: Liquid aktif — volume cukup, spread wajar
+   359	    elif quote_volume >= 3_000_000 and spread < 0.40:
+   360	        profile = "breakout_swift"
+   361	
+   362	    # Tier 4: Volatile liquid — volume cukup tapi spread lebar
+   363	    elif quote_volume >= 1_000_000 and spread < 0.80:
+   364	        profile = "scalp_volatile"
+   365	
+   366	    # Tier 5: Meme/pump — volume cukup tapi spread sangat lebar
+   367	    elif quote_volume >= 500_000 and spread >= 0.80:
+   368	        profile = "extreme_momentum"
+   369	
+   370	    # Tier 6: Low volume — cenderung ranging, mean revert
+   371	    elif quote_volume >= 100_000:
+   372	        profile = "mean_revert"
+   373	
+   374	    # Tier 7: Sangat low volume — pakai mean_revert (paling jarang trade, paling aman)
+   375	    else:
+   376	        profile = "mean_revert"
+   377	
+   378	    # Cache hasil ke _COIN_PROFILE_MAP runtime (tidak ubah file)
+   379	    _COIN_PROFILE_MAP[base] = profile
+   380	    log.info(
+   381	        "AutoClassify: %s → %s | vol_24h=$%.0f spread=%.3f%%",
+   382	        base, profile, quote_volume, spread,
+   383	    )
+   384	    return profile
+   385	
+   386	def _resolve_profile_name(name: str) -> Optional[str]:
+   387	    if not name:
+   388	        return None
+   389	    lower = name.lower()
+   390	
+   391	    known = get_all_profile_names()
+   392	    if lower in known:
+   393	        return lower
+   394	
+   395	    if lower in _LEGACY_PROFILE_ALIAS:
+   396	        return _LEGACY_PROFILE_ALIAS[lower]
+   397	
+   398	    for prof in StrategyProfile:
+   399	        if prof.value == lower:
+   400	            return prof.value
+   401	
+   402	    return None
+   403	
+   404	def set_profile_override(
+   405	    symbol: str,
+   406	    profile_name: str,
+   407	    db_manager=None,
+   408	) -> Tuple[bool, str]:
+   409	    resolved = _resolve_profile_name(profile_name)
+   410	    if resolved is None:
+   411	        valid = get_all_profile_names() + list(_LEGACY_PROFILE_ALIAS.keys())
+   412	        return False, (
+   413	            f"Profile '{profile_name}' tidak dikenal. "
+   414	            f"Valid: {sorted(set(valid))}"
+   415	        )
+   416	
+   417	    base = symbol.split("/")[0].upper()
+   418	    _MANUAL_PROFILE_OVERRIDES[base] = resolved
+   419	    _invalidate_cache(base)
+   420	
+   421	    if db_manager is not None:
+   422	        try:
+   423	            # [BUG-FIX] Sebelumnya: save_parameter_change dipanggil tanpa
+   424	            # penanganan async — DatabaseManager.save_parameter_change adalah
+   425	            # async method, tanpa await/create_task coroutine tidak pernah
+   426	            # dieksekusi, override tidak tersimpan ke DB secara diam-diam.
+   427	            # Sekarang: pakai _fire_and_forget_db yang konsisten dengan cara
+   428	            # apply_parameter_override sudah melakukannya.
+   429	            _fire_and_forget_db(db_manager.save_parameter_change(
+   430	                symbol=base,
+   431	                profile=resolved,
+   432	                parameter_name="_profile_override",
+   433	                old_value=_COIN_PROFILE_MAP.get(base, "unknown"),
+   434	                new_value=resolved,
+   435	                reason="Manual profile override via set_profile_override()",
+   436	                approved_by="manual",
+   437	            ))
+   438	        except Exception as exc:
+   439	            log.warning("Gagal simpan profile override ke DB: %s", exc)
+   440	
+   441	    log.info("Profile override set: %s → %s", base, resolved)
+   442	    profile = get_coin_profile(symbol)
+   443	    return True, (
+   444	        f"Override berhasil: {symbol} → {resolved} "
+   445	        f"(TF={profile.timeframe}, threshold={profile.entry_threshold})"
+   446	    )
+   447	
+   448	def clear_profile_override(symbol: str, db_manager=None) -> bool:
+   449	    base = symbol.split("/")[0].upper()
+   450	    existed = base in _MANUAL_PROFILE_OVERRIDES
+   451	
+   452	    if existed:
+   453	        # [BUG-FIX] Sebelumnya old_value dibaca dari _MANUAL_PROFILE_OVERRIDES
+   454	        # SETELAH `del _MANUAL_PROFILE_OVERRIDES[base]` -- karena key sudah
+   455	        # dihapus, .get(base, "override") SELALU jatuh ke default "override",
+   456	        # tidak pernah menampilkan profile asli yang di-clear. Dibuktikan via
+   457	        # eksperimen: old_value yang tersimpan ke DB selalu literal "override"
+   458	        # bukan "trend_follow"/dst. Dampak: audit-trail parameter_history di
+   459	        # DB jadi tidak akurat (bukan bug yang mempengaruhi trading, cuma
+   460	        # riwayat log). Fix: simpan nilai lama SEBELUM del.
+   461	        old_profile_value = _MANUAL_PROFILE_OVERRIDES[base]
+   462	        del _MANUAL_PROFILE_OVERRIDES[base]
+   463	        _invalidate_cache(base)
+   464	        log.info("Profile override cleared: %s", base)
+   465	
+   466	        if db_manager is not None:
+   467	            try:
+   468	                # [BUG-FIX] Sama seperti set_profile_override — async call
+   469	                # tanpa penanganan yang benar. Fix: _fire_and_forget_db.
+   470	                _fire_and_forget_db(db_manager.save_parameter_change(
+   471	                    symbol=base,
+   472	                    profile=_COIN_PROFILE_MAP.get(base, "unknown"),
+   473	                    parameter_name="_profile_override",
+   474	                    old_value=old_profile_value,
+   475	                    new_value="(cleared)",
+   476	                    reason="Profile override cleared",
+   477	                    approved_by="manual",
+   478	                ))
+   479	            except Exception as exc:
+   480	                log.warning("Gagal simpan clear override ke DB: %s", exc)
+   481	
+   482	    return existed
+   483	
+   484	def apply_parameter_override(
+   485	    symbol: str,
+   486	    profile_name: str,
+   487	    parameter_name: str,
+   488	    new_value: Any,
+   489	    source: str = "meta_learner",
+   490	    db_manager=None,
+   491	) -> Tuple[bool, str]:
+   492	    base = symbol.split("/")[0].upper()
+   493	
+   494	    profile_name_resolved = (
+   495	        _MANUAL_PROFILE_OVERRIDES.get(base)
+   496	        or _COIN_PROFILE_MAP.get(base)
+   497	    )
+   498	    if profile_name_resolved is None:
+   499	        return False, f"Coin '{base}' tidak terdaftar, tidak bisa apply parameter override."
+   500	
+   501	    thresh = get_profile_thresholds(profile_name_resolved)
+   502	    if not thresh.param_bounds.is_within_bounds(parameter_name, new_value):
+   503	        bounds = thresh.param_bounds.get_bounds(parameter_name)
+   504	        return False, (
+   505	            f"Parameter '{parameter_name}' = {new_value} di luar bounds {bounds} "
+   506	            f"untuk {base}/{profile_name_resolved}."
+   507	        )
+   508	
+   509	    old_profile = get_coin_profile(symbol)
+   510	    old_value = getattr(old_profile, parameter_name, None)
+   511	
+   512	    if base not in _ACTIVE_OVERRIDES:
+   513	        _ACTIVE_OVERRIDES[base] = {}
+   514	    _ACTIVE_OVERRIDES[base][parameter_name] = new_value
+   515	    _invalidate_cache(base)
+   516	
+   517	    if db_manager is not None:
+   518	        try:
+   519	            res = db_manager.save_parameter_change(
+   520	                symbol=base,
+   521	                profile=profile_name_resolved,
+   522	                parameter_name=parameter_name,
+   523	                old_value=old_value,
+   524	                new_value=new_value,
+   525	                reason=f"Applied by {source}",
+   526	                approved_by=source,
+   527	            )
+   528	            if hasattr(res, "__await__"):
+   529	                try:
+   530	                    asyncio.get_running_loop().create_task(res)
+   531	                except RuntimeError:
+   532	                    # No running loop; best-effort fire-and-forget.
+   533	                    # [BUG-FIX minor] Sebelumnya coroutine `res` dibiarkan
+   534	                    # begitu saja di sini kalau tidak ada running loop --
+   535	                    # tidak di-close() spt _fire_and_forget_db (helper serupa
+   536	                    # di file yg sama) melakukannya, sehingga Python akan
+   537	                    # memunculkan RuntimeWarning "coroutine was never awaited"
+   538	                    # saat garbage collection. Bukan bug fungsional (data
+   539	                    # override tetap tersimpan ke _ACTIVE_OVERRIDES in-memory),
+   540	                    # cuma noise di log/warning. Konsistenkan dgn pola
+   541	                    # _fire_and_forget_db.
+   542	                    try:
+   543	                        res.close()
+   544	                    except Exception:
+   545	                        pass
+   546	        except Exception as exc:
+   547	            log.warning("Gagal simpan parameter override ke DB: %s", exc)
+   548	
+   549	    log.info(
+   550	        "Parameter override applied: %s/%s | %s: %s → %s (source=%s)",
+   551	        base, profile_name_resolved, parameter_name, old_value, new_value, source,
+   552	    )
+   553	    return True, (
+   554	        f"Override applied: {base}/{profile_name_resolved} | "
+   555	        f"{parameter_name}: {old_value} → {new_value}"
+   556	    )
+   557	
+   558	def revert_parameter_override(
+   559	    symbol: str,
+   560	    parameter_name: str,
+   561	    db_manager=None,
+   562	) -> Tuple[bool, str]:
+   563	    base = symbol.split("/")[0].upper()
+   564	
+   565	    if base not in _ACTIVE_OVERRIDES or parameter_name not in _ACTIVE_OVERRIDES[base]:
+   566	        return False, f"Tidak ada override aktif untuk {base}/{parameter_name}."
+   567	
+   568	    old_override = _ACTIVE_OVERRIDES[base].pop(parameter_name)
+   569	    if not _ACTIVE_OVERRIDES[base]:
+   570	        del _ACTIVE_OVERRIDES[base]
+   571	
+   572	    _invalidate_cache(base)
+   573	
+   574	    profile_name_resolved = _COIN_PROFILE_MAP.get(base, "unknown")
+   575	    if db_manager is not None:
+   576	        try:
+   577	            # [BUG-FIX] Sama — async call tanpa penanganan. Fix: _fire_and_forget_db.
+   578	            _fire_and_forget_db(db_manager.save_parameter_change(
+   579	                symbol=base,
+   580	                profile=profile_name_resolved,
+   581	                parameter_name=parameter_name,
+   582	                old_value=old_override,
+   583	                new_value="(reverted to default)",
+   584	                reason="Reverted due to performance degradation",
+   585	                approved_by="meta_learner",
+   586	            ))
+   587	        except Exception as exc:
+   588	            log.warning("Gagal simpan revert ke DB: %s", exc)
+   589	
+   590	    log.info(
+   591	        "Parameter override reverted: %s/%s | %s (was: %s)",
+   592	        base, profile_name_resolved, parameter_name, old_override,
+   593	    )
+   594	    return True, (
+   595	        f"Reverted: {base}/{profile_name_resolved} | "
+   596	        f"{parameter_name} kembali ke default."
+   597	    )
+   598	
+   599	async def _load_overrides_from_db_async(symbol: str, db_manager) -> None:
+   600	    """
+   601	    # [TAMBAHAN] Bagian async sebenarnya dari _load_overrides_from_db.
+   602	    # Dipisah dari fungsi sync di bawah supaya bisa di-await langsung
+   603	    # (dipanggil dari konteks async seperti startup main.py) ATAU
+   604	    # di-fire-and-forget (dipanggil lazy dari get_coin_profile yang sync).
+   605	    """
+   606	    try:
+   607	        history = await db_manager.get_parameter_history(symbol=symbol, limit=100)
+   608	        if not history:
+   609	            return
+   610	
+   611	        applied: Dict[str, Any] = {}
+   612	        for record in sorted(history, key=lambda r: r.get("timestamp", ""), reverse=True):
+   613	            param = record.get("parameter_name", "")
+   614	            if param.startswith("_"):
+   615	                continue
+   616	            if param not in applied:
+   617	                new_val = record.get("new_value")
+   618	                if new_val is not None and new_val != "(reverted to default)":
+   619	                    applied[param] = new_val
+   620	
+   621	        if applied:
+   622	            _ACTIVE_OVERRIDES[symbol] = applied
+   623	            log.debug(
+   624	                "Loaded %d parameter overrides dari DB untuk %s: %s",
+   625	                len(applied), symbol, list(applied.keys()),
+   626	            )
+   627	
+   628	    except Exception as exc:
+   629	        log.warning("Gagal load overrides dari DB untuk %s: %s", symbol, exc)
+   630	
+   631	
+   632	def _load_overrides_from_db(symbol: str, db_manager) -> None:
+   633	    """
+   634	    # [BUG-FIX] Sebelumnya: db_manager.get_parameter_history() dipanggil
+   635	    # secara sync tanpa await, padahal method itu async def di database.py.
+   636	    # Akibatnya coroutine yang dihasilkan tidak pernah dieksekusi -> variabel
+   637	    # `history` berisi objek coroutine (truthy, jadi lolos `if not history`),
+   638	    # lalu `sorted(history, ...)` melempar TypeError (coroutine tidak
+   639	    # iterable) -> masuk except -> hanya log.warning diam-diam. Efeknya:
+   640	    # parameter override dari DB TIDAK PERNAH ter-load ke _ACTIVE_OVERRIDES,
+   641	    # untuk SEMUA symbol, setiap kali get_coin_profile() dipanggil.
+   642	    # Sekarang: kerja async dipindah ke _load_overrides_from_db_async,
+   643	    # dipanggil lewat _fire_and_forget_db (fungsi ini sendiri tetap sync
+   644	    # karena caller-nya, get_coin_profile, adalah fungsi sync).
+   645	    """
+   646	    _fire_and_forget_db(_load_overrides_from_db_async(symbol, db_manager))
+   647	
+   648	async def load_all_overrides_from_db(db_manager) -> int:
+   649	    """
+   650	    # [BUG-FIX] Sebelumnya: fungsi sync yang memanggil
+   651	    # db_manager.get_parameter_history() (async def di database.py) tanpa
+   652	    # await -> coroutine tidak pernah dieksekusi -> overrides tidak pernah
+   653	    # ter-load, silently masuk except tiap symbol. SELAIN itu fungsi ini
+   654	    # ternyata tidak dipanggil dari mana pun di seluruh codebase (dead code)
+   655	    # — dicek dengan grep menyeluruh ke semua file .py.
+   656	    # Sekarang: dijadikan `async def` yang benar (harus di-await oleh caller).
+   657	    #
+   658	    # [CATATAN UNTUK AUDIT main.py — SENTUHAN_PERLU_REAUDIT]:
+   659	    # main.py sebaiknya memanggil `await load_all_overrides_from_db(db_manager)`
+   660	    # SEKALI saat startup (setelah db_manager siap dan sebelum trading loop
+   661	    # utama berjalan), supaya parameter override dari sesi sebelumnya aktif
+   662	    # sejak awal — bukan menunggu lazy-load per simbol lewat
+   663	    # _load_overrides_from_db yang sifatnya fire-and-forget (ada delay/miss
+   664	    # di pemanggilan pertama). Verifikasi ini saat re-audit serius main.py.
+   665	    """
+   666	    count = 0
+   667	    all_symbols = list(_COIN_PROFILE_MAP.keys())
+   668	
+   669	    for base in all_symbols:
+   670	        try:
+   671	            history = await db_manager.get_parameter_history(symbol=base, limit=100)
+   672	            if not history:
+   673	                continue
+   674	
+   675	            for record in sorted(history, key=lambda r: r.get("timestamp", ""), reverse=True):
+   676	                param = record.get("parameter_name", "")
+   677	                if param == "_profile_override":
+   678	                    new_val = record.get("new_value", "")
+   679	                    if new_val and new_val != "(cleared)":
+   680	                        _MANUAL_PROFILE_OVERRIDES[base] = new_val
+   681	                    break
+   682	
+   683	            applied: Dict[str, Any] = {}
+   684	            seen: set = set()
+   685	            for record in sorted(history, key=lambda r: r.get("timestamp", ""), reverse=True):
+   686	                param = record.get("parameter_name", "")
+   687	                if param.startswith("_") or param in seen:
+   688	                    continue
+   689	                seen.add(param)
+   690	                new_val = record.get("new_value")
+   691	                if new_val is not None and new_val != "(reverted to default)":
+   692	                    applied[param] = new_val
+   693	
+   694	            if applied:
+   695	                _ACTIVE_OVERRIDES[base] = applied
+   696	                count += 1
+   697	
+   698	        except Exception as exc:
+   699	            log.warning("Gagal load overrides untuk %s: %s", base, exc)
+   700	
+   701	    _invalidate_cache()
+   702	    log.info(
+   703	        "Loaded overrides dari DB: %d symbols punya active parameter overrides. "
+   704	        "%d symbols punya manual profile override.",
+   705	        count, len(_MANUAL_PROFILE_OVERRIDES),
+   706	    )
+   707	    return count
+   708	
+   709	def get_all_overrides() -> Dict[str, Dict[str, Any]]:
+   710	    result: Dict[str, Dict[str, Any]] = {}
+   711	    for base, params in _ACTIVE_OVERRIDES.items():
+   712	        result[base] = dict(params)
+   713	    for base, profile_name in _MANUAL_PROFILE_OVERRIDES.items():
+   714	        if base not in result:
+   715	            result[base] = {}
+   716	        result[base]["_profile"] = profile_name
+   717	    return result
+   718	
+   719	def get_profile_summary(symbols: List[str]) -> str:
+   720	    lines = ["📊 Strategy Profile Assignments (v7.0):"]
+   721	    by_profile: Dict[str, List[str]] = {}
+   722	
+   723	    for sym in symbols:
+   724	        prof = get_coin_profile(sym)
+   725	        by_profile.setdefault(prof.profile.value, []).append(sym.split("/")[0])
+   726	
+   727	    for pname, coins in sorted(by_profile.items()):
+   728	        emoji = PROFILE_EMOJI.get(pname, "⚙️")
+   729	        tf = PROFILE_TIMEFRAME.get(pname, "?")
+   730	        lines.append(f"  {emoji} {pname:<22} ({tf}): {', '.join(coins)}")
+   731	
+   732	    overridden = [b for b in _MANUAL_PROFILE_OVERRIDES]
+   733	    if overridden:
+   734	        lines.append(f"\n  ✏️ Manual profile overrides: {', '.join(overridden)}")
+   735	
+   736	    overridden_params = [b for b in _ACTIVE_OVERRIDES]
+   737	    if overridden_params:
+   738	        lines.append(f"  🔧 Parameter overrides aktif: {', '.join(overridden_params)}")
+   739	
+   740	    return "\n".join(lines)
+   741	
+   742	def get_all_registered_symbols() -> List[str]:
+   743	    return list(_COIN_PROFILE_MAP.keys())
+   744	
+   745	def is_registered(symbol: str) -> bool:
+   746	    base = symbol.split("/")[0].upper()
+   747	    return base in _COIN_PROFILE_MAP or base in _MANUAL_PROFILE_OVERRIDES
+   748	
+   749	def register_coin(
+   750	    symbol: str,
+   751	    profile_name: str,
+   752	    persist: bool = False,
+   753	    db_manager=None,
+   754	) -> Tuple[bool, str]:
+   755	    resolved = _resolve_profile_name(profile_name)
+   756	    if resolved is None:
+   757	        return False, f"Profile '{profile_name}' tidak dikenal."
+   758	
+   759	    base = symbol.split("/")[0].upper()
+   760	
+   761	    _COIN_PROFILE_MAP[base] = resolved
+   762	    _invalidate_cache(base)
+   763	
+   764	    if persist and db_manager:
+   765	        return set_profile_override(base, resolved, db_manager=db_manager)
+   766	
+   767	    log.info("Coin registered (runtime): %s → %s", base, resolved)
+   768	    return True, f"Coin {base} registered dengan profile {resolved}."
+
+═══════════════════════════════════════════════════════
+ 5. Daftar semua profile yang ada di project (folder profiles/)
+═══════════════════════════════════════════════════════
+total 140
+drwxr-xr-x 3 root root  4096 Jul 21 05:34 .
+drwxr-xr-x 8 root root  4096 Jul 21 05:58 ..
+-rw-r--r-- 1 root root    31 Jul 12 19:01 __init__.py
+drwxr-xr-x 2 root root  4096 Jul 21 05:35 __pycache__
+-rw-r--r-- 1 root root 15927 Jul 13 11:51 base_profile.py
+-rw-r--r-- 1 root root 27786 Jul 12 19:01 registry.py
+-rw-r--r-- 1 root root 37652 Jul 13 20:46 thresholds.py
+-rw-r--r-- 1 root root 19520 Jul 21 05:34 weights.py
+-rw-r--r-- 1 root root 18455 Jul 21 05:34 weights.py.bak_shortfix

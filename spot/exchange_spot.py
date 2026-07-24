@@ -106,6 +106,38 @@ class ExchangeConnector(BaseExchangeConnector):
                 self._paper_balance[quote_currency], quote_currency,
             )
 
+    def hydrate_from_positions(self, positions) -> int:
+        """[HYDRATION FIX -- insiden restart 2026-07-20 21:48: reconcile
+        menutup paksa SEMUA posisi paper (BERA/JTO spot, WIF/AIGENSYN
+        futures) krn _paper_balance amnesia pasca-restart] Rekonstruksi
+        saldo virtual dari DB open positions. HARUS dipanggil SEBELUM
+        reconciliation startup. No-op kalau bukan paper mode. Fee entry
+        sesi lama TIDAK didebit ulang (sudah terbayar di sesi lalu; bias
+        kecil yang diterima secara sadar). Return: jumlah posisi terhidrasi.
+        """
+        if not self.paper_trading:
+            return 0
+        count = 0
+        for pos in positions:
+            try:
+                symbol = getattr(pos, "symbol", None) or pos.get("symbol")
+                amount = float(getattr(pos, "amount", None) or pos.get("amount") or 0)
+                entry  = float(getattr(pos, "entry_price", None) or pos.get("entry_price") or 0)
+            except Exception:
+                continue
+            if not symbol or amount <= 0 or entry <= 0:
+                continue
+            base, _, quote = symbol.partition("/")
+            cost = amount * entry
+            self._paper_balance[base]  = self._paper_balance.get(base, 0.0) + amount
+            self._paper_balance[quote] = self._paper_balance.get(quote, 0.0) - cost
+            count += 1
+            log.warning(
+                "📝 [PAPER HYDRATE] %s: +%.8f %s / -%.4f %s (cost basis dari DB)",
+                symbol, amount, base, cost, quote,
+            )
+        return count
+
     async def fetch_balance(self) -> Dict:
         # [PAPER TRADING] JANGAN PERNAH query exchange asli untuk saldo --
         # kembalikan saldo virtual (dari INITIAL_CAPITAL + hasil simulasi
@@ -857,6 +889,23 @@ class WebSocketFeed:
         ask = t.get("ask")
         if bid and ask and float(ask) > 0:
             return (float(ask) - float(bid)) / float(ask) * 100
+        # [G3-SPREAD FIX -- log produksi: 100% keputusan Commander berbunyi
+        # G3_SPREAD_UNKNOWN, gate likuiditas buta total] Ticker Binance utk
+        # sebagian simbol/jalur datang tanpa bid/ask (None) -- fallback ke
+        # live_orderbooks (sumber yang SAMA dgn Gate2, terbukti hidup di
+        # spot & futures, diisi WS + REST-poll). Guard kesegaran 30s
+        # mencegah spread basi dipakai menilai likuiditas saat ini.
+        import time as _t
+        ob = self.live_orderbooks.get(symbol, {})
+        bids, asks = ob.get("bids") or [], ob.get("asks") or []
+        ts = ob.get("_ts", 0)
+        if bids and asks and (_t.time() - ts) <= 30:
+            try:
+                bb, ba = float(bids[0][0]), float(asks[0][0])
+                if bb > 0 and ba > 0 and ba >= bb:
+                    return (ba - bb) / ba * 100
+            except (TypeError, ValueError, IndexError):
+                pass
         return None
 
     def get_spread_absolute(self, symbol: str) -> Optional[float]:

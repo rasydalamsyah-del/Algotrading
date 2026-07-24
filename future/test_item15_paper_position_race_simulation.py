@@ -106,6 +106,9 @@ class _PaperFillExecutorStub:
 
 def _build_fake_self(db, exchange):
     fake_self = SimpleNamespace()
+    # [DOUBLE-COUNT FIX] _do_close_position() kini memegang _equity_lock
+    # (mirror _handle_entry) -- stub wajib menyediakannya.
+    fake_self._equity_lock = asyncio.Lock()
     fake_self.db = db
     fake_self.exchange = exchange
     fake_self.risk_manager = RiskManager({})

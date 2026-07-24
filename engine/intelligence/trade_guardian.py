@@ -191,6 +191,7 @@ def _exit_score(
     ema21:      Optional[float],
     vol_ratio:  float,
     regime:     str,
+    side:       str = "long",
 ):
     """Return (score, signals, threshold)."""
     score: float     = 0.0
@@ -205,20 +206,34 @@ def _exit_score(
         "undefined":          {"st": 30, "rsi": 25, "ema": 25, "vol": 20, "thresh": 40},
     }
     w = _W.get(regime, _W["undefined"])
+    is_long = side != "short"
 
-    # Signal 1 — Supertrend bearish
-    if st_dir == -1 and profit_pct > -3.0:
-        score += float(w["st"]); signals.append("ST_BEAR")
+    # Signal 1 — Supertrend melawan posisi (mirror side)
+    if is_long:
+        if st_dir == -1 and profit_pct > -3.0:
+            score += float(w["st"]); signals.append("ST_BEAR")
+    else:
+        if st_dir == 1 and profit_pct > -3.0:
+            score += float(w["st"]); signals.append("ST_BULL")
 
     # Signal 2 — RSI melemah
     rsi_thresh_weak = 35 if regime != "volatile_expansion" else 30
     rsi_thresh_soft = 45 if regime != "volatile_expansion" else 38
-    if   rsi < rsi_thresh_weak: score += float(w["rsi"]);       signals.append(f"RSI_WEAK({rsi:.0f})")
-    elif rsi < rsi_thresh_soft: score += float(w["rsi"]) * 0.5; signals.append(f"RSI_SOFT({rsi:.0f})")
+    if is_long:
+        if   rsi < rsi_thresh_weak: score += float(w["rsi"]);       signals.append(f"RSI_WEAK({rsi:.0f})")
+        elif rsi < rsi_thresh_soft: score += float(w["rsi"]) * 0.5; signals.append(f"RSI_SOFT({rsi:.0f})")
+    else:
+        rsi_w_s = 100 - rsi_thresh_weak
+        rsi_s_s = 100 - rsi_thresh_soft
+        if   rsi > rsi_w_s: score += float(w["rsi"]);       signals.append(f"RSI_STRONG({rsi:.0f})")
+        elif rsi > rsi_s_s: score += float(w["rsi"]) * 0.5; signals.append(f"RSI_FIRM({rsi:.0f})")
 
-    # Signal 3 — EMA cross down
-    if ema9 is not None and ema21 is not None and ema9 < ema21:
-        score += float(w["ema"]); signals.append("EMA_XDOWN")
+    # Signal 3 — EMA cross melawan posisi (mirror side)
+    if ema9 is not None and ema21 is not None:
+        if is_long and ema9 < ema21:
+            score += float(w["ema"]); signals.append("EMA_XDOWN")
+        elif not is_long and ema9 > ema21:
+            score += float(w["ema"]); signals.append("EMA_XUP")
 
     # Signal 4 — Volume spike saat rugi
     if profit_pct < 0.5:
@@ -292,16 +307,21 @@ def check_atg(
         vol_ratio = float(np.mean(vol[-3:])) / vol_avg if vol_avg > 0 and len(vol) >= 3 else 1.0
 
         score, signals, threshold = _exit_score(
-            profit_pct, rsi, st_dir, ema9, ema21, vol_ratio, regime,
+            profit_pct, rsi, st_dir, ema9, ema21, vol_ratio, regime, side=side,
         )
         result.signals = signals
 
         # Warning level (independen dari exit)
         w = 0
-        if st_dir == -1:                                              w += 1
-        if rsi < 45:                                                  w += 1
-        if ema9 is not None and ema21 is not None and ema9 < ema21:  w += 1
-        if vol_ratio > 2.0 and profit_pct < 0.5:                     w += 1
+        if is_long:
+            if st_dir == -1: w += 1
+            if rsi < 45: w += 1
+            if ema9 is not None and ema21 is not None and ema9 < ema21: w += 1
+        else:
+            if st_dir == 1: w += 1
+            if rsi > 55: w += 1
+            if ema9 is not None and ema21 is not None and ema9 > ema21: w += 1
+        if vol_ratio > 2.0 and profit_pct < 0.5: w += 1
         result.warning_level = w
 
         if score >= threshold:

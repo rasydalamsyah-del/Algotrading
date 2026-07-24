@@ -1,0 +1,810 @@
+═══════════════════════════════════════════════════════
+ SCORER.PY — seluruh isi file
+═══════════════════════════════════════════════════════
+./engine/intelligence/scorer.py
+
+     1	"""
+     2	intelligence/scorer.py
+     3	AlgoTrader Pro v7.0 — "The Intelligence Pipeline"
+     4	
+     5	"""
+     6	
+     7	from __future__ import annotations
+     8	
+     9	import asyncio
+    10	import logging
+    11	from datetime import datetime
+    12	from typing import Any, Dict, List, Optional, Tuple
+    13	
+    14	from engine.constants import (
+    15	    SCORE_NEUTRAL,
+    16	    SCORE_MIN,
+    17	    SCORE_MAX,
+    18	    SIGNAL_CONFIRMATION_MATRIX,
+    19	)
+    20	from engine.core.models import (
+    21	    DecisionAction,
+    22	    IndicatorSet,
+    23	    MarketRegime,
+    24	    ObservationReport,
+    25	    ScoreBreakdown,
+    26	    ScoredSignal,
+    27	    SignalQuality,
+    28	    clamp_score,
+    29	    validate_score,
+    30	)
+    31	from engine.profiles.weights import (
+    32	    get_level1_weights,
+    33	    get_level2_weights,
+    34	    get_regime_modifier,
+    35	    compute_category_score,
+    36	)
+    37	from engine.profiles.thresholds import get_profile_thresholds, get_dynamic_threshold
+    38	
+    39	log = logging.getLogger("intelligence.scorer")
+    40	
+    41	# Buffer konfirmasi sinyal BUY per (symbol, side).
+    42	# Format: {(symbol, side): {"count": int, "regime": str}}
+    43	#
+    44	# [#25 -- audit fungsional, pola bug sama persis dgn _OBSERVATION_CACHE
+    45	# sebelum Sub-Batch D (observer.py)] Sebelumnya key HANYA `symbol` --
+    46	# main_future.py bisa mengevaluasi kedua sisi (long & short) utk simbol
+    47	# yang sama dalam satu siklus (score_signal(..., side=)), jadi begitu skor
+    48	# genuinely beda per side (efek proyek MTF Composite Side-Aware yang
+    49	# sudah selesai), permintaan side="short" bisa diam-diam dapat/menimpa
+    50	# entry buffer confirm-count milik side="long" utk simbol yang sama --
+    51	# silent cross-side contamination, belum termanifestasi krn belum ada
+    52	# short yang lolos threshold utk memicu buffer ini saat gap ini ditemukan.
+    53	#
+    54	# [BEDA dari _OBSERVATION_CACHE, TIDAK straight-copy] _OBSERVATION_CACHE
+    55	# pakai string key dgn `side` sbg SUFFIX krn ADA consumer lain yang match
+    56	# key via `key.startswith(f"{symbol}|{timeframe}|")` (get_cached_observation()/
+    57	# clear_cache()) -- suffix dipilih supaya prefix-matching itu tetap jalan
+    58	# tanpa diubah. _SIGNAL_CONFIRM_BUFFER TIDAK punya consumer serupa (dicek
+    59	# lewat grep repo-wide -- symbol/scorer.py adalah satu-satunya pembaca/
+    60	# penulis, tidak ada clear_cache()-like function, tidak ada prefix-matching
+    61	# manapun) -- jadi tuple key (symbol, side) dipakai di sini, LEBIH
+    62	# SEDERHANA & lebih aman dari isu delimiter (tidak perlu asumsi symbol
+    63	# tidak pernah mengandung karakter pemisah).
+    64	_SIGNAL_CONFIRM_BUFFER: dict = {}
+    65	
+    66	def _check_primary_trigger(
+    67	    profile_name: str,
+    68	    iset: IndicatorSet,
+    69	    profile_cfg,
+    70	    side: str = "long",
+    71	) -> Tuple[bool, str]:
+    72	    from engine.profiles.base_profile import PrimaryTriggerType
+    73	
+    74	    trigger_type = profile_cfg.primary_trigger_type
+    75	    is_long = side != "short"
+    76	
+    77	    if trigger_type == PrimaryTriggerType.BREAKOUT_VOLUME:
+    78	        # [FUTURES-READY] Netral arah -- cuma cek band RSI + volume, tidak
+    79	        # mensyaratkan arah tertentu. Tidak ada perubahan diperlukan.
+    80	        vol_ratio = iset.strength.volume_ratio
+    81	        if vol_ratio is None:
+    82	            return False, "Volume ratio tidak tersedia"
+    83	        if vol_ratio < profile_cfg.volume_mult:
+    84	            return False, (
+    85	                f"Volume ratio {vol_ratio:.2f}x < threshold {profile_cfg.volume_mult:.2f}x"
+    86	            )
+    87	        rsi = iset.momentum.rsi
+    88	        if rsi is None:
+    89	            return False, "RSI tidak tersedia"
+    90	        if rsi < profile_cfg.rsi_min or rsi > profile_cfg.rsi_max:
+    91	            return False, (
+    92	                f"RSI {rsi:.1f} di luar range [{profile_cfg.rsi_min}, {profile_cfg.rsi_max}]"
+    93	            )
+    94	        return True, "Breakout+Volume trigger terpenuhi"
+    95	
+    96	    elif trigger_type == PrimaryTriggerType.TREND_CONFIRMATION:
+    97	        # [FUTURES-READY] side="long" (default) IDENTIK PERSIS dgn sebelumnya.
+    98	        # Short: mirror ema_score (butuh <=45, bearish stack kuat, simetris
+    99	        # dari 55 di sekitar titik netral 100). Untuk RSI: profile_cfg BELUM
+   100	        # punya field "rsi_gc_max" simetris (cuma ada rsi_gc_min) -- dipakai
+   101	        # pendekatan (100 - rsi_gc_min) sbg PLACEHOLDER, bukan nilai final.
+   102	        # TODO saat future/ dikerjakan serius: tambah field rsi_gc_max resmi
+   103	        # ke profile schema, jangan andalkan aproksimasi ini selamanya.
+   104	        ema_score = iset.trend.ema_stack_score
+   105	        if is_long:
+   106	            if ema_score < 55.0:
+   107	                return False, f"EMA stack score {ema_score:.1f} < 55 (trend belum confirm)"
+   108	        else:
+   109	            if ema_score > 45.0:
+   110	                return False, f"EMA stack score {ema_score:.1f} > 45 (bearish trend belum confirm)"
+   111	        rsi = iset.momentum.rsi
+   112	        if rsi is None:
+   113	            return False, "RSI tidak tersedia"
+   114	        if is_long:
+   115	            if rsi < profile_cfg.rsi_gc_min:
+   116	                return False, f"RSI {rsi:.1f} < rsi_gc_min {profile_cfg.rsi_gc_min}"
+   117	        else:
+   118	            rsi_gc_max_approx = 100.0 - profile_cfg.rsi_gc_min
+   119	            if rsi > rsi_gc_max_approx:
+   120	                return False, f"RSI {rsi:.1f} > rsi_gc_max~{rsi_gc_max_approx:.1f} (aproksimasi)"
+   121	        return True, f"Trend Confirmation trigger terpenuhi ({'long' if is_long else 'short'})"
+   122	
+   123	    elif trigger_type == PrimaryTriggerType.MOMENTUM_REVERSAL:
+   124	        # [FUTURES-READY] side="long" (default) IDENTIK PERSIS dgn sebelumnya.
+   125	        # Short: mirror penuh -- overbought (rsi > rsi_max) jadi trigger
+   126	        # instan (bukan block), macd_hist harus <=0 (bukan >0) utk konfirmasi
+   127	        # reversal turun.
+   128	        rsi = iset.momentum.rsi
+   129	        if rsi is None:
+   130	            return False, "RSI tidak tersedia"
+   131	        if is_long:
+   132	            if rsi > profile_cfg.rsi_max:
+   133	                return False, f"RSI {rsi:.1f} terlalu tinggi untuk mean revert entry"
+   134	            if rsi < profile_cfg.rsi_min:
+   135	                return True, f"RSI {rsi:.1f} oversold — mean revert trigger OK"
+   136	            macd_hist = iset.momentum.macd_histogram
+   137	            if macd_hist is not None and macd_hist > 0:
+   138	                return False, f"MACD histogram masih positif ({macd_hist:.5f}) — belum reversal"
+   139	            return True, "Momentum Reversal trigger terpenuhi"
+   140	        else:
+   141	            if rsi < profile_cfg.rsi_min:
+   142	                return False, f"RSI {rsi:.1f} terlalu rendah untuk mean revert short entry"
+   143	            if rsi > profile_cfg.rsi_max:
+   144	                return True, f"RSI {rsi:.1f} overbought — mean revert short trigger OK"
+   145	            macd_hist = iset.momentum.macd_histogram
+   146	            if macd_hist is not None and macd_hist < 0:
+   147	                return False, f"MACD histogram masih negatif ({macd_hist:.5f}) — belum reversal"
+   148	            return True, "Momentum Reversal short trigger terpenuhi"
+   149	
+   150	    else:
+   151	        rsi = iset.momentum.rsi
+   152	        vol_ratio = iset.strength.volume_ratio
+   153	        log.debug(
+   154	            f"COMPOSITE trigger check | RSI={rsi} (need {profile_cfg.rsi_min}–{profile_cfg.rsi_max}) "
+   155	            f"| vol_ratio={vol_ratio} (need >{profile_cfg.volume_mult * 0.8:.2f}x)"
+   156	        )
+   157	        if rsi is None:
+   158	            return False, "RSI tidak tersedia"
+   159	        if rsi < profile_cfg.rsi_min or rsi > profile_cfg.rsi_max:
+   160	            return False, (
+   161	                f"RSI {rsi:.1f} di luar range [{profile_cfg.rsi_min}, {profile_cfg.rsi_max}]"
+   162	            )
+   163	        if vol_ratio is not None and vol_ratio < profile_cfg.volume_mult * 0.8:
+   164	            return False, (
+   165	                f"Volume ratio {vol_ratio:.2f}x terlalu rendah "
+   166	                f"(min {profile_cfg.volume_mult * 0.8:.2f}x)"
+   167	            )
+   168	        return True, "Composite trigger terpenuhi"
+   169	
+   170	def _pick_side_score(obj: Any, base_field: str, side: str) -> float:
+   171	    """
+   172	    [BIAS-FIX -- root cause, category score side-awareness] Selektor generik
+   173	    dipakai SEMUA 24 sub-score kategori (trend/momentum/strength/volatility/
+   174	    pattern/oscillator/structure/orderbook).
+   175	
+   176	    side="short": coba baca f"{base_field}_short" dulu. Kalau field itu
+   177	    None/belum ada (kategori belum dapat batch mirror-nya, atau memang
+   178	    genuinely direction-agnostic seperti adx/squeeze/atr yang TIDAK PERNAH
+   179	    akan punya field _short), fallback ke field long biasa -- inilah yang
+   180	    membuat rollout per-batch aman: kategori yang belum diperbaiki tetap
+   181	    berperilaku identik dengan sebelum fix ini ada, tidak pernah crash
+   182	    karena AttributeError, tidak pernah diam-diam pakai nilai kosong.
+   183	
+   184	    side="long" (default): SELALU baca field dasar langsung, tidak pernah
+   185	    menyentuh field _short sama sekali -- long tidak mungkin berubah oleh
+   186	    fix ini, di batch manapun.
+   187	    """
+   188	    if side == "short":
+   189	        short_val = getattr(obj, base_field + "_short", None)
+   190	        if short_val is not None:
+   191	            return short_val
+   192	    return getattr(obj, base_field)
+   193	
+   194	
+   195	def _extract_indicator_scores(iset: IndicatorSet, side: str = "long") -> Dict[str, Dict[str, float]]:
+   196	    return {
+   197	        "trend": {
+   198	            "ema_stack":  _pick_side_score(iset.trend, "ema_stack_score", side),
+   199	            "cross":      _pick_side_score(iset.trend, "cross_score", side),
+   200	            "supertrend": _pick_side_score(iset.trend, "supertrend_score", side),
+   201	            "vwap":       _pick_side_score(iset.trend, "vwap_score", side),
+   202	        },
+   203	        "momentum": {
+   204	            "rsi":      _pick_side_score(iset.momentum, "rsi_score", side),
+   205	            "macd":     _pick_side_score(iset.momentum, "macd_score", side),
+   206	            "stochrsi": _pick_side_score(iset.momentum, "stoch_score", side),
+   207	        },
+   208	        "strength": {
+   209	            "adx":    _pick_side_score(iset.strength, "adx_score", side),
+   210	            "di":     _pick_side_score(iset.strength, "di_score", side),
+   211	            "volume": _pick_side_score(iset.strength, "volume_score", side),
+   212	            "mfi":    _pick_side_score(iset.strength, "mfi_score", side),
+   213	        },
+   214	        "volatility": {
+   215	            "bb":      _pick_side_score(iset.volatility, "bb_score", side),
+   216	            "squeeze": _pick_side_score(iset.volatility, "squeeze_score", side),
+   217	            "atr":     _pick_side_score(iset.volatility, "atr_score", side),
+   218	        },
+   219	        "pattern": {
+   220	            "pattern_score": _pick_side_score(iset.patterns, "pattern_score", side),
+   221	            "context_score": _pick_side_score(iset.patterns, "context_score", side),
+   222	        },
+   223	        "oscillator": {
+   224	            "cci":            _pick_side_score(iset.oscillators, "cci_score", side),
+   225	            "williams":       _pick_side_score(iset.oscillators, "williams_r_score", side),
+   226	            "roc":            _pick_side_score(iset.oscillators, "roc_score", side),
+   227	            # [v2] field baru -- sinyal mentah (string/float) utk validator.py,
+   228	            # BUKAN skor 0-100, tidak relevan utk di-mirror side-aware di sini.
+   229	            "cci_trend":      iset.oscillators.cci_trend,
+   230	            "willr_trend":    iset.oscillators.willr_trend,
+   231	            "roc_crossover":  iset.oscillators.roc_crossover,
+   232	            "cci_divergence": iset.oscillators.cci_divergence,
+   233	        },
+   234	        "structure": {
+   235	            "ichimoku":  _pick_side_score(iset.structure, "ichimoku_score", side),
+   236	            "sar":       _pick_side_score(iset.structure, "sar_score", side),
+   237	            "pivot":     _pick_side_score(iset.structure, "pivot_score", side),
+   238	            "fibonacci": _pick_side_score(iset.structure, "fib_score", side),
+   239	        },
+   240	        "orderbook": {
+   241	            "ob_score": _pick_side_score(iset.orderbook, "orderbook_score", side),
+   242	        },
+   243	    }
+   244	
+   245	def _calc_weighted_breakdown(
+   246	    profile_name: str,
+   247	    indicator_scores: Dict[str, Dict[str, float]],
+   248	    regime: MarketRegime,
+   249	    side: str = "long",
+   250	) -> ScoreBreakdown:
+   251	    l1_weights = get_level1_weights(profile_name)
+   252	    # [SHORT-FIX F2] side diteruskan -- modifier trending_bear=0.00 (tabel
+   253	    # long) tidak lagi membunuh kandidat short di sweet spot-nya.
+   254	    regime_mod = get_regime_modifier(profile_name, regime.value, side=side)
+   255	
+   256	    breakdown = ScoreBreakdown(regime_modifier=regime_mod)
+   257	
+   258	    categories = ["trend", "momentum", "strength", "volatility", "pattern", "oscillator", "structure", "orderbook"]
+   259	
+   260	    for cat in categories:
+   261	        l1_weight = l1_weights.get(cat, 0.0)
+   262	        cat_indicators = indicator_scores.get(cat, {})
+   263	
+   264	        cat_score = compute_category_score(profile_name, cat, cat_indicators)
+   265	        weighted  = round(cat_score * l1_weight, 4)
+   266	
+   267	        setattr(breakdown, f"{cat}_raw",      round(cat_score, 4))
+   268	        setattr(breakdown, f"{cat}_weighted", weighted)
+   269	        setattr(breakdown, f"{cat}_weight",   l1_weight)
+   270	
+   271	    return breakdown
+   272	
+   273	def _suggest_sl_tp(
+   274	    current_price: float,
+   275	    atr: Optional[float],
+   276	    profile_cfg,
+   277	    side: str = "long",
+   278	    # [BUG-FIX -- audit item #19] Sebelumnya fungsi ini TIDAK PUNYA parameter
+   279	    # side sama sekali -- SL selalu di bawah harga, TP selalu di atas,
+   280	    # regardless caller-nya sinyal long atau short. side="long" default
+   281	    # (SEMUA caller lama yang tidak eksplisit mengirim side, termasuk spot,
+   282	    # tetap dapat hasil IDENTIK PERSIS dengan sebelum parameter ini ada).
+   283	) -> Tuple[Optional[float], Optional[float]]:
+   284	    if current_price <= 0:
+   285	        return None, None
+   286	
+   287	    if side == "short":
+   288	        if atr is not None and atr > 0:
+   289	            sl = current_price + atr * profile_cfg.atr_sl_mult
+   290	            tp = current_price - atr * profile_cfg.atr_tp_mult
+   291	        else:
+   292	            sl = current_price * (1 + profile_cfg.quick_sl_pct / 100)
+   293	            tp = current_price * (1 - profile_cfg.quick_tp_pct / 100)
+   294	
+   295	        if sl <= current_price or tp >= current_price:
+   296	            return None, None
+   297	
+   298	        return round(sl, 8), round(tp, 8)
+   299	
+   300	    if atr is not None and atr > 0:
+   301	        sl = current_price - atr * profile_cfg.atr_sl_mult
+   302	        tp = current_price + atr * profile_cfg.atr_tp_mult
+   303	    else:
+   304	        sl = current_price * (1 - profile_cfg.quick_sl_pct / 100)
+   305	        tp = current_price * (1 + profile_cfg.quick_tp_pct / 100)
+   306	
+   307	    if sl >= current_price or tp <= current_price:
+   308	        return None, None
+   309	
+   310	    return round(sl, 8), round(tp, 8)
+   311	
+   312	def _generate_narrative(
+   313	    profile_name: str,
+   314	    breakdown: ScoreBreakdown,
+   315	    total_score: float,
+   316	    threshold: float,
+   317	    trigger_met: bool,
+   318	    trigger_reason: str,
+   319	    regime: MarketRegime,
+   320	    regime_confidence: float,
+   321	    iset: IndicatorSet,
+   322	) -> str:
+   323	    gap = total_score - threshold
+   324	    gap_str = f"+{gap:.1f}" if gap >= 0 else f"{gap:.1f}"
+   325	    status = "✅ TRIGGER" if trigger_met and total_score >= threshold else "❌ NO TRIGGER"
+   326	
+   327	    categories = {
+   328	        "Trend":      breakdown.trend_raw,
+   329	        "Momentum":   breakdown.momentum_raw,
+   330	        "Strength":   breakdown.strength_raw,
+   331	        "Volatility": breakdown.volatility_raw,
+   332	        "Pattern":    breakdown.pattern_raw,
+   333	        "Oscillator": breakdown.oscillator_raw,
+   334	        "Structure":  breakdown.structure_raw,
+   335	        "Orderbook":  breakdown.orderbook_raw,
+   336	    }
+   337	    sorted_cats = sorted(categories.items(), key=lambda x: x[1], reverse=True)
+   338	    strengths   = [(k, v) for k, v in sorted_cats if v >= 65.0][:2]
+   339	    weaknesses  = [(k, v) for k, v in sorted_cats if v < 50.0][:2]
+   340	
+   341	    str_parts = [f"{k} ({v:.0f}/100)" for k, v in strengths]
+   342	    weak_parts = [f"{k} ({v:.0f}/100)" for k, v in weaknesses]
+   343	
+   344	    lines = [
+   345	        f"{status} | Score: {total_score:.1f}/{threshold:.1f} ({gap_str})",
+   346	        f"Profile: {profile_name} | Regime: {regime.emoji} {regime.display_name} (conf={regime_confidence:.0%})",
+   347	    ]
+   348	
+   349	    if str_parts:
+   350	        lines.append(f"💪 Kekuatan: {', '.join(str_parts)}")
+   351	    if weak_parts:
+   352	        lines.append(f"⚠️  Kelemahan: {', '.join(weak_parts)}")
+   353	    if not trigger_met:
+   354	        lines.append(f"🚫 No-Trigger: {trigger_reason}")
+   355	    if breakdown.regime_modifier < 1.0:
+   356	        lines.append(
+   357	            f"🔧 Regime modifier: ×{breakdown.regime_modifier:.2f} "
+   358	            f"(raw score sebelum modifier: {f'{breakdown.total() / breakdown.regime_modifier:.1f}' if breakdown.regime_modifier > 0 else 'N/A'})"
+   359	        )
+   360	
+   361	    rsi = iset.momentum.rsi
+   362	    vol = iset.strength.volume_ratio
+   363	    adx = iset.strength.adx
+   364	
+   365	    detail_parts = []
+   366	    if rsi is not None:
+   367	        detail_parts.append(f"RSI={rsi:.1f}")
+   368	    if vol is not None:
+   369	        detail_parts.append(f"Vol={vol:.2f}x")
+   370	    if adx is not None:
+   371	        detail_parts.append(f"ADX={adx:.1f}")
+   372	    if detail_parts:
+   373	        lines.append(f"📊 Key: {' | '.join(detail_parts)}")
+   374	
+   375	    return "\n".join(lines)
+   376	
+   377	def score_signal(
+   378	    observation: ObservationReport,
+   379	    regime: MarketRegime,
+   380	    regime_confidence: float,
+   381	    db_manager=None,
+   382	    profile_override=None,
+   383	    main_loop=None,
+   384	    side: str = "long",
+   385	    # [FUTURES-READY] side="long" default -- SEMUA pemanggil existing yang
+   386	    # tidak eksplisit mengirim side akan tetap dapat "long", behavior
+   387	    # IDENTIK PERSIS dengan sebelum parameter ini ditambahkan.
+   388	) -> ScoredSignal:
+   389	    symbol         = observation.symbol
+   390	    profile_name   = observation.strategy_profile
+   391	    iset           = observation.primary_tf_indicators
+   392	
+   393	    signal = ScoredSignal(
+   394	        observation=observation,
+   395	        strategy_profile=profile_name,
+   396	        regime=regime,
+   397	        regime_confidence=regime_confidence,
+   398	    )
+   399	
+   400	    try:
+   401	        profile_cfg = profile_override if profile_override is not None else get_profile_thresholds(profile_name)
+   402	    except KeyError:
+   403	        signal.scoring_narrative = f"Profile '{profile_name}' tidak ditemukan."
+   404	        signal.add_validation_note(f"ERROR: Profile tidak dikenal: {profile_name}")
+   405	        return signal
+   406	
+   407	    # Dynamic threshold berdasarkan kombinasi profile × regime × side
+   408	    dynamic_threshold = get_dynamic_threshold(profile_name, regime.value, side=side)
+   409	    signal.threshold_used = dynamic_threshold
+   410	
+   411	    if iset is None or not observation.primary_tf_valid:
+   412	        signal.signal_type = "hold"
+   413	        signal.trigger_met = False
+   414	        reason = "Primary TF data tidak valid atau tidak tersedia"
+   415	        signal.scoring_narrative = f"❌ {reason}"
+   416	        signal.add_validation_note(reason)
+   417	        _save_score_to_db(signal, action="SKIP_INVALID_DATA", db_manager=db_manager, main_loop=main_loop, side=side)
+   418	        return signal
+   419	
+   420	    # [FUTURES-READY] Hard block regime -- side-aware. Untuk long (default,
+   421	    # SATU-SATUNYA kondisi yang pernah berjalan di produksi): TRENDING_BEAR
+   422	    # memaksa score=0/hold, IDENTIK PERSIS dengan sebelum perubahan ini.
+   423	    # Untuk short: MIRROR -- TRENDING_BULL yang memaksa score=0/hold (karena
+   424	    # tren naik kuat berlawanan arah dengan short), TRENDING_BEAR justru
+   425	    # boleh lanjut (searah dengan short).
+   426	    is_long = side != "short"
+   427	    blocking_regime = MarketRegime.TRENDING_BEAR if is_long else MarketRegime.TRENDING_BULL
+   428	
+   429	    if regime == blocking_regime:
+   430	        signal.total_score   = 0.0
+   431	        signal.signal_type   = "hold"
+   432	        signal.trigger_met   = False
+   433	        if is_long:
+   434	            signal.scoring_narrative = (
+   435	                f"❌ TRENDING_BEAR regime — tidak ada BUY signal. "
+   436	                f"Semua long position harus dipertimbangkan untuk exit."
+   437	            )
+   438	        else:
+   439	            signal.scoring_narrative = (
+   440	                f"❌ TRENDING_BULL regime — tidak ada SHORT signal. "
+   441	                f"Semua short position harus dipertimbangkan untuk exit."
+   442	            )
+   443	        signal.add_validation_note(f"Blocked by {blocking_regime.value} regime")
+   444	        _save_score_to_db(signal, action="REJECT_OPPOSING_REGIME", db_manager=db_manager, main_loop=main_loop, side=side)
+   445	        return signal
+   446	
+   447	    # [ENTRY-QUALITY 3b -- veto tren makro] Kasus WIF/BERA: long pantulan
+   448	    # 15m pada koin -97% dari ATH / di tepi ATL. Data TF KONFIRMASI (4h/1d)
+   449	    # SUDAH dihitung observer -- nol fetch tambahan. Aturan: close berjarak
+   450	    # >3% di sisi salah EMA200 TF konfirmasi -> veto (long di bawah, short
+   451	    # di atas). Ambang 3% menjaga pullback sehat dekat EMA200 tidak ikut
+   452	    # terveto. Fail-open: data konfirmasi/EMA200 tidak tersedia -> lewati.
+   453	    import os as _os2
+   454	    if _os2.getenv("MACRO_TREND_VETO", "true").lower() == "true":
+   455	        _conf_iset = getattr(observation, "confirmation_tf_indicators", None)
+   456	        _conf_valid = bool(getattr(observation, "confirmation_tf_valid", False))
+   457	        _veto_gap = float(_os2.getenv("MACRO_VETO_GAP_PCT", "3.0"))
+   458	        if _conf_iset is not None and _conf_valid:
+   459	            _t = getattr(_conf_iset, "trend", None)
+   460	            _ema200 = getattr(_t, "ema200", None) if _t is not None else None
+   461	            _close = getattr(_conf_iset, "current_price", None)
+   462	            if not _close and _t is not None:
+   463	                _close = getattr(_t, "close", None)
+   464	            if _ema200 and _close and _ema200 > 0 and _close > 0:
+   465	                _gap_pct = (_close - _ema200) / _ema200 * 100
+   466	                _against_long  = side != "short" and _gap_pct < -_veto_gap
+   467	                _against_short = side == "short" and _gap_pct > _veto_gap
+   468	                if _against_long or _against_short:
+   469	                    signal.total_score = 0.0
+   470	                    signal.signal_type = "hold"
+   471	                    signal.trigger_met = False
+   472	                    signal.scoring_narrative = (
+   473	                        f"❌ MACRO VETO: TF konfirmasi close={_close:.6f} "
+   474	                        f"{'<' if side != 'short' else '>'} EMA200={_ema200:.6f} "
+   475	                        f"(gap {_gap_pct:+.1f}%) -- melawan tren besar ({side})."
+   476	                    )
+   477	                    signal.add_validation_note("Blocked by macro trend veto (EMA200 conf TF)")
+   478	                    _save_score_to_db(signal, action="REJECT_MACRO_TREND", db_manager=db_manager, main_loop=main_loop, side=side)
+   479	                    return signal
+   480	
+   481	    trigger_met, trigger_reason = _check_primary_trigger(profile_name, iset, profile_cfg, side=side)
+   482	    signal.trigger_met = trigger_met
+   483	
+   484	    if not trigger_met:
+   485	        signal.total_score   = 0.0
+   486	        signal.signal_type   = "hold"
+   487	        signal.scoring_narrative = f"❌ No-Trigger: {trigger_reason}"
+   488	        signal.add_validation_note(f"Primary trigger gagal: {trigger_reason}")
+   489	        _save_score_to_db(signal, action="NO_TRIGGER", db_manager=db_manager, main_loop=main_loop, side=side)
+   490	        return signal
+   491	
+   492	    indicator_scores = _extract_indicator_scores(iset, side=side)
+   493	    breakdown = _calc_weighted_breakdown(profile_name, indicator_scores, regime, side=side)
+   494	    total_score = breakdown.total()
+   495	    total_score = max(SCORE_MIN, min(SCORE_MAX, total_score))
+   496	
+   497	    signal.total_score     = round(total_score, 2)
+   498	    signal.score_breakdown = breakdown
+   499	    # [BUG-FIX v2] threshold_gap sekarang @property di core/models.py (otomatis
+   500	    # dihitung dari total_score & threshold_used terkini) — assignment manual
+   501	    # dihapus karena sekarang read-only & sudah selalu konsisten tanpa ini.
+   502	
+   503	    score_confidence = max(0.0, (total_score - 50.0) / 50.0) 
+   504	    regime_factor    = min(1.0, regime_confidence * 1.2)
+   505	    conf_tf_factor   = (
+   506	        min(1.0, observation.confirmation_tf_score / 75.0)
+   507	        if observation.confirmation_tf_valid
+   508	        else 0.70
+   509	    )
+   510	    signal.confidence = round(
+   511	        score_confidence * 0.55
+   512	        + regime_factor   * 0.30
+   513	        + conf_tf_factor  * 0.15,
+   514	        3,
+   515	    )
+   516	    signal.confidence = max(0.0, min(1.0, signal.confidence))
+   517	
+   518	    # [ENTRY-QUALITY 3a -- score margin] Entry ambang-noise terbukti rugi
+   519	    # (PARTI 52.1/52.0 -1.52, ADA 52.5/52): skor +0.1 di atas threshold
+   520	    # secara statistik tak terbedakan dari noise tapi diberi ukuran posisi
+   521	    # penuh. Trigger kini butuh threshold + margin (env SCORE_ENTRY_MARGIN,
+   522	    # default 2.5). threshold_used TETAP nilai asli utk logging konsisten.
+   523	    import os as _os
+   524	    _entry_margin = float(_os.getenv("SCORE_ENTRY_MARGIN", "2.5"))
+   525	    if dynamic_threshold <= total_score < dynamic_threshold + _entry_margin:
+   526	        log.info(
+   527	            "%s | skor %.1f di zona margin (thr=%.1f +%.1f) -- entry ditahan (ambang-noise).",
+   528	            symbol, total_score, dynamic_threshold, _entry_margin,
+   529	        )
+   530	
+   531	    if total_score >= dynamic_threshold + _entry_margin:
+   532	        # Konfirmasi BUY berdasarkan regime
+   533	        regime_key = regime.value
+   534	        required   = SIGNAL_CONFIRMATION_MATRIX.get(regime_key, 6)
+   535	        buffer_key = (symbol, side)
+   536	        buf        = _SIGNAL_CONFIRM_BUFFER.get(buffer_key, {"count": 0, "regime": regime_key})
+   537	
+   538	        # Reset jika regime berubah
+   539	        if buf["regime"] != regime_key:
+   540	            buf = {"count": 0, "regime": regime_key}
+   541	
+   542	        buf["count"] += 1
+   543	        _SIGNAL_CONFIRM_BUFFER[buffer_key] = buf
+   544	
+   545	        if buf["count"] >= required:
+   546	            signal.signal_type = "buy"
+   547	            log.info(
+   548	                "%s | ✅ Konfirmasi BUY terpenuhi: %d/%d (regime=%s, side=%s)",
+   549	                symbol, buf["count"], required, regime_key, side,
+   550	            )
+   551	            # Reset setelah execute
+   552	            _SIGNAL_CONFIRM_BUFFER[buffer_key] = {"count": 0, "regime": regime_key}
+   553	
+   554	            # ── Validasi conf_score pakai confirmation_min_score dari profil ──
+   555	            conf_score  = observation.confirmation_tf_score
+   556	            conf_min    = getattr(profile_cfg, "confirmation_min_score", 42.0)
+   557	            conf_strong = conf_min + 15.0  # threshold kuat = min + 15
+   558	
+   559	            if conf_score < conf_min:
+   560	                signal.signal_type = "hold"
+   561	                log.info(
+   562	                    "%s | ❌ BUY DITOLAK — conf_score=%.1f < min=%.1f "
+   563	                    "(higher TF tidak mendukung, profil=%s)",
+   564	                    symbol, conf_score, conf_min, profile_name,
+   565	                )
+   566	            elif conf_score < conf_strong:
+   567	                log.info(
+   568	                    "%s | ⚠️  conf_score=%.1f lemah (%.1f-%.1f) — "
+   569	                    "BUY lanjut tapi waspada",
+   570	                    symbol, conf_score, conf_min, conf_strong,
+   571	                )
+   572	            else:
+   573	                log.info(
+   574	                    "%s | ✅ conf_score=%.1f kuat >= %.1f — higher TF mendukung BUY",
+   575	                    symbol, conf_score, conf_strong,
+   576	                )
+   577	        else:
+   578	            signal.signal_type = "hold"
+   579	            log.info(
+   580	                "%s | ⏳ Menunggu konfirmasi BUY: %d/%d (regime=%s, side=%s)",
+   581	                symbol, buf["count"], required, regime_key, side,
+   582	            )
+   583	    else:
+   584	        signal.signal_type = "hold"
+   585	        signal.trigger_met = False  # FIX: score < threshold, trigger harus False
+   586	        # Reset buffer jika score turun
+   587	        buffer_key = (symbol, side)
+   588	        if buffer_key in _SIGNAL_CONFIRM_BUFFER:
+   589	            _SIGNAL_CONFIRM_BUFFER[buffer_key] = {"count": 0, "regime": regime.value}
+   590	
+   591	    atr = iset.volatility.atr
+   592	    price = iset.current_price
+   593	    # [BUG-FIX -- ditemukan saat investigasi audit item #19, forecast/diagnosa
+   594	    # bidirectional futures] side= sudah tersedia di scope (parameter fungsi
+   595	    # ini, baris 341) tapi TIDAK PERNAH diteruskan ke _suggest_sl_tp() --
+   596	    # akibatnya suggested_sl/suggested_tp SELALU dihitung pakai formula long
+   597	    # (sl di bawah harga, tp di atas) bahkan untuk signal side="short".
+   598	    # Field ini advisory-only (dipakai forecast/dashboard, BUKAN SL/TP order
+   599	    # sungguhan -- itu dihitung terpisah & sudah side-aware oleh
+   600	    # RiskManager.evaluate_order()), jadi TIDAK mempengaruhi eksekusi trade
+   601	    # nyata, tapi tetap salah utk ditampilkan. Fix: teruskan side.
+   602	    suggested_sl, suggested_tp = _suggest_sl_tp(price, atr, profile_cfg, side=side)
+   603	    signal.suggested_sl = suggested_sl
+   604	    signal.suggested_tp = suggested_tp
+   605	
+   606	    signal.scoring_narrative = _generate_narrative(
+   607	        profile_name=profile_name,
+   608	        breakdown=breakdown,
+   609	        total_score=total_score,
+   610	        threshold=dynamic_threshold,
+   611	        trigger_met=trigger_met,
+   612	        trigger_reason=trigger_reason,
+   613	        regime=regime,
+   614	        regime_confidence=regime_confidence,
+   615	        iset=iset,
+   616	    )
+   617	
+   618	    log.info(
+   619	        "%s | profile=%s | score=%.1f/%.1f (%+.1f) | trigger=%s | "
+   620	        "regime=%s | confidence=%.2f | signal=%s",
+   621	        symbol, profile_name,
+   622	        total_score, dynamic_threshold, signal.threshold_gap,
+   623	        trigger_met,
+   624	        regime.value, signal.confidence,
+   625	        signal.signal_type,
+   626	    )
+   627	
+   628	    action = "EXECUTE_CANDIDATE" if signal.is_actionable else "HOLD"
+   629	    _save_score_to_db(signal, action=action, db_manager=db_manager, main_loop=main_loop, side=side)
+   630	
+   631	    return signal
+   632	
+   633	def _save_score_to_db(signal: ScoredSignal, action: str, db_manager, main_loop=None, side: str = "long") -> None:
+   634	    if db_manager is None:
+   635	        return
+   636	
+   637	    try:
+   638	        bd = signal.score_breakdown
+   639	        rejection_reason = (
+   640	            "\n".join(signal.validation_notes)
+   641	            if getattr(signal, "validation_notes", None)
+   642	            else None
+   643	        )
+   644	
+   645	        async def _persist() -> None:
+   646	            await db_manager.save_signal_score(
+   647	                symbol=signal.symbol,
+   648	                strategy_profile=signal.strategy_profile,
+   649	                total_score=signal.total_score,
+   650	                trend_score=bd.trend_raw if bd else SCORE_NEUTRAL,
+   651	                momentum_score=bd.momentum_raw if bd else SCORE_NEUTRAL,
+   652	                strength_score=bd.strength_raw if bd else SCORE_NEUTRAL,
+   653	                volatility_score=bd.volatility_raw if bd else SCORE_NEUTRAL,
+   654	                pattern_score=bd.pattern_raw if bd else SCORE_NEUTRAL,
+   655	                oscillator_score=bd.oscillator_raw if bd else SCORE_NEUTRAL,
+   656	                structure_score=bd.structure_raw if bd else SCORE_NEUTRAL,
+   657	                orderbook_score=bd.orderbook_raw if bd else SCORE_NEUTRAL,
+   658	                threshold_used=signal.threshold_used,
+   659	                regime=signal.regime.value if signal.regime else "undefined",
+   660	                regime_confidence=getattr(signal, "regime_confidence", None),
+   661	                trigger_met=signal.trigger_met,
+   662	                signal_type=signal.signal_type,
+   663	                action_taken=action,
+   664	                rejection_reason=rejection_reason,
+   665	                current_price=getattr(signal.observation.primary_tf_indicators, "current_price", None) if signal.observation and signal.observation.primary_tf_indicators else None,
+   666	                suggested_sl=signal.suggested_sl,
+   667	                suggested_tp=signal.suggested_tp,
+   668	                nearest_support=getattr(signal.observation.primary_tf_indicators, "nearest_support", None) if signal.observation and signal.observation.primary_tf_indicators else None,
+   669	                nearest_resistance=getattr(signal.observation.primary_tf_indicators, "nearest_resistance", None) if signal.observation and signal.observation.primary_tf_indicators else None,
+   670	                fib_support=getattr(signal.observation.primary_tf_indicators, "nearest_fib_support", None) if signal.observation and signal.observation.primary_tf_indicators else None,
+   671	                fib_resistance=getattr(signal.observation.primary_tf_indicators, "nearest_fib_resistance", None) if signal.observation and signal.observation.primary_tf_indicators else None,
+   672	                signal_confidence=getattr(signal, "confidence", None),
+   673	                side=side,
+   674	            )
+   675	
+   676	        # [BUG-FIX] score_signal() dipanggil lewat run_in_executor() dari
+   677	        # strategy.py (jalur produksi utama Gate3->Gate4), yaitu dari WORKER
+   678	        # THREAD -- di situ asyncio.get_event_loop() SELALU melempar RuntimeError
+   679	        # karena worker thread tidak punya loop sendiri, sehingga except
+   680	        # RuntimeError di bawah selalu return diam-diam dan _persist() TIDAK
+   681	        # PERNAH benar-benar terjadwal untuk jalur ini (dibuktikan lewat
+   682	        # eksperimen: RuntimeError nyata muncul saat pola run_in_executor
+   683	        # disimulasikan). Fix: kalau caller yang tahu pasti sedang di main
+   684	        # thread (strategy.py) mengoper referensi main_loop eksplisit, pakai
+   685	        # langsung via run_coroutine_threadsafe -- aman dipanggil dari thread
+   686	        # manapun. Kalau main_loop tidak dioper (caller lama spt
+   687	        # position_sync.py yang memang jalan di main thread), fallback ke
+   688	        # deteksi lama supaya perilaku existing tidak berubah.
+   689	        if main_loop is not None:
+   690	            try:
+   691	                asyncio.run_coroutine_threadsafe(_persist(), main_loop)
+   692	            except Exception as exc:
+   693	                log.debug("Gagal jadwalkan simpan signal score (main_loop): %s", exc)
+   694	            return
+   695	
+   696	        try:
+   697	            loop = asyncio.get_event_loop()
+   698	            if loop.is_running():
+   699	                asyncio.run_coroutine_threadsafe(_persist(), loop)
+   700	            else:
+   701	                loop.run_until_complete(_persist())
+   702	        except RuntimeError:
+   703	            # No running loop di thread ini DAN main_loop tidak dioper caller.
+   704	            # Non-fatal, DB save cuma dilewati (bukan lagi jalur produksi utama
+   705	            # setelah fix ini, karena strategy.py sekarang selalu mengoper
+   706	            # main_loop).
+   707	            return
+   708	
+   709	    except Exception as exc:
+   710	        log.debug("Gagal simpan signal score ke DB (non-critical): %s", exc)
+   711	
+   712	def score_all(
+   713	    observations: Dict[str, ObservationReport],
+   714	    regimes: Dict[str, Tuple[MarketRegime, float]],
+   715	    db_manager=None,
+   716	) -> Dict[str, ScoredSignal]:
+   717	    results: Dict[str, ScoredSignal] = {}
+   718	
+   719	    for symbol, obs in observations.items():
+   720	        regime, confidence = regimes.get(symbol, (MarketRegime.UNDEFINED, 0.0))
+   721	        try:
+   722	            results[symbol] = score_signal(
+   723	                observation=obs,
+   724	                regime=regime,
+   725	                regime_confidence=confidence,
+   726	                db_manager=db_manager,
+   727	            )
+   728	        except Exception as exc:
+   729	            log.exception("Error scoring %s: %s", symbol, exc)
+   730	            fallback = ScoredSignal(
+   731	                observation=obs,
+   732	                strategy_profile=obs.strategy_profile,
+   733	                regime=regime,
+   734	                regime_confidence=confidence,
+   735	            )
+   736	            fallback.add_validation_note(f"Scoring error: {exc}")
+   737	            results[symbol] = fallback
+   738	
+   739	    sorted_results = sorted(
+   740	        results.items(),
+   741	        key=lambda kv: kv[1].total_score,
+   742	        reverse=True,
+   743	    )
+   744	
+   745	    log.info(
+   746	        "Scored %d symbols | Top: %s",
+   747	        len(results),
+   748	        ", ".join(
+   749	            f"{sym}={sig.total_score:.1f}"
+   750	            for sym, sig in sorted_results[:5]
+   751	        ),
+   752	    )
+   753	
+   754	    return results
+   755	
+   756	def get_score_board_text(signals: Dict[str, ScoredSignal]) -> str:
+   757	    if not signals:
+   758	        return "📊 Tidak ada data score tersedia."
+   759	
+   760	    lines = ["📊 Score Board:"]
+   761	    sorted_sigs = sorted(signals.values(), key=lambda s: s.total_score, reverse=True)
+   762	
+   763	    for sig in sorted_sigs:
+   764	        threshold = sig.threshold_used
+   765	        gap = sig.threshold_gap
+   766	        gap_str = f"+{gap:.1f}" if gap >= 0 else f"{gap:.1f}"
+   767	        trigger_icon = "✅" if sig.is_actionable else ("⚡" if sig.trigger_met else "❌")
+   768	        regime_icon  = sig.regime.emoji
+   769	        quality_icon = {
+   770	            SignalQuality.EXCELLENT: "🔥",
+   771	            SignalQuality.GOOD:      "👍",
+   772	            SignalQuality.FAIR:      "👌",
+   773	            SignalQuality.POOR:      "❄️",
+   774	        }.get(sig.signal_quality, "")
+   775	
+   776	        lines.append(
+   777	            f"  {trigger_icon} {regime_icon} {sig.symbol:<12} "
+   778	            f"{sig.total_score:>5.1f}/{threshold:.0f} ({gap_str:>5}) {quality_icon}"
+   779	        )
+   780	
+   781	    return "\n".join(lines)
+   782	
+   783	
+   784	class SignalScorer:
+   785	    def __init__(self, db_manager=None):
+   786	        self._db = db_manager
+   787	
+   788	    def score(
+   789	        self,
+   790	        observation: ObservationReport,
+   791	        profile,
+   792	        regime: MarketRegime,
+   793	        regime_confidence: float,
+   794	        main_loop=None,
+   795	        side: str = "long",
+   796	    ) -> Optional[ScoredSignal]:
+   797	        return score_signal(
+   798	            observation=observation,
+   799	            regime=regime,
+   800	            regime_confidence=regime_confidence,
+   801	            profile_override=profile,
+   802	            db_manager=self._db,
+   803	            main_loop=main_loop,
+   804	            side=side,
+   805	        )

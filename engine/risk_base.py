@@ -461,7 +461,13 @@ class BaseRiskManager:
         current_sl:    Optional[float],
         take_profit:   Optional[float],
         side:          str = "long",
+        strategy_profile: str = "",
     ) -> Optional[float]:
+        # [EXIT-FIX P3] Profil volatil: breakeven ditunda 1R -> 1.5R --
+        # memberi napas fase awal pump sebelum SL merapat ke entry (rantai
+        # breakeven->trailing beruntun terbukti menjepit AIGENSYN di +0.4%).
+        _VOLATILE_PROFILES = {"extreme_momentum", "scalp_volatile", "breakout_swift"}
+        _be_r_mult = 1.5 if strategy_profile.lower() in _VOLATILE_PROFILES else 1.0
         if not all([entry_price, current_sl, take_profit]):
             return None
         if entry_price <= 0:
@@ -472,7 +478,7 @@ class BaseRiskManager:
             reward = take_profit - entry_price
             if risk <= 0 or reward <= 0:
                 return None
-            trigger = entry_price + risk
+            trigger = entry_price + risk * _be_r_mult
             if current_price >= trigger and current_sl < entry_price:
                 log.info(
                     "Breakeven SL: %s price=%.6f >= trigger=%.6f | SL %.6f → %.6f",
@@ -485,7 +491,7 @@ class BaseRiskManager:
             reward = entry_price - take_profit
             if risk <= 0 or reward <= 0:
                 return None
-            trigger = entry_price - risk
+            trigger = entry_price - risk * _be_r_mult
             if current_price <= trigger and current_sl > entry_price:
                 return entry_price
 
@@ -508,21 +514,43 @@ class BaseRiskManager:
         _FIXED_PROFILES = {"trend_follow", "hodl_accumulate"}
         use_progressive = strategy_profile.lower() not in _FIXED_PROFILES
 
+        # [EXIT-FIX P1 -- kasus AIGENSYN 2026-07-21: trailing 1.5xATR (~1%)
+        # menendang posisi di +0.4% tepat sebelum koin +69%] Mult per-profil:
+        # profil volatil butuh napas 2-3xATR (pullback normal di tengah pump
+        # 3-10%), profil konservatif tetap/lebih ketat. Base tetap dari
+        # config (TRAILING_ATR_MULT) -- tabel ini FAKTOR PENGALI relatif.
+        _PROFILE_TRAIL_FACTOR = {
+            "extreme_momentum": 2.00,   # 1.5 x 2.00 = 3.0xATR
+            "scalp_volatile":   1.67,   # 1.5 x 1.67 = 2.5xATR
+            "breakout_swift":   1.33,   # 1.5 x 1.33 = 2.0xATR
+            "mean_revert":      0.80,   # 1.5 x 0.80 = 1.2xATR (revert: ketat OK)
+            "trend_follow":     1.00,
+            "hodl_accumulate":  1.00,
+        }
+        base_mult = self._trailing_atr_mult * _PROFILE_TRAIL_FACTOR.get(
+            strategy_profile.lower(), 1.00
+        )
+
         if use_progressive and entry_price > 0:
             profit_pct = ((current_price - entry_price) / entry_price * 100) if side == "long" \
                 else ((entry_price - current_price) / entry_price * 100)
+            # [EXIT-FIX P2 -- progressive DIBALIK] SEBELUMNYA menyempit saat
+            # profit naik (x0.85 di >=10%, x0.7 di >=30%) -- kebalikan dari
+            # "ride the wave": makin untung makin mudah tertendang. Kini
+            # MELEBAR: biarkan pemenang tumbuh, gap besar dibayar dari profit
+            # yang sudah jauh di atas air.
             if profit_pct >= 30:
-                mult = self._trailing_atr_mult * 0.7
+                mult = base_mult * 1.30
             elif profit_pct >= 10:
-                mult = self._trailing_atr_mult * 0.85
+                mult = base_mult * 1.15
             else:
-                mult = self._trailing_atr_mult
+                mult = base_mult
             log.debug(
                 "Progressive trailing | profile=%s profit=%.1f%% mult=%.2f",
                 strategy_profile, profit_pct, mult,
             )
         else:
-            mult = self._trailing_atr_mult
+            mult = base_mult
 
         trail_dist = atr * mult
 

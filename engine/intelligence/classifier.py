@@ -45,6 +45,33 @@ class _RegimeBuffer:
     def propose(self, new_regime: MarketRegime, confidence: float, hysteresis: int) -> Tuple[MarketRegime, float]:
         self.history.append(new_regime)
 
+        # [HYSTERESIS-BOOTSTRAP FIX -- data produksi: 172/174 sampel regime
+        # terjebak UNDEFINED/conf=0.0] Buffer mulai UNDEFINED/0.0 dan butuh
+        # N usulan IDENTIK beruntun; usulan berbeda me-reset antrean -- di
+        # pasar 15m yang berisik antrean tak pernah selesai utk mayoritas
+        # simbol -> raw classification yang benar dihitung lalu DIBUANG,
+        # sistem dihukum 3x (conf 0.0 + threshold & modifier undefined)
+        # karena ANTREAN, bukan karena datanya. Fase BOOTSTRAP: selama
+        # belum ada regime mapan, teruskan raw dgn penalti conf x0.6;
+        # antrean tetap dihitung (N x identik -> mapan penuh), dan
+        # hysteresis PENUH tetap berlaku utk transisi regime mapan.
+        if (
+            self.current_regime == MarketRegime.UNDEFINED
+            and new_regime != MarketRegime.UNDEFINED
+        ):
+            if new_regime == self.pending_regime:
+                self.pending_count += 1
+            else:
+                self.pending_regime = new_regime
+                self.pending_count = 1
+            if self.pending_count >= hysteresis:
+                self.current_regime = new_regime
+                self.current_confidence = confidence
+                self.pending_regime = MarketRegime.UNDEFINED
+                self.pending_count = 0
+                return self.current_regime, self.current_confidence
+            return new_regime, round(confidence * 0.6, 3)
+
         if new_regime == self.current_regime:
             self.current_confidence = confidence
             self.pending_regime = MarketRegime.UNDEFINED
@@ -245,6 +272,17 @@ def _classify_raw(iset: IndicatorSet) -> Tuple[MarketRegime, float]:
         if minus_di > plus_di:
             conf = _calc_confidence(iset, MarketRegime.TRENDING_BEAR)
             return MarketRegime.TRENDING_BEAR, conf
+    # [SHORT-FIX F1 -- asimetri fallback DI] Bull di bawah punya fallback
+    # `plus_di is None -> tetap BULL x0.80`; bear SEBELUMNYA tidak (DI hilang
+    # = langsung jatuh UNDEFINED). Akibat terukur: 287/307 (93%) kandidat
+    # short regime undefined -> threshold 59-68 + modifier 0.5-0.75 ->
+    # NOL short pernah lolos trigger. Fallback bear ini SENGAJA lebih ketat
+    # dari bull: wajib konfirmasi supertrend bearish eksplisit (st_bull is
+    # False, bukan None) sebagai pengganti bukti DI yang hilang.
+    elif trending and is_bear and (plus_di is None or minus_di is None):
+        if st_bull is False:
+            conf = _calc_confidence(iset, MarketRegime.TRENDING_BEAR) * 0.80
+            return MarketRegime.TRENDING_BEAR, round(conf, 3)
 
     is_bull = bullish_pairs >= REGIME_BULL_EMA_REQUIRED_PAIRS
     if trending and is_bull:
